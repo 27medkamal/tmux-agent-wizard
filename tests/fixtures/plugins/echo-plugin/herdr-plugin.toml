@@ -1,0 +1,88 @@
+id = "echo-plugin"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Test fixture plugin for tmux-agent-wizard's plugin system tests."
+
+[[actions]]
+id = "dump-env"
+title = "Dump env"
+contexts = ["pane"]
+command = ["sh", "-c", "env | grep -E '^(HERDR|TAW)_' | sort > \"$HERDR_PLUGIN_STATE_DIR/env.txt\"; printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/context.json\""]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event.json\""]
+
+[[panes]]
+id = "board"
+title = "Board"
+placement = "bottom"
+command = ["sh", "-c", "sleep 30"]
+
+# One hook per lifecycle event taw emits, each recording the context it was handed as
+# `event-<event>.json` in the plugin state dir. `event.json` above stays where it is:
+# tests/tmux_plugin.rs asserts on that exact name.
+[[events]]
+on = "tab.closed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-tab.closed.json\""]
+
+[[events]]
+on = "tab.focused"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-tab.focused.json\""]
+
+[[events]]
+on = "tab.renamed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-tab.renamed.json\""]
+
+[[events]]
+on = "workspace.closed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-workspace.closed.json\""]
+
+[[events]]
+on = "workspace.focused"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-workspace.focused.json\""]
+
+[[events]]
+on = "workspace.renamed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-workspace.renamed.json\""]
+
+[[events]]
+on = "workspace.updated"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-workspace.updated.json\""]
+
+[[events]]
+on = "layout.updated"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-layout.updated.json\""]
+
+[[events]]
+on = "pane.exited"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-pane.exited.json\""]
+
+[[events]]
+on = "pane.focused"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-pane.focused.json\""]
+
+[[events]]
+on = "pane.closed"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-pane.closed.json\""]
+
+[[events]]
+on = "pane.updated"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-pane.updated.json\""]
+
+# The three "created" events additionally *tally* every delivery, one line per firing, so
+# a test can assert a change fired an event exactly once rather than merely at least once.
+# These three are the ones a tmux hook and a `taw` verb could both plausibly claim (the
+# verb runs the very tmux command whose hook fires), so "exactly one" is the property
+# worth pinning; see src/cli/events.rs.
+[[events]]
+on = "workspace.created"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-workspace.created.json\"; printf '%s\\n' \"$HERDR_PLUGIN_EVENT\" >> \"$HERDR_PLUGIN_STATE_DIR/tally-workspace.created.log\""]
+
+[[events]]
+on = "tab.created"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-tab.created.json\"; printf '%s\\n' \"$HERDR_PLUGIN_EVENT\" >> \"$HERDR_PLUGIN_STATE_DIR/tally-tab.created.log\""]
+
+[[events]]
+on = "pane.created"
+command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_CONTEXT_JSON\" > \"$HERDR_PLUGIN_STATE_DIR/event-pane.created.json\"; printf '%s\\n' \"$HERDR_PLUGIN_EVENT\" >> \"$HERDR_PLUGIN_STATE_DIR/tally-pane.created.log\""]

@@ -1,0 +1,346 @@
+# tmux-agent-wizard configuration
+# Place this file at ~/.config/tmux-agent-wizard/config.toml
+# (or $TAW_CONFIG_DIR/config.toml; see `taw config path`)
+#
+# This mirrors herdr's config.toml (https://herdr.dev) where the semantics carry
+# over to a tmux popup. Run `taw config check` to validate your file: unknown
+# keys are warnings, not errors, so herdr configs mostly just work.
+#
+# The following keys are accepted for compatibility and parsed without warning,
+# but have no effect, because tmux itself owns them or there is no tmux
+# equivalent to drive:
+#   onboarding                            herdr's first-run flow; tmux-agent-wizard has none
+#   [terminal]                            tmux owns shells and new-pane/tab/workspace behaviour
+#   update.channel / version_check        updates come from the tmux plugin / TPM, not a bundled updater
+#   ui.show_agent_labels_on_pane_borders   we never touch pane-border-format (see README for
+#                                          the #{@agent_kind} / #{@agent_state} tokens instead)
+#   ui.pane_borders                        tmux draws split-pane borders itself; no second layer to add
+#   ui.toast.herdr.position               `tmux display-message` has no configurable screen position
+
+# Show first-run notification setup on startup. Accepted, ignored: no onboarding flow.
+# onboarding = true
+
+[theme]
+# Built-in themes: catppuccin, catppuccin-latte, terminal, tokyo-night, dracula,
+#                  nord, gruvbox, one-dark, solarized, kanagawa, rose-pine, vesper
+# name = "catppuccin"
+
+# Follow the terminal's light/dark appearance: the popup and `taw app` inside tmux
+# draw dark_name when their tmux client's terminal is dark and light_name when it
+# is light, and name when that is unknown. A key left out takes the sibling of
+# name for that mode (catppuccin and catppuccin-latte), else name itself. Needs
+# tmux 3.6 or later (`#{client_theme}`) and a terminal that reports its light or
+# dark mode; on older tmux `taw config check` says so. The light and dark tables
+# under [theme.custom] are still accepted and ignored.
+# auto_switch = false
+# dark_name = "catppuccin"
+# light_name = "catppuccin-latte"
+
+# Override individual color tokens on top of the base theme.
+# Accepts hex (#rrggbb) or named colors.
+# [theme.custom]
+# sidebar_bg = "#181825"
+# active_row_bg = "#1e1e2e"
+# selection_bg = "#313244"
+# panel_bg = "reset"
+# accent = "#f5c2e7"
+# fg = "#cdd6f4"
+# dim = "#6c7086"
+# red = "#ff6188"
+# yellow = "#f9e2af"
+# green = "#a6e3a1"
+# blue = "#89b4fa"
+# magenta = "#cba6f7"
+# cyan = "#94e2d5"
+# attention = "#fab387"   # what needs you: blocked rows, glyphs, the border count
+
+# Accepted, ignored: tmux owns shells and pane creation.
+[terminal]
+
+[update]
+# Check herdr.dev for remote agent-detection manifest updates in the background,
+# at most once every 6 hours.
+# manifest_check = true
+
+# Update channel and version-check background probing. Accepted, ignored: this
+# binary is updated via the tmux plugin / TPM, not a bundled updater.
+# channel = "stable"
+# version_check = true
+
+[ui]
+# Width of the agents/spaces column inside the popup.
+# sidebar_width = 26
+
+# Agent panel ordering: "attention" (blocked, then done and not yet looked at,
+# then idle or done and looked at, then working, then unknown; then by
+# most-recent state change) or "sessions" (grouped by tmux session, session
+# order). "priority" (herdr's name for its own order) is accepted as an alias
+# for "attention"; "spaces" and "workspaces" are accepted as aliases for
+# "sessions".
+# agent_panel_sort = "attention"
+
+# Agent status indicators: "dots" (compact color marks) or "symbols"
+# (distinct static glyphs per state).
+# status_indicators = "symbols"
+
+# Ask for confirmation before closing a workspace (tmux session), a pane or a
+# worktree. With it off, `x` in the popup on a session closes just that session,
+# without asking whether to close its worktree sessions too, and a worktree removal
+# git refuses is still asked about ("remove anyway?"), since it cannot be undone.
+# confirm_close = true
+
+# Show detected/reported agent labels in split pane borders. Accepted, ignored
+# (see header).
+# show_agent_labels_on_pane_borders = false
+
+# Draw borders around split panes. Accepted, ignored (see header).
+# pane_borders = true
+
+# How far the popup's tree expands when it opens: "sessions" (session headers
+# only), "agents" (sessions with their agents, panes collapsed), or "all".
+# depth = "agents"
+
+# Number the sessions 1-9 down the left of the tree. A number's key
+# ([keys] select_session) moves the cursor to that session.
+# labels = true
+# Show each agent's own pane title on its row (Claude Code writes its task
+# there); agents that set no title show their kind alone.
+# titles = true
+
+# "tree" groups rows under session headers; "flat" lists the current depth's
+# rows as a single ordered list, agents first. `f` toggles this at runtime.
+# layout = "tree"
+
+# Show the preview pane alongside the sidebar. Automatically off below 100
+# columns regardless of this setting.
+# preview = true
+
+# Show branch name and git-status flags on session headers.
+# show_git = true
+
+# Also list the directories `n` would offer (zoxide, [sessions] project_dirs and
+# path completion) in a section just under the sessions while the `/` filter is
+# open: the first eight right after `/`, the first eight your query matches as you
+# type. Enter on one switches to its session, or creates it, as `n` does. When
+# nothing above matches your query, the cursor goes to the first directory. Off by
+# default.
+# projects_in_filter = false
+
+# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab,
+# pane, agent, terminal_title, and terminal_title_stripped. A token may be
+# styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
+# A styled token may also carry up to 16 `rules`: the first one its text meets
+# restyles it (fg, bold, dim), or removes it with `hide = true`, and a row left
+# with no token is not drawn. A rule has exactly one condition: equals, contains
+# or starts_with for text (add ignore_case = true to fold ASCII case), or gt or
+# lt for a finite number. state_icon and git_status take no rules.
+#   rows = [[{ token = "$load", fg = "#fff", rules = [{ gt = 80, fg = "#f55", bold = true }] }]]
+[ui.sidebar.agents]
+# row_gap = 0
+# rows = [["state_icon", "workspace", "tab"], ["agent"]]
+
+# Optional canonical agent IDs replace the default rows for matching agents.
+[ui.sidebar.agents.rows_by_agent]
+# claude = [["state_icon", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
+
+# Expanded space rows. Built-ins are state_icon, state_text, workspace, branch,
+# and git_status. `[ui.sidebar.sessions]` is accepted as an alias of this table.
+# Tokens take the same inline styles and `rules` as the agent rows.
+[ui.sidebar.spaces]
+# row_gap = 0
+# rows = [["state_icon", "workspace"], ["branch", "git_status"]]
+
+# Background notification popup delivery: off | herdr | terminal | system.
+# See the README for what each delivery does on tmux.
+[ui.toast]
+# delivery = "herdr"
+# delay_seconds = 1
+
+# Separate delay before a "done" notification fires, so a request (which
+# usually wants a faster nudge) and a finished agent (less urgent) can differ.
+# done_delay_seconds = 5
+
+[ui.toast.herdr]
+# Accepted, ignored (see header).
+# position = "bottom-right"
+
+# Play sounds when agents change state in background workspaces (afplay on
+# macOS; paplay, falling back to aplay, on Linux). No bundled sounds ship with
+# tmux-agent-wizard, so configure path/done_path/request_path to enable audio.
+[ui.sound]
+# enabled = true
+# Optional sound files. Relative paths are resolved from this config file's
+# directory when the sound is played.
+# path = "sounds/notification.mp3"        # used for both request and done unless overridden below
+# done_path = "sounds/done.mp3"
+# request_path = "sounds/request.mp3"
+
+# Per-agent overrides: default | on | off. By default, droid is muted.
+[ui.sound.agents]
+# droid = "off"
+
+[session]
+# Resume supported AI-agent panes into their native conversation sessions after
+# `taw session restore`. Requires an installed integration that reports session
+# refs (`taw integration install <agent>`).
+# resume_agents_on_restore = true
+
+# Milliseconds between successive automatic agent restores, so several resumed
+# agents do not all launch in the same instant. 0 disables the spacing.
+# startup_per_agent_delay_ms = 100
+
+[sessions]
+# How a project directory becomes a workspace (tmux session) name: "directory"
+# (its basename), "full-path", or "short-path" (abbreviated parent segments).
+# name = "directory"
+
+# Prefer zoxide's ranked directories when browsing projects to open or create
+# a workspace from, falling back to project_dirs below, and tell zoxide about
+# each directory opened (zoxide add). `taw open <term>` asks zoxide for its
+# match whatever this is set to.
+# zoxide = true
+
+# Directories to offer when creating a new workspace (~ expands to $HOME).
+# project_dirs = ["~/dev", "~/work"]
+
+# Optional hooks, run the way tmux-session-wizard runs its own. Each value is a
+# command, run through sh: a path to a script, or a path with flags of its own (a
+# leading ~ is your home directory; a path with a space in it needs its own quotes).
+# taw adds two arguments, the session name and the directory. They reach the hook
+# unchanged, so quote $1 and $2 inside your script. End the value with the command
+# that should receive them: a value ending in ;, & or | would run the name as a command.
+#
+# pre_create_hook runs every time a project is opened, whether or not a session is
+# already running there, before taw looks for one. Print two lines to change the
+# session name and the directory (which has to exist), or nothing to keep both. A
+# non-zero exit stops the open: nothing is created and nothing is switched to.
+# post_create_hook runs only when a session was just created, after it exists and
+# before you are switched to it. Its output is ignored, and a failure does not undo
+# anything.
+# pre_create_hook = "~/.config/tmux-agent-wizard/hooks/pre-create.sh"
+# post_create_hook = "~/.config/tmux-agent-wizard/hooks/post-create.sh --layout dev"
+
+# taw waits for the pre_create_hook every time a project is opened, from the picker and
+# from `taw session open`, and the popup does not respond meanwhile. A hook that runs
+# longer than this many seconds is stopped: a pre hook that does refuses the open, and a
+# post hook that does is logged and changes nothing. 0 means no limit, which a hook that
+# stops to ask you something needs. It is also how long [hooks] pre_close and
+# pre_worktree_remove may take to answer, and 0 is no limit for them too.
+# hook_timeout_seconds = 10
+
+[worktrees]
+# directory = "~/.tmux-agent-wizard/worktrees"
+
+[sandbox]
+# The profile `taw sandbox` uses when you name none: one of yours in
+# ~/.config/tmux-agent-wizard/sandbox/, or "default", taw's own, which is
+# what it uses while this is unset. Nothing here changes the popup: it shows
+# 📦 on an agent in a container either way.
+# profile = "default"
+
+# A profile for one agent, used when you name none for it.
+[sandbox.agents]
+# codex = "default"
+
+# Other machines the app lists with this one, and the popup shows read-only while the app runs; with no app
+# running, the popup names each one and says to run taw app outside tmux.
+# Each line is a name you choose and an ssh destination: what you type after `ssh`, a Host from
+# your ~/.ssh/config or user@host. taw has to be installed on each. taw keeps no key, password
+# or host key: ssh does all of that, and taw never answers a prompt, so `ssh <destination>` must
+# work in a terminal without asking anything (the host key accepted, the key in ssh-agent).
+# [machines]
+# studio = "studio.local"
+# pi = "pi"
+#
+# Only when taw is not on the PATH that ssh gives a command on that machine:
+# [machines.pi]
+# ssh = "pi"
+# taw = "~/.local/bin/taw"
+
+[plugins]
+# Minimum herdr plugin compatibility version a plugin's min_herdr_version is
+# checked against.
+# compat_herdr_version = "0.9.3"
+
+[hooks]
+# Commands taw runs on its own events. A key is an event name and its value is a
+# command, or a list of commands that run side by side. `taw hooks list` prints every
+# event name and when it fires, and `taw hooks test <event>` runs the hooks of one event
+# with sample values and shows what each one did.
+#
+# A command runs through sh, like the create hooks (a leading ~ is your home directory),
+# with no arguments. What happened arrives in the environment (TAW_EVENT, TAW_SESSION,
+# TAW_SESSION_ID, TAW_DIR, TAW_WINDOW, TAW_PANE, TAW_AGENT, TAW_STATE, TAW_PREVIOUS_STATE,
+# TAW_TITLE, and for a notification TAW_MESSAGE and TAW_KIND, "request" or "done"; for a
+# pane whose agent runs in a container TAW_SANDBOX, the profile taw started it through, and
+# TAW_RUNTIME, docker or another runtime) and as JSON on standard input. `taw hooks test`
+# sets TAW_TEST to 1 and uses ids that name nothing on any tmux server, so a hook that acts
+# on the pane can start with
+#   [ -n "$TAW_TEST" ] && exit 0
+# (its TAW_SESSION is =taw-hooks-test:, which tmux reads as exactly that session; one of
+# yours called exactly that is still reached, which the line above is for). A title or a
+# directory name is only ever data there, never part of a command line. A hook also gets
+# what tmux gives a new pane in the session the event is about: tmux's global environment
+# (what `set-environment -g` sets, so a credential set there reaches every hook, the
+# watcher's included) with that session's own over it (the ssh agent of the terminal you
+# attached from), and TMUX for the server. A hook runs in the background, so it never slows
+# the popup, the watcher or a taw command. A failure or a timeout is written to the hooks
+# log, which `taw hooks log` prints.
+# "worktree.created" = "~/bin/setup-worktree"
+# "agent.done" = ["~/bin/log-finished", "say done"]
+
+# A notification hook runs whenever taw shows a toast (a request, or a done), after the
+# same delay and never while you are looking at that pane, with the toast's text in
+# TAW_MESSAGE. It is how a message reaches your phone: the README has ntfy and Pushover
+# examples. It runs even with [ui.toast] delivery = "off", which silences only the pop-up.
+# "notification" = "~/bin/push"
+
+# How long an event hook may run, in seconds, before taw stops it along with what it
+# started. 0 means no limit.
+# timeout_seconds = 30
+
+# Two hooks taw waits for, which can refuse. pre_close runs before taw closes a session, a
+# window or a pane (the popup's x, and workspace, tab and pane close). pre_worktree_remove
+# runs before a worktree is removed. A non-zero exit refuses: nothing is closed, and the
+# popup shows "pre-close hook: " and the last line the hook wrote to stderr. They get the
+# same environment and JSON as an event hook, and have [sessions] hook_timeout_seconds to
+# answer in: one that runs past it refuses too. 0 there means no limit for these as it does
+# for the create hooks, and a hook that never ends then holds the close.
+# pre_close = "~/bin/keep-agents-open"
+# pre_worktree_remove = "~/bin/is-merged"
+
+[detection]
+# Layer taw's own state-detection heuristics on top of an installed agent
+# integration's own reports, instead of relying on the integration alone.
+# supplements = true
+
+# The popup's own key bindings: a base preset plus any per-action overrides.
+# tmux-level bindings (opening the popup, jumping to a notification target,
+# clearing a pane) still come from the @agent-wizard* tmux options (see the
+# plugin README), not this table.
+[keys]
+# "modal" (default) binds one letter per action: j/k move, / filters, ? helps.
+# "search" is a pure fzf search: typing filters, Up/Down, ctrl-j/ctrl-k and
+# ctrl-n/ctrl-p move, Enter goes, Esc quits (so does ctrl-d on an empty query,
+# as in fzf), and nothing else is bound. The rest is the right-click menu's
+# (go, rename, close, new worktree), or yours to bind below: options and help
+# have no key there until you give them one.
+# preset = "modal"
+
+# Every other key binds one popup action to a key spec: a single string, or a
+# list of interchangeable ones, e.g. move_down = ["j", "down"].
+# rename = "R"
+
+# select_session is an ordered list: the nth key puts the cursor on the nth
+# session, and the label drawn on that session is the key's own spelling.
+# The modal preset binds "1"…"9"; the search preset binds none (digits type).
+# select_session = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
+[experimental]
+# Save each pane's screen with the layout, and paint it back after
+# `taw session restore`. Off by default, and worth understanding first: the
+# saved file holds whatever was on screen (tokens, .env contents, customer
+# data) in plain text under the state directory, and the bytes are replayed
+# raw, so any escape sequence the pane emitted runs again on restore. A layout
+# snapshot on its own leaks nothing.
+# pane_history = false

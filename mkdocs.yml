@@ -1,0 +1,119 @@
+site_name: tmux-agent-wizard
+site_description: See which coding agent needs you and get there in one key, inside the tmux you already run. From the maker of tmux-session-wizard.
+site_url: https://27medkamal.com/tmux-agent-wizard/
+repo_url: https://github.com/27medkamal/tmux-agent-wizard
+repo_name: 27medkamal/tmux-agent-wizard
+edit_uri: ""
+docs_dir: docs
+site_dir: site
+exclude_docs: |
+  requirements.txt
+
+validation:
+  links:
+    anchors: warn
+copyright: MIT licence. The detection engine and rules are herdr's (Apache-2.0), with credit; <a href="https://github.com/27medkamal/tmux-agent-wizard/blob/master/THIRD_PARTY_LICENSES.md">third-party licences</a>.
+
+theme:
+  name: material
+  # The link card's tags (og: and twitter:) for every page: overrides/main.html.
+  custom_dir: overrides
+  # No web font: the site makes no request to a third party, and the preview works offline.
+  font: false
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.tracking
+    - navigation.instant
+    - navigation.instant.prefetch
+    - toc.follow
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/27medkamal/tmux-agent-wizard
+      name: tmux-agent-wizard on GitHub
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      # GitHub's anchors, lower case, so a link written for the README's anchors works on the site
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Try it: try/index.html
+  - Use it:
+      - Install: install.md
+      - Keys: keys.md
+      - Configuration: config.md
+      - Notifications: notifications.md
+      - Sessions and worktrees: sessions.md
+      - Save and restore: restore.md
+      - Remote machines: machines.md
+  - Agents:
+      - The 22 agents: agents.md
+      - Report an agent of your own: agents/report.md
+      - Agents in containers: agents/containers.md
+      - Agents in a sandbox: sandbox.md
+  - Extend it:
+      - Hooks: hooks.md
+      - Plugins: plugins.md
+      - CLI: cli.md
+  - Compare:
+      - Coming from herdr: herdr.md
+      - Coming from tmux-session-wizard: session-wizard.md
+      - Beyond herdr: beyond-herdr.md
+      - Parity ledger: PARITY.md
+      - Plugin compatibility: COMPAT.md
+  - About:
+      - Questions: faq.md
+      - Troubleshooting: troubleshooting.md
+      - Architecture: ARCHITECTURE.md
+      - Development: development.md
+      - Releasing: RELEASING.md

@@ -1,0 +1,31 @@
+# The README GIF's storyboard (scripts/demo/make-gif.py reads it). One line per step, fields split by "|":
+#
+#   keys | caption key | caption words | hold in seconds | picture | highlight
+#
+# keys     what vhs presses at the start of the step, split by ";" (Tab, Enter, Escape, Ctrl+B, Type X);
+#          empty for a step that presses nothing (the opening frame, whose key was pressed before the recording)
+# caption  the key the viewer reads in the box, then the words beside it; the caption stays on screen for
+#          the whole step, until the next key replaces it. An empty key shows the words alone.
+# hold     how long the step lasts after its keys: nothing is waited for, so the recording and the captions share
+#          one clock (every Sleep of the tape is counted into the times the captions are drawn at)
+# picture  popup, or toast, "@seconds" after the keys: a still of the README, taken at that moment of the step
+#          (toast also marks the step whose toast gets the yellow highlight)
+# highlight  what the step's yellow outline goes around, found in the screen's text at that step (make-gif.py's
+#          TARGETS): count (the popup's "need you" count), cursor (the tree row the cursor is on), prompt (an agent's
+#          permission or approval prompt), yes (its "1. Yes" line, as it is chosen), tabs (tmux's window tabs),
+#          toast (the toast on the status line, found by its yellow), answer (the finished agent's last answer)
+#          The caption itself always sits in the band under the terminal, centred.
+#
+# Ctrl+Y is the demo's own hidden key (infra's Claude Code finishes its review); it is no key of taw's.
+ | prefix + A | open the list | 4.0 | | count
+Tab | Tab | jump to the agent that needs you | 2.8 | popup@2.2 | cursor
+Enter | Enter | go there | 2.0 | | prompt
+Type 1 | 1 | answer its question | 2.0 | | yes
+Ctrl+B; Type A | prefix + A | back to the list | 2.0 | | cursor
+Tab | Tab | the next one that needs you | 2.0 | | cursor
+Enter | Enter | go there | 2.0 | | prompt
+Ctrl+B; Type A | prefix + A | back to the list | 1.6 | | cursor
+Escape | Esc | close the list | 1.4 | | tabs
+Ctrl+Y |  | another agent finishes, and a toast says so | 4.2 | toast@2.4 | toast
+Ctrl+B; Type O | prefix + O | jump to it | 2.6 | | answer
+Ctrl+B; Type A | prefix + A | back to the list | 3.4 | | cursor

@@ -1,0 +1,135 @@
+// Derived from herdr (https://github.com/herdrdev/herdr), Apache-2.0, modified for taw; see THIRD_PARTY_LICENSES.md.
+//! Letta Code integration (experimental).
+//!
+//! Writes `~/.letta/hooks/taw-agent-session.sh` and adds a `hooks.SessionStart[*]` entry
+//! — with no `matcher` key, unlike every other agent's `{"matcher": "*", ...}` shape,
+//! because Letta's own hook schema has none — to `~/.letta/settings.json`. Session
+//! identity only, as in herdr: Letta Code's lifecycle state comes from screen detection
+//! (`src/detect/manifests/letta.toml`, ported separately), not from this hook.
+//!
+//! Letta injects a `SessionStart` hook's stdout into the agent's next user message, so
+//! the installed script — unlike every other integration's — must never print anything on
+//! any path; see the template's own header for how it guarantees that.
+//!
+//! `taw integration status` reports this integration as experimental
+//! ([`super::EXPERIMENTAL`]) and lists it last: it is the newest and least-tested of taw's
+//! ported integrations, exactly as herdr marks it.
+//!
+//! Follows herdr's `letta` integration: the hook script from
+//! `src/integration/assets/letta/herdr-agent-session.sh`, the config edit from herdr's
+//! `src/integration/targets.rs::install_letta`, reworked onto this crate's shared JSON-hook
+//! helpers ([`plan_json_hook`] to settle the edit, [`super::ConfigEdit::apply`] to write it,
+//! [`uninstall_json_hook`] to take it back) rather than herdr's own staged-rename
+//! primitives, since the atomicity they exist for is what this crate's own write path
+//! ([`write_executable`], [`super::ConfigEdit::apply`], both through `write_config_file`)
+//! already gives every integration.
+
+use super::{
+    HOOKS_KEY, Report, Status, TemplateLang, home_dir, parse_version_marker, plan_json_hook,
+    render_template, require_config_dir, uninstall_json_hook, write_executable,
+};
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+const TEMPLATE: &str = include_str!("templates/taw-agent-session-letta.sh");
+const VERSION_MARKER_PREFIX: &str = "# TAW_INTEGRATION_VERSION=";
+const EVENT: &str = "SessionStart";
+const AGENT: &str = "letta";
+/// Milliseconds — Letta's schema, and herdr's value for it.
+const TIMEOUT_MS: u64 = 10_000;
+
+/// herdr gives Letta no directory override (`env.rs::letta_dir`); it is always `~/.letta`.
+fn config_dir() -> Result<PathBuf> {
+    Ok(home_dir()?.join(".letta"))
+}
+
+fn script_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("hooks").join("taw-agent-session.sh"))
+}
+
+fn settings_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("settings.json"))
+}
+
+fn sidecar_path(script: &Path) -> PathBuf {
+    let mut name = script.as_os_str().to_owned();
+    name.push(".orig.json");
+    PathBuf::from(name)
+}
+
+/// No `matcher` key: Letta's `SessionStart` hook entries have none
+/// (herdr `ensure_letta_session_hook`), unlike the four-field shape most other agents use.
+fn hook_entry(script: &Path) -> Value {
+    json!({
+        "hooks": [
+            {
+                "type": "command",
+                "command": format!("bash '{}' session", script.display()),
+                "timeout": TIMEOUT_MS,
+                "quiet": true,
+            }
+        ]
+    })
+}
+
+pub(super) fn install(taw_bin: &Path) -> Result<Report> {
+    require_config_dir(&config_dir()?, AGENT)?;
+
+    let script = script_path()?;
+    let rendered = render_template(TEMPLATE, TemplateLang::Sh, taw_bin, AGENT);
+    let settings = settings_path()?;
+    let needle = script.to_string_lossy().into_owned();
+    // Everything that can refuse the config is settled before a byte is written: no hook
+    // script is published for a config this install then cannot edit.
+    let settings_edit = plan_json_hook(
+        &settings,
+        &sidecar_path(&script),
+        HOOKS_KEY,
+        EVENT,
+        &needle,
+        hook_entry(&script),
+    )?;
+
+    write_executable(&script, &rendered)?;
+    settings_edit.apply()?;
+
+    Ok(Report {
+        agent: AGENT.to_string(),
+        files: vec![script, settings],
+        message: "installed letta integration".to_string(),
+    })
+}
+
+pub(super) fn uninstall() -> Result<Report> {
+    let script = script_path()?;
+    let settings = settings_path()?;
+    let needle = script.to_string_lossy().into_owned();
+
+    uninstall_json_hook(&settings, &sidecar_path(&script), HOOKS_KEY, EVENT, &needle)?;
+    if script.exists() {
+        std::fs::remove_file(&script).with_context(|| format!("removing {}", script.display()))?;
+    }
+
+    Ok(Report {
+        agent: AGENT.to_string(),
+        files: vec![script, settings],
+        message: "uninstalled letta integration".to_string(),
+    })
+}
+
+pub(super) fn status() -> Result<Status> {
+    let script = script_path()?;
+    let (installed, version) = match std::fs::read_to_string(&script) {
+        Ok(contents) => (true, parse_version_marker(&contents, VERSION_MARKER_PREFIX)),
+        Err(_) => (false, None),
+    };
+    Ok(Status {
+        agent: AGENT.to_string(),
+        installed,
+        path: script,
+        version,
+        current: parse_version_marker(TEMPLATE, VERSION_MARKER_PREFIX),
+        incomplete: None,
+    })
+}

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="tmux-agent-wizard">
+  <!-- A tmux window: a tree on the left with the row that needs you lit, a prompt on the right. -->
+  <rect x="3.5" y="7.5" width="57" height="49" rx="9" fill="#1e1e2e" stroke="#cba6f7" stroke-width="3"/>
+  <line x1="30.5" y1="7.5" x2="30.5" y2="56.5" stroke="#cba6f7" stroke-width="3"/>
+  <rect x="11" y="18" width="12" height="4" rx="2" fill="#6c7086"/>
+  <rect x="11" y="30" width="12" height="4" rx="2" fill="#f38ba8"/>
+  <rect x="11" y="42" width="12" height="4" rx="2" fill="#6c7086"/>
+  <path d="M39 26l6 6-6 6" fill="none" stroke="#89b4fa" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="47" y="36.5" width="7" height="3" rx="1.5" fill="#89b4fa"/>
+</svg>

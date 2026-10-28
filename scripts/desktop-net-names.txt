@@ -1,0 +1,13 @@
+# The commands the desktop net (scripts/desktop-net.sh) puts a refusing stub first on PATH for: every
+# program that would reach the desktop of whoever runs the tests, with a notification on their screen or a
+# sound from their speakers. taw's `system` toast runs osascript on macOS and notify-send on Linux
+# (src/notify/system.rs), and its sound afplay on macOS and paplay or aplay on Linux (src/notify/sound.rs);
+# terminal-notifier is the notifier a hook or a script would run on macOS. One name a line. A unit test of
+# src/notify holds this to the programs taw runs; the agents and runtimes have a list of their own,
+# scripts/agent-net-names.txt.
+osascript
+terminal-notifier
+notify-send
+afplay
+paplay
+aplay

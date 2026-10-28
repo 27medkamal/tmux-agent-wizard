@@ -1,0 +1,16 @@
+Client:
+ Version:    29.5.2
+ Context:    desktop-linux
+
+Server:
+ Containers: 2
+  Running: 1
+  Paused: 0
+  Stopped: 1
+ Images: 12
+ Server Version: 29.5.2
+ Operating System: Docker Desktop
+ OSType: linux
+ Architecture: aarch64
+ CPUs: 8
+ Total Memory: 7.654GiB

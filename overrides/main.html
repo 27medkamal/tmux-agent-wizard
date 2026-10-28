@@ -1,0 +1,46 @@
+{#- The link card: what X, LinkedIn, Slack, Discord or a chat app shows for a link to any page
+    of the site. The card's words are the page's own title and description (the site's on the
+    home page), the same text a search engine reads, and its picture is the social card the
+    README uses. A link card cannot show HTML: these tags are all the sites read. -#}
+{% extends "base.html" %}
+
+{#- The home page's title is its own, whole: the theme's " - site name" after it would say
+    the name twice. -#}
+{% block htmltitle %}
+  {%- if page and page.is_homepage and page.meta and page.meta.title %}
+  <title>{{ page.meta.title }}</title>
+  {%- else %}
+  {{ super() }}
+  {%- endif %}
+{% endblock %}
+
+{% block extrahead %}
+  {%- set card_title = config.site_name -%}
+  {%- if page and page.is_homepage and page.meta and page.meta.title -%}
+    {%- set card_title = page.meta.title -%}
+  {%- elif page and page.meta and page.meta.title -%}
+    {%- set card_title = page.meta.title ~ " - " ~ config.site_name -%}
+  {%- elif page and page.title and not page.is_homepage -%}
+    {%- set card_title = page.title | striptags ~ " - " ~ config.site_name -%}
+  {%- endif -%}
+  {%- set card_description = config.site_description -%}
+  {%- if page and page.meta and page.meta.description -%}
+    {%- set card_description = page.meta.description -%}
+  {%- endif -%}
+  {%- set card_image = config.site_url ~ "assets/social-preview.png" %}
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="{{ config.site_name }}">
+  <meta property="og:title" content="{{ card_title }}">
+  <meta property="og:description" content="{{ card_description }}">
+  {%- if page and page.canonical_url %}
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  {%- endif %}
+  <meta property="og:image" content="{{ card_image }}">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:image:alt" content="tmux-agent-wizard: every agent, one key, your tmux. The taw popup lists every tmux session and coding agent with its state.">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ card_title }}">
+  <meta name="twitter:description" content="{{ card_description }}">
+  <meta name="twitter:image" content="{{ card_image }}">
+{% endblock %}

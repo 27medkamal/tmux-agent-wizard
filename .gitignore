@@ -1,0 +1,15 @@
+target/
+*.log
+.DS_Store
+ignore/
+
+# Built binary symlink (mise run build / scripts/install.sh)
+/bin/
+dist/
+
+# The docs site, built by mkdocs
+/site/
+/site-preview/
+
+# Python byte code (py_compile and the demo scripts)
+__pycache__/

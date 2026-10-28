@@ -1,0 +1,18 @@
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 412B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for ghcr.io/jdx/mise:2026.4.6
+#2 DONE 1.4s
+
+#3 [1/4] FROM ghcr.io/jdx/mise:2026.4.6
+#3 DONE 12.8s
+
+#4 [2/4] RUN apt-get update && apt-get install -y --no-install-recommends git iptables iproute2 util-linux ca-certificates curl
+#4 DONE 31.2s
+
+#5 exporting to image
+#5 naming to docker.io/library/taw-sandbox-default done
+#5 DONE 0.4s

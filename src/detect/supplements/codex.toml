@@ -1,0 +1,50 @@
+# Derived from herdr (https://github.com/herdrdev/herdr), Apache-2.0, modified for taw; see THIRD_PARTY_LICENSES.md.
+# taw's own detection rules for Codex, appended by the loader after manifest precedence.
+# Not a manifest: no `id`/`version` header, only `[[rules]]`, see
+# `LoadedManifest::append_supplement` in src/detect/engine.rs. herdr's vendored manifest
+# (src/detect/manifests/codex.toml) is never edited to carry these.
+#
+# `taw_composer_idle`: a Codex at its composer is idle, where herdr's own rule cannot say
+# so. herdr's manifest 2026.10.01.1 reads a Codex idle through its terminal title:
+# `osc_title_idle` takes any title that is not a spinner or "Action Required", whatever
+# the screen shows, and that covers a Codex that has a title. This rule is for the rest,
+# a Codex whose title says nothing: none (tmux titles a pane no program has titled with the
+# host name, which the watcher reads as no title, as herdr's panes start with none, and a
+# Codex that sets no title is such a case), an empty one, or the one another agent left
+# on the pane, which the watcher drops when an agent takes the pane over. There a Codex
+# whose process tmux names still reads idle through the known-agent fallback, but a Codex
+# that only its launch hint names has nothing else to say it is there: npm's runs as
+# `node`, so every `taw agent start --kind codex` pane is one, and the watcher reads a hint
+# with no rule behind it as `unknown`. Such a pane sits at `unknown` at its own empty
+# composer. This rule reads the composer itself.
+#
+# The composer is the last `›` line with no response marker (•, ■, ✗, ✓) after it, the
+# "current prompt" of the manifest's own regions. Whatever it holds, a placeholder or a
+# draft waiting for Enter, nothing is running. That shape and the status line's are
+# adapted from herdr's Codex manifest: the prompt shape of `weak_blocker`,
+# the status line of `screen_working_fallback`. The rule does not match while:
+#  * a live status line, `<label> (<timer>...)`, is the last block above the composer:
+#    the shape of `screen_working_fallback`, with the interrupt hint left open so that a
+#    turn whose hint the manifest does not know is not taken for rest. A failed reconnect
+#    keeps its timer and is no turn, as it is not for the manifest, so it does not count;
+#  * queued messages are shown, which exist only during a turn;
+#  * the `›` is the cursor on a numbered choice, an approval or a picker, not a composer.
+#
+# Priority 100, the same as herdr's `osc_title_idle`. The rule is appended after the
+# manifest's own, so at a tie herdr's rule wins, and so do working (500) and the blockers
+# (600 and up). It sets `visible_idle`, as herdr's title rule does: the composer back is
+# the end of a turn, written on the read that sees it rather than held for three.
+
+[[rules]]
+id = "taw_composer_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(20)"
+visible_idle = true
+regex = ['(?m)^›(?: [^\n]*)?(?:\n(?:[^•■✗✓\n][^\n]*)?)*\z']
+not = [
+  { regex = ['(?m)^(?:[•◦][ \t]+)?[^\s›•◦■✗✓─][^\n]* \((?:[0-9]+[hm] )*[0-9]+s(?: • [^\n]*)?\)(?: · [^\n]*)?(?:\n(?:[^•◦■✗✓─\n][^\n]*)?)*\z'], not = [{ line_regex = ['^(?:[•◦][ \t]+)?Reconnect failed'] }] },
+  { contains = ["Queued follow-up inputs"] },
+  { contains = ["Messages to be submitted"] },
+  { line_regex = ['^› [0-9]+\. '] },
+]

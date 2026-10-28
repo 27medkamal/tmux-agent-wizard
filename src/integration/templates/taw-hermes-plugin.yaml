@@ -1,0 +1,7 @@
+# Derived from herdr (https://github.com/herdrdev/herdr), Apache-2.0, modified for taw; see THIRD_PARTY_LICENSES.md.
+#
+# installed by: taw integration install {{AGENT}}
+# managed by taw; reinstalling or updating the integration overwrites this file.
+name: taw-agent-state
+version: "1.0"
+description: Report Hermes Agent session identity to taw panes

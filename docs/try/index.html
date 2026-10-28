@@ -1,0 +1,1286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Try taw in your browser</title>
+<meta name="description" content="The tmux-agent-wizard popup: see which coding agent needs you, Tab to it, Enter to go there. Try the keys here, nothing to install.">
+<meta property="og:title" content="Try taw in your browser">
+<meta property="og:description" content="herdr for tmux: see which coding agent needs you and get there in one key, inside the tmux you already run.">
+<meta property="og:image" content="https://27medkamal.com/tmux-agent-wizard/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --paper: #dfe3ea; --ink: #1c2130; --muted: #5b6478; --rule: #b9c0cc; --link: #3057b8;
+    --sidebar-bg: #181825; --panel-bg: #1e1e2e; --active-row: #313244; --selection: #45475a;
+    --accent: #89b4fa; --fg: #cdd6f4; --dim: #7f849c; --red: #f38ba8; --yellow: #f9e2af; --attention: #fab387;
+    --green: #a6e3a1; --blue: #89b4fa; --magenta: #cba6f7; --cyan: #94e2d5; --status-bg: #313244;
+    --mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  }
+  html { background: var(--paper); color: var(--ink); }
+  body { margin: 0; font: 17px/1.5 var(--serif); }
+  main { max-width: 1260px; margin: 0 auto; padding: 40px 28px 96px; }
+  h1 { font-size: 34px; line-height: 1.15; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; font-weight: 600; margin: 56px 0 12px; padding-top: 18px; border-top: 1px solid var(--rule); }
+  h3 { font-size: 18px; font-weight: 600; margin: 24px 0 6px; }
+  p, li { max-width: 70ch; }
+  p.kicker { color: var(--muted); margin: 0 0 20px; }
+  code, kbd { font: 14px/1.4 var(--mono); }
+  kbd { padding: 0 5px; border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 3px; background: #eef0f4; white-space: nowrap; }
+  table { border-collapse: collapse; font-size: 15.5px; margin: 10px 0 0; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 14px 6px 0; border-bottom: 1px solid var(--rule); }
+  th { font-weight: 600; }
+  .note { color: var(--muted); font-size: 15.5px; }
+  .pagenote { min-height: 1.5em; margin: 8px 0 0; color: #8a4b08; font-style: italic; }
+  .mono { font-family: var(--mono); font-size: 14px; }
+
+  .term-wrap { margin: 18px 0 8px; }
+  .term { background: #11111b; color: var(--fg); font: 12.5px/1.35 var(--mono); border-radius: 6px;
+          padding: 8px 10px; overflow-x: auto; outline: none; box-shadow: 0 18px 40px -20px rgba(20,25,40,.55); }
+  .term:focus { box-shadow: 0 0 0 3px var(--accent), 0 18px 40px -20px rgba(20,25,40,.55); }
+  .term .row { white-space: pre; height: 1.35em; }
+  .term .g { display: inline-block; width: 1ch; text-align: center; }
+  .titlebar { display: flex; justify-content: space-between; align-items: baseline; font: 13px/1.4 var(--mono); color: var(--muted); margin-bottom: 6px; }
+  .c-fg { color: var(--fg); } .c-dim { color: var(--dim); } .c-acc { color: var(--accent); }
+  .mh-rule { color: var(--dim); } .mh-name { color: var(--accent); font-weight: 700; } .mh-words { color: var(--dim); }
+  .mh-ok { color: var(--green); } .mh-wait { color: var(--yellow); } .mh-off { color: var(--red); } .mh-none { color: var(--dim); }
+  .c-red { color: var(--red); } .c-yel { color: var(--yellow); }
+.c-att { color: var(--attention); } .c-grn { color: var(--green); }
+  .c-blu { color: var(--blue); } .c-mag { color: var(--magenta); } .c-cyn { color: var(--cyan); }
+  .b-panel { background: var(--panel-bg); } .b-sel { background: var(--selection); } .b-status { background: var(--status-bg); }
+  .bold { font-weight: 700; } .hl { color: var(--yellow); font-weight: 700; text-decoration: underline; text-decoration-color: var(--yellow); }
+  .toast { color: #11111b; background: var(--yellow); font-weight: 700; }
+
+  .controls { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; align-items: baseline; font-size: 15px; margin: 12px 0 4px; }
+  .controls > span { color: var(--muted); }
+  .controls div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .controls button, .controls label { font: 14px var(--serif); color: var(--ink); background: #eef0f4; border: 1px solid var(--rule);
+    border-radius: 3px; padding: 3px 9px; cursor: pointer; }
+  .controls button:hover { border-color: var(--ink); }
+  .controls label input { vertical-align: -1px; margin: 0 4px 0 0; }
+  .controls label.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .controls label.on kbd { color: var(--ink); }
+  .naming input[type=text] { font: 14px var(--mono); padding: 4px 8px; border: 1px solid var(--rule); border-radius: 3px; width: 34ch; background: #fff; color: var(--ink); }
+  .naming td.mono { white-space: nowrap; }
+
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; margin: 14px 0 6px; font-size: 15px; }
+  .flow .box { border: 1px solid var(--ink); padding: 8px 12px; min-width: 150px; max-width: 200px; background: #eef0f4; }
+  .flow .box b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .flow .arrow { align-self: center; position: relative; width: 22px; height: 2px; margin: 0 12px 0 10px; background: var(--muted); }
+  .flow .arrow::after { content: ''; position: absolute; right: -6px; top: -4px; border-left: 8px solid var(--muted); border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+  .flow .box.new { border-style: dashed; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+  ul.tight li { margin: 2px 0; }
+  .keys td:first-child { font-family: var(--mono); font-size: 14px; white-space: nowrap; }
+  #ordertable td:nth-child(3), #ordertable td:nth-child(4) { font-family: var(--mono); font-size: 14px; }
+
+  .term .g2 { display: inline-block; width: 2ch; text-align: center; }
+  .controls .sbopts { display: contents; } .controls .sbopts.off { display: none; } .controls .sbopts > span { color: var(--muted); padding-left: 12px; }
+  #rmopts, .rmp code { font-variant-ligatures: none; } .rmp code.nw, #rmopts code { white-space: nowrap; }
+  .titlebar[hidden] { display: none; }
+  main { padding: 28px 28px 96px; }
+  header.site { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 34px; }
+  header.site .brand { font: 600 17px var(--mono); color: var(--ink); text-decoration: none; }
+  header.site nav a { margin-left: 22px; font-size: 16px; color: var(--link); }
+  h1.start { font-size: 36px; line-height: 1.12; margin: 0 0 8px; }
+  p.lead { max-width: none; font-size: 24px; line-height: 1.3; color: var(--muted); margin: 0 0 22px; }
+  p.phone { display: none; }
+  .narrow { display: none; }
+  @media (max-width: 599px) {
+    html:not(.embed) h1.start:not(.narrow) { display: none; }
+    html:not(.embed) .narrow { display: block; }
+    html:not(.embed) p.lead { font-size: 19px; }
+  }
+  .term-wrap { position: relative; margin: 8px 0 0; padding-bottom: 58px; }
+  .term { overflow: hidden; line-height: var(--lh, 1.35); }
+  .term .row { height: var(--lh, 1.35em); }
+  .pagenote { position: absolute; left: 0; bottom: 6px; max-width: 46%; min-height: 0; margin: 0; font-size: 14px; line-height: 1.35; }
+  .qarrow { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  .qarrow path { fill: none; stroke: var(--arrow); stroke-width: 5; }
+  .qarrow marker path { fill: var(--arrow); stroke: none; }
+  .qlabel { position: absolute; left: 0; top: 0; white-space: nowrap; font: 700 21px/1.2 var(--serif); color: var(--arrow); pointer-events: none; }
+  .noarrow .qarrow, .noarrow .qlabel { visibility: hidden; }
+  .controls { display: block; margin: 14px 0 0; }
+  .ctl-sec { margin: 18px 0 0; }
+  .ctl-head { margin: 0 0 6px; padding: 0 0 4px; border-bottom: 1px solid var(--rule); font: 700 15px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
+  .controls .ctl-body { display: block; }
+  .controls .acts > div { display: flex; flex-wrap: wrap; gap: 6px; }
+  h1.start .cta { color: var(--arrow); }
+  .cta-arrow { display: inline-block; width: 64px; height: 40px; margin: 0 0 -18px 10px; overflow: visible; }
+  .cta-arrow path { fill: none; stroke: var(--arrow); stroke-width: 4; }
+  .cta-arrow marker path { fill: var(--arrow); stroke: none; }
+  .controls .grp { display: flex; flex-wrap: nowrap; gap: 14px; align-items: baseline; margin: 7px 0; }
+  .controls .grp > div { flex: 1 1 0; min-width: 0; }
+  .controls .grp > span { flex: 0 0 132px; }
+  :root { --arrow: #d9480f; }
+  html.embed { background: transparent; }
+  html.embed body { background: transparent; }
+  html.embed main { max-width: none; padding: 2px 10px 0; }
+  html.embed .full { display: none; }
+  html.embed h1.start { font: 700 21px/1.2 var(--serif); margin: 0 0 4px; }
+  html.embed .cta-arrow { width: 60px; height: 34px; margin: 0 0 -18px 8px; }
+  html.embed p.lead { font-size: 15px; margin: 2px 0 6px; }
+  html.embed .term-wrap { margin-top: 0; padding-bottom: 52px; }
+  html.embed .qlabel { font-size: 18px; }
+  html.embed .pagenote { font-size: 13px; }
+  html.embed .controls { display: block; margin: 0; font-size: 13px; }
+  html.embed .ctl-sec { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 0; }
+  html.embed .ctl-head { flex: 0 0 150px; margin: 0; padding: 0 0 0 8px; border: 0; border-left: 3px solid var(--arrow); font-size: 12px; }
+  html.embed .ctl-body { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  html.embed .controls .grp { margin: 0; gap: 6px; }
+  html.embed .controls .grp > div { flex: 0 1 auto; }
+  html.embed .controls .grp > span { flex: 0 0 auto; font-size: 12px; }
+  html.embed .controls div { gap: 4px; }
+  html.embed .controls button, html.embed .controls label { font-size: 12.5px; padding: 1px 7px; background: rgba(127, 127, 140, .16); border-color: rgba(127, 127, 140, .5); color: var(--ink); }
+  html.embed .controls label.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  html.embed.dark { --ink: #e8eaf2; --paper: #14161e; --muted: #a9afc2; --rule: #4a5063; --link: #8fb1ff; --arrow: #ffa94d; }
+  html.embed:not(.dark) { --ink: #1c2130; --paper: #f4f6fa; --muted: #4d566a; }
+  @media (max-width: 699px) {
+    html.embed .demo, html.embed h1.start, html.embed p.lead { display: none; }
+    html.embed p.phone { display: block; font-size: 17px; margin: 10px 0; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="site full">
+    <a class="brand" href="https://github.com/27medkamal/tmux-agent-wizard">tmux-agent-wizard</a>
+    <nav><a href="https://github.com/27medkamal/tmux-agent-wizard">GitHub</a><a href="../">Docs</a></nav>
+  </header>
+  <h1 class="start"><span class="cta">Try it here: click inside the popup, then press Tab.</span><svg class="cta-arrow" viewBox="0 0 64 40" aria-hidden="true" focusable="false"><defs><marker id="ctahead" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0 L10 5 L0 10 z"/></marker></defs><path d="M 4 8 C 34 4, 50 12, 52 32" marker-end="url(#ctahead)"/></svg></h1>
+  <h1 class="start narrow">Tap a button below to make something happen.</h1>
+  <p class="lead narrow">On a computer, click the popup and press Tab.</p>
+  <p class="lead">It runs entirely in your browser. Nothing to install.</p>
+  <p class="phone">The demo needs a keyboard: open it on a computer. <a class="full-link" href="./" target="_top">Open the full page</a></p>
+  <div class="demo">
+
+  <div class="titlebar" hidden><span><span id="where0"></span><span id="clientw">150</span><span id="where1"></span></span><span id="focushint">click the window, then use the keys</span></div>
+  <div class="term-wrap" id="termwrap"><div class="term" id="term" tabindex="0" aria-label="taw popup"></div></div>
+  <div class="note pagenote" id="pagenote" aria-live="polite"></div>
+  <svg class="qarrow" id="qarrow" aria-hidden="true" focusable="false"><defs><marker id="qhead" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0 L10 5 L0 10 z"/></marker></defs><path id="qpath" d="" marker-end="url(#qhead)"/></svg>
+  <div class="qlabel" id="qlabel">Press ? to see every key</div>
+  <div class="controls">
+    <section class="ctl-sec"><p class="ctl-head">Configuration</p><div class="ctl-body">
+    <div class="grp"><span>Keys</span><div>
+      <label class="on"><input type="radio" name="model" value="modal" checked>one key per action</label>
+      <label><input type="radio" name="model" value="search">type to filter</label></div></div>
+    <div class="grp"><span>Show</span><div>
+      <label class="on"><input type="radio" name="depth" value="agents" checked>sessions and agents</label>
+      <label><input type="radio" name="depth" value="all">every pane</label>
+      <label><input type="radio" name="depth" value="sessions">sessions only</label></div></div>
+    <div class="grp"><span>Layout</span><div>
+      <label class="on"><input type="radio" name="layout" value="tree" checked>tree</label>
+      <label><input type="radio" name="layout" value="flat">flat list</label>
+      <label class="on"><input type="checkbox" id="opt-preview" checked>preview</label>
+      <label class="on"><input type="checkbox" id="opt-git" checked>git status</label>
+      <label class="on"><input type="checkbox" id="opt-symbols" checked>state symbols</label>
+      <label class="on"><input type="checkbox" id="opt-labels" checked>session numbers</label>
+      <label class="on"><input type="checkbox" id="opt-titles" checked>agent titles</label>
+      <label><input type="checkbox" id="opt-pif">projects in the filter</label></div></div>
+    <div class="grp"><span>Width</span><div>
+      <label class="on"><input type="radio" name="width" value="150" checked>150 columns</label>
+      <label><input type="radio" name="width" value="100">100</label>
+      <label><input type="radio" name="width" value="99">99</label>
+      <label><input type="radio" name="width" value="60">60</label></div></div>
+    <div class="grp"><span>Status line</span><div>
+      <label class="on"><input type="checkbox" id="opt-statustop" checked>at the top</label></div></div>
+    <div class="grp"><span>Remote machines</span><div>
+      <label class="on"><input type="checkbox" id="opt-remote" checked>studio, build-box and pi, over ssh</label></div></div>
+    </div></section>
+    <section class="ctl-sec"><p class="ctl-head">Simulate actions</p><div class="ctl-body">
+    <div class="grp acts"><div>
+      <button data-sc="ask">web's agent asks a question</button>
+      <button data-sc="finish">infra's agent finishes</button>
+      <button data-sc="rask">studio's agent asks a question</button>
+      <button data-sc="look">you look at web's Codex</button>
+      <button data-sc="reset">reset</button></div></div>
+    </div></section>
+    <div style="display:none" aria-hidden="true">
+      <input type="radio" name="cursor" value="you" checked>
+      <input type="radio" name="cursor" value="attention">
+      <input type="radio" name="cursor" value="previous">
+      <input type="checkbox" id="opt-zoxide" checked>
+      <input type="checkbox" id="opt-dirs" checked>
+      <input type="radio" name="naming" value="directory" checked>
+      <input type="radio" name="naming" value="full-path">
+      <input type="radio" name="naming" value="short-path">
+      <input type="radio" name="bar" value="taw" checked>
+      <input type="radio" name="bar" value="own">
+      <input type="checkbox" id="opt-wrap">
+      <input type="checkbox" id="opt-openmark" checked>
+      <input type="radio" name="rmwhere" value="app" checked>
+      <input type="radio" name="rmwhere" value="popup">
+      <input type="radio" name="rmpi" value="dropped" checked>
+      <input type="radio" name="rmpi" value="live">
+      <input type="radio" name="rmpi" value="connecting">
+      <input type="radio" name="rmpi" value="notaw">
+      <input type="radio" name="rmpi" value="oldtaw">
+      <input type="radio" name="sort" value="attention" checked>
+      <input type="radio" name="sort" value="sessions">
+      <span id="rmopts"></span>
+      <span id="rmphone"></span></div>
+  </div>
+  </div>
+
+  <div class="full">
+  <h2>What you are looking at</h2>
+  <p>taw is a popup for tmux. It lists every session and the coding agents running in them, each with its state: <span class="c-att">⏸</span> blocked, waiting on you, <span class="c-grn">✓</span> done, finished while you were elsewhere, <span class="c-blu">⏵</span> working, <span class="c-dim">○</span> idle. 📦 after an agent's name says it runs in a container. The top line counts them across every machine.</p>
+  <p>Here it runs over a made-up setup: this computer, and three others reached over your ssh. Studio and build-box are connected, pi dropped off two minutes ago, so its rows are greyed. With taw installed on your other machines there is no daemon and no account, and a change on one reaches the list within a second. This page runs a copy of the popup's logic on sample data, and nothing in it touches a real tmux. The real popup runs in your own tmux, where herdr's detection engine reads 22 agents: Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI, Cursor, Amp and more.</p>
+
+  <h2>Get it</h2>
+  <p><code>set -g @plugin '27medkamal/tmux-agent-wizard'</code></p>
+  <p>Add that line to your <code>tmux.conf</code> and press <code>prefix + I</code>. The first load downloads taw for your machine (macOS or Linux), then <code>prefix + A</code> opens this popup over your own tmux. Everything else, including how it compares with herdr and plain tmux, is at <a href="https://github.com/27medkamal/tmux-agent-wizard">github.com/27medkamal/tmux-agent-wizard</a>.</p>
+  </div>
+
+  <div style="display:none" aria-hidden="true">
+    <table id="ordertable"><thead><tr><th></th></tr></thead><tbody></tbody></table>
+    <input type="text" id="nameprobe" value="~/oss/api">
+    <table><tbody id="nametable"></tbody></table>
+  </div>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  let COLS = 150; const EMBED = new URLSearchParams(window.location.search).get('embed') === '1'; document.documentElement.classList.toggle('embed', EMBED); const ROWS = EMBED ? 38 : 40; if (!EMBED && window.matchMedia('(max-width: 599px)').matches) COLS = 60;
+  const WIDE_COLUMNS = 100, PREVIEW_MIN = 40;
+  const now = () => 17 * 3600 + 58 * 60;
+  const t = (h, m) => h * 3600 + m * 60;
+  const baseSessions = () => [
+    { id: '$1', path: '~/code/api', branch: 'main', git: '±3 ↑1', cur: 1, attached: true, last: t(17, 55) },
+    { id: '$2', path: '~/code/web', branch: 'feat/signup', git: '±1', cur: 2, last: t(17, 10) },
+    { id: '$3', path: '~/code/infra', branch: 'main', git: '', cur: 1, last: t(17, 30) },
+    { id: '$4', path: '~/code/docs', branch: 'main', git: '', cur: 1, last: t(17, 45) },
+    { id: '$6', path: '~/code/mobile', branch: 'main', git: '±2', cur: 1, last: t(16, 40) },
+    { id: '$8', path: '~/.tmux-agent-wizard/worktrees/mobile--fix-login', name: 'mobile--fix-login', renamed: true, wtOf: '$6', branch: 'fix/login', git: '±1', cur: 1, last: t(16, 35) },
+  ];
+  const baseWindows = () => [
+    { s: '$1', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: '$1', idx: 2, name: 'review', cmds: ['zsh'] }, { s: '$1', idx: 3, name: 'nvim', cmds: ['nvim'] }, { s: '$1', idx: 4, name: 'zsh', cmds: ['zsh', 'htop'] },
+    { s: '$2', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: '$2', idx: 2, name: 'zsh', cmds: ['zsh', 'zsh'] }, { s: '$2', idx: 3, name: 'tests', cmds: ['zsh'] }, { s: '$2', idx: 4, name: 'server', cmds: ['node'] },
+    { s: '$3', idx: 1, name: 'zsh', cmds: ['zsh', 'zsh'] }, { s: '$3', idx: 2, name: 'docs', cmds: ['nvim'] }, { s: '$3', idx: 3, name: 'logs', cmds: ['tail'] }, { s: '$3', idx: 4, name: 'zsh', cmds: ['zsh'] },
+    { s: '$4', idx: 1, name: 'zsh', cmds: ['zsh'] },
+    { s: '$6', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: '$6', idx: 2, name: 'lazygit', cmds: ['lazygit'] },
+    { s: '$8', idx: 1, name: 'zsh', cmds: ['zsh'] },
+  ];
+  const baseAgents = () => [
+    { pane: '%7',  session: '$1', win: 1, pidx: 1, kind: 'claude', state: 'working', seen: true,  since: t(17, 40), title: '✳ Fix flaky auth test' },
+    { pane: '%66', session: '$1', win: 2, pidx: 1, kind: 'claude', state: 'idle',    seen: true,  since: t(16, 10), title: '✳ Review PR 42' },
+    { pane: '%16', session: '$2', win: 2, pidx: 1, kind: 'claude', state: 'working', seen: false, since: t(17, 52), title: '✳ Add signup form validation' },
+    { pane: '%17', session: '$2', win: 2, pidx: 2, kind: 'gemini', state: 'idle',    seen: true,  since: t(15, 5), title: '' },
+    { pane: '%31', session: '$2', win: 3, pidx: 1, kind: 'codex',  state: 'done',    seen: false, since: t(17, 50), title: 'update the snapshot tests' },
+    { pane: '%94', session: '$3', win: 1, pidx: 1, kind: 'claude', state: 'working', seen: true,  since: t(17, 31), title: '✳ Upgrade the staging cluster' },
+    { pane: '%52', session: '$3', win: 4, pidx: 1, kind: 'claude', state: 'blocked', seen: true,  since: t(17, 20), title: '✳ Triage the error alerts' },
+    { pane: '%71', session: '$6', win: 1, pidx: 1, kind: 'claude', state: 'blocked', seen: false, since: t(17, 49), title: '✳ Fix the login deep link' },
+  ];
+  const baseWorktrees = () => [ { s: '$2', branch: 'feat/pdf', session: 'web--feat-pdf', open: false, dirty: true } ];
+  const zoxide = ['~/code/api', '~/code/mobile', '~/oss/api', '~/code/cli', '~/notes', '~/oss/ratatui', '~/work/billing', '~/code/web', '~/code/docs', '~/code/infra'];
+  const PROJECT_DIRS = ['~/code', '~/work'];
+  const FS = { '~': ['code', 'notes', 'oss', 'scratch', 'work'], '~/code': ['api', 'cli', 'docs', 'infra', 'mobile', 'web'], '~/oss': ['api', 'ratatui'], '~/work': ['api', 'billing'], '~/scratch': ['tmp'] };
+
+  const S = { sessions: baseSessions(), windows: baseWindows(), agents: baseAgents(), worktrees: baseWorktrees(),
+    model: 'modal', depth: 'agents', labels: true, titles: true, cursor: 'you', zoxide: true, dirs: true, naming: 'directory', flat: false, preview: true, git: true, symbols: true, statusTop: true, sort: 'attention', bar: 'taw', wrap: true, openMark: true, projectsInFilter: false,
+    remote: false, pageNote: null, rmPi: 'dropped', rmWhere: 'app', rmToast: null, rmSlow: false, rmFail: null, rmPending: null, inside: null, appFrom: null, appPrev: null,
+    q: '', filter: null, sel: 0, anchor: null, keptCursor: false, overlay: null, toast: null, focus: false, prefixAt: 0 };
+
+  const tmuxName = s => s.replace(/[.:]/g, '_');
+  const shortPath = p => { const parts = p.split('/'); return parts.map((seg, i) => i === parts.length - 1 || seg === '~' || seg === '' ? seg : seg.slice(0, 2)).join('/'); };
+  function baseName(path, mode) { const p = path.replace(/\/+$/, ''); if (mode === 'full-path') return tmuxName(p); if (mode === 'short-path') return tmuxName(shortPath(p)); return tmuxName(p.split('/').filter(Boolean).pop() || p); }
+  function sessionNameFor(path, mode, sessions) { const want = baseName(path, mode); const clash = sessions.filter(s => s.name === want && s.path !== path); if (!clash.length || mode !== 'directory') return { name: want, why: '' }; const parts = path.replace(/^~\//, '').split('/'); let n = 2; while (n <= parts.length) { const cand = tmuxName(parts.slice(-n).join('/')); if (!sessions.some(s => s.name === cand && s.path !== path)) return { name: cand, why: `"${want}" is taken by ${clash[0].path}` }; n++; } return { name: tmuxName(path), why: `"${want}" is taken by ${clash[0].path}` }; }
+  function applyNaming() { const named = []; for (const s of S.sessions) { if (s.machine) continue; if (s.renamed) { named.push(s); continue; } s.name = sessionNameFor(s.path, S.naming, named).name; named.push(s); } }
+  const runningAt = path => S.sessions.find(s => !s.machine && s.path === path);
+
+  const TIER = a => a.state === 'blocked' ? (a.seen ? 1 : 0) : a.state === 'done' ? (a.seen ? 3 : 2) : a.state === 'idle' ? 3 : a.state === 'working' ? 4 : 5;
+  const TIER_NAME = ['blocked, not looked at', 'blocked, looked at', 'done: finished, not looked at', 'idle: looked at, or quiet', 'working', 'unknown'];
+  const PRIO = a => ({ blocked: 0, working: 1, done: 2, idle: 3, unknown: 4 })[a.state];
+  const sessOrder = id => S.sessions.findIndex(s => s.id === id);
+  const cmpKeys = (x, y) => { for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1; return 0; };
+  const attnKey = a => [TIER(a), -a.since, sessOrder(a.session), a.win, a.pidx];
+  function flatKey(a) { if (S.sort !== 'sessions' && !liveAgent(a)) return [99, sessOrder(a.session), a.win, a.pidx, 0]; if (S.sort === 'sessions') return [sessOrder(a.session), a.win, a.pidx, 0, 0]; return attnKey(a); }
+  const attentionOrder = () => S.agents.filter(liveAgent).sort((a, b) => cmpKeys(attnKey(a), attnKey(b)));
+  const needsYou = () => { const hot = attentionOrder().filter(a => TIER(a) <= 2); return hot.length ? hot : attentionOrder(); };
+  const needsBy = () => { const g = []; for (const a of attentionOrder().filter(a => TIER(a) <= 2)) { const f = g.find(x => x.st === a.state); if (f) f.n++; else g.push({ st: a.state, n: 1 }); } return g; };
+  const needWords = parts => (parts.reduce((t, p) => t + p.n, 0) === 1 ? 'needs you' : 'need you');
+  const herePlace = () => S.appFrom;
+  const beforePlace = () => S.appPrev;
+  const currentSession = () => (appMode() && herePlace() && S.sessions.includes(herePlace().s) ? herePlace().s : null) || S.sessions.find(s => s.attached) || S.sessions.find(s => !s.machine) || S.sessions[0];
+  const previousSession = () => { const cur = currentSession(); if (appMode() && beforePlace() && beforePlace().s !== cur && S.sessions.includes(beforePlace().s)) return beforePlace().s; const others = S.sessions.filter(s => s !== cur && s.last > 0).sort((a, b) => b.last - a.last); return others[0] || null; };
+  const flagOf = s => ((appMode() ? s === currentSession() : s.attached) ? '*' : previousSession() === s ? '-' : '');
+  const elapsed = since => { const d = Math.max(0, now() - since); return d < 60 ? 'now' : d < 3600 ? `${Math.floor(d / 60)}m` : d < 86400 ? `${Math.floor(d / 3600)}h` : `${Math.floor(d / 86400)}d`; };
+  const hotCls = (st, seen) => (st === 'blocked' ? 'c-att bold' : st === 'done' && !seen ? 'c-grn' : null);
+  const GROUP = a => { const tier = TIER(a); return tier <= 2 ? 0 : tier === 3 ? 1 : 2; };
+  const GROUP_NAME = ['needs you', 'idle', 'the rest'];
+  const nextUpPool = pool => (pool.some(a => GROUP(a) === 0) ? pool.filter(a => GROUP(a) === 0) : pool);
+  const stripTitle = t => (t || '').replace(/^[✳✻✽✢✶●⏺⚠\s]+/, '');
+  const agentsOf = s => S.agents.filter(a => a.session === s.id).sort((a, b) => a.win - b.win || a.pidx - b.pidx);
+  const sessionTarget = s => agentsOf(s).find(a => hotCls(a.state, a.seen)) || null;
+  const rollup = s => { const t = sessionTarget(s); if (t) return t.state; const own = agentsOf(s); if (!own.length) return null; const rank = { done: 0, idle: 1, working: 2, unknown: 3, blocked: -1 }; return own.slice().sort((a, b) => rank[a.state] - rank[b.state])[0].state; };
+  const labelOfSession = s => { const i = numbered().indexOf(s); return i >= 0 && i < 9 ? String(i + 1) : ' '; };
+  const rowKey = r => r.kind === 'project' ? 'p ' + r.path : `${r.kind} ${r.s.id}` + (r.kind === 'agent' ? ` ${r.a.win}.${r.a.pidx}` : r.kind === 'pane' ? ` ${r.win}.${r.pidx}` : r.kind === 'worktree' ? ' ' + r.wt.branch : '');
+  function labelsOf(rows) { const out = new Map(); if (S.flat && S.depth !== 'sessions') { let n = 0; rows.forEach(r => { if (r.kind === 'worktree' || r.kind === 'project') return; n++; if (n <= 9) out.set(rowKey(r), { num: String(n), addr: String(n), withNumber: true }); }); return out; } const seen = new Map(); rows.forEach(r => { if (r.kind === 'project') return; const l = labelOfSession(r.s); if (r.kind === 'session') { if (l !== ' ') out.set(rowKey(r), { num: l, addr: l, withNumber: true }); return; } const n = seen.get(r.s) || 0; seen.set(r.s, n + 1); if (n < LETTERS.length) out.set(rowKey(r), { letter: LETTERS[n], addr: (l === ' ' ? '' : l) + LETTERS[n], withNumber: l !== ' ' }); }); return out; }
+  let LABELS = new Map();
+  const labelAt = i => (S.labels && ROWS_CACHE[i] && LABELS.get(rowKey(ROWS_CACHE[i]))) || null;
+  const labelOf = i => { const l = labelAt(i); return l && l.num ? l.num : ' '; };
+
+  const SCORE_MATCH = 16, PENALTY_GAP_START = 3, PENALTY_GAP_EXTENSION = 1, BONUS_BOUNDARY = 8, BONUS_CAMEL123 = 5, BONUS_NON_WORD = 8, BONUS_CONSECUTIVE = 4, BONUS_FIRST_CHAR_MULTIPLIER = 2;
+  const BONUS_BOUNDARY_WHITE = 10, BONUS_BOUNDARY_DELIMITER = 9, DELIMITERS = [47, 44, 58, 59, 124];
+  const WHITE = 0, NON_WORD = 1, DELIMITER = 2, LOWER = 3, UPPER = 4, LETTER = 5, NUMBER = 6;
+  const FUZZY = 0, SUBSTRING = 1, PREFIX = 2, POSTFIX = 3, EXACT = 4;
+  const NORMALIZE = new Map(), FOLD = new Map();
+  { let at = 0; for (const [, gap, to] of '192A1A1A1A1A1A2C1E1E1E1E1I1I1I1I2N1O1O1O1O1O2O1U1U1U1U1Y2s1a1a1a1a1a1a2c1e1e1e1e1i1i1i1i2n1o1o1o1o1o2o1u1u1u1u1y2y2a2a2a2c2c2c2c2d2d2e2e2e2e2e2g2g2g2g2h2h2i2i2i2i1I1i4j2k3l2l2l2l2l2n2n2n5o2o2o4r2r2r2s2s2s2s2t2t2t2u2u2u2u2u2u2w2y1Y2z2z2z1s1b1B2b3O2c1D1D2d2E2E2f1G4I2k1l2M1N1n1O2o4p6t2t1T2u2V2y2z24a2i2o2u9e8g2g2k2o5j5g4n8a2a2e2e2i2i2o2o2r2r2u2u2s2t4h1N1d4z2a2e6o4y1l1n1t1j3A1C1c1L1T1s1z3B1U1V1E1e1J1j1Q1q1R1r1Y1y1a1a2b1o1c1d1d1e3e1e1e1e1j1g1g1G3h1h2i2I1l1l1l2m1m1m1n1n1N1o4r1r1r1r1r1r1r1R1R1s5t1t1u2v1v1w1y1Y1z1z6c2B1e1G1H1j1k1L1q14h181a1e1i1o1u1c1d1h1m1r1t1v1x6545A3A1A1A2A1A1C1E1E1E1E1I1I1I1I1N1O3O1O1O1O1O1U1U1U1U1Y1s1a1a64a1a1a1a156c2e2e2e4e2i2i2i2i6n2o4o2o2o2o2o2u2u2u4u2y2y2a6a2a2c2c2c2c2d2d10e2e4e4e2e2g8g2g2g2h2h2i8i2i2i2I2i4j2k2l2l2l4l1l1n1n1n1o1o6o2r22r4r12s2s2s2s22t2t394A36A1A1A1A2A1C1E232E'.matchAll(/(\d+)([A-Za-z])/g)) { at += Number(gap); NORMALIZE.set(at, to.charCodeAt(0)); } }
+  for (const run of '1t.q.1.w 51.lj 5c.n.1.w 60.7.1.w 74.o.2.1 8i.3.2.1 8p.8.2.1 96.n.2.1 ag.-3d ah.3.2.1 an.-7g ap.5u aq.2.2.1 au.5q av.1 ax.2.1.5p az.1 b2.27 b3.5m b4.5n b5.1 b7.5p b8.5r ba.5v bb.5t bc.1 bg.5v bh.5x bj.5y bk.3.2.1 bq.62 br.1 bt.62 bw.1 by.62 bz.1 c1.2.1.61 c3.2.2.1 c7.63 c8.1 cc.1 ck.2 cl.1 cn.2 co.1 cq.2 cr.9.2.1 da.9.2.1 dt.2 du.2.2.1 dy.-2p dz.-1k e0.k.2.1 f4.-3m f6.9.2.1 fu.8bv fv.1 fx.-4j fy.8bs g1.1 g3.-5f g4.1x g5.1z g6.5.2.1 n9.38 og.2.2.1 om.1 ov.38 p2.12 p4.3.1.11 p8.1s pa.2.1.1r pd.h.1.w pv.9.1.w qq.1 r3.8 r4.-u r5.-p r9.-f ra.-m rc.c.2.1 s0.-1i s1.-1c s4.-1o s5.-1s s7.1 s9.-7 sa.1 sd.3.1.-3m sg.g.1.28 sw.w.1.w v4.h.2.1 wa.r.2.1 xs.f xt.7.2.1 y8.1c.2.1 10x.12.1.1c 3a8.12.1.5ls 3bb.5ls 3bh.5ls 3y0.6.1.-8 5mo.-4su 5mp.-4st 5mq.-4sk 5mr.2.1.-4si 5mt.-4sj 5mu.-4sc 5mv.-4ro 5mw.r7n 5n4.17.1.-2bk 5od.3.1.-2bk 5xc.23.2.1 61n.-1m 61q.-5vj 61s.1c.2.1 64o.8.1.-8 654.6.1.-8 65k.8.1.-8 660.8.1.-8 66g.6.1.-8 66x.4.2.-8 67c.8.1.-8 688.8.1.-8 68o.8.1.-8 694.8.1.-8 69k.2.1.-8 69m.2.1.-22 69o.-9 69q.-5j9 6a0.4.1.-2e 6a4.-9 6ag.2.1.-8 6ai.2.1.-2s 6aw.2.1.-8 6ay.2.1.-34 6b0.-7 6bc.2.1.-3k 6be.2.1.-3i 6bg.-9 6jq.-5st 6ju.-6gv 6jv.-6di 6k2.s 6lc.g.1.g 6mb.1 792.q.1.q 8ow.1c.1.1c 8rk.1 8rm.-8af 8rn.-2xy 8ro.-89z 8rr.3.2.1 8rx.-8bg 8ry.-8al 8rz.-8bj 8s0.-8bi 8s2.1 8s5.1 8se.2.1.-8cf 8sg.1e.2.1 8vf.2.2.1 8vm.1 wu8.n.2.1 ww0.e.2.1 x0i.7.2.1 x0y.v.2.1 x2x.2.2.1 x31.-r9g x32.5.2.1 x3f.1 x3h.-wmg x3k.2.2.1 x3q.a.2.1 x4a.-wn8 x4b.-wnj x4c.-wnf x4d.-wn5 x4e.-wn8 x4g.-wlu x4h.-wmi x4i.-wlx x4j.ps x4k.8.2.1 x50.-1c x51.-wn7 x52.-raw x53.2.2.1 x5c.1 x5i.2.2.1 x6d.1 xv4.28.1.-tzk 1ee9.q.1.w 1fcw.14.1.14 1fhs.10.1.14 1fn4.b.1.13 1fng.f.1.13 1fnw.7.1.13 1fo4.2.1.13 1h1c.1f.1.1s 1jfk.w.1.w 20cg.w.1.w 2olc.y.1.y'.split(' ')) { const v = run.split('.').map(x => parseInt(x, 36)); const [start, count, step, shift] = v.length === 2 ? [v[0], 1, 1, v[1]] : v; for (let k = 0; k < count; k++) FOLD.set(start + k * step, start + k * step + shift); }
+  const normalizeChar = c => NORMALIZE.get(c) ?? c;
+  const toLowerCase = c => FOLD.get(c) ?? c;
+  const isUpperCase = c => FOLD.has(c);
+  const isWhite = c => /\p{White_Space}/u.test(String.fromCodePoint(c));
+  const isAsciiWhite = b => b === 32 || b === 9 || b === 10 || b === 12 || b === 13;
+  const asciiClass = b => (b >= 97 && b <= 122 ? LOWER : b >= 65 && b <= 90 ? UPPER : b >= 48 && b <= 57 ? NUMBER : isAsciiWhite(b) ? WHITE : DELIMITERS.includes(b) ? DELIMITER : NON_WORD);
+  function nonAsciiClass(c) { const s = String.fromCodePoint(c); return /\p{Lowercase}/u.test(s) ? LOWER : isUpperCase(c) ? UPPER : /\p{N}/u.test(s) ? NUMBER : /\p{Alphabetic}/u.test(s) ? LETTER : /\p{White_Space}/u.test(s) ? WHITE : NON_WORD; }
+  const classOf = (c, ascii) => (ascii || c < 128 ? asciiClass(c) : nonAsciiClass(c));
+  function norm(c, ascii, cfg) { if (ascii) return cfg.ignoreCase && c >= 65 && c <= 90 ? c + 32 : c; if (cfg.normalize) c = normalizeChar(c); if (cfg.ignoreCase) c = toLowerCase(c); return c; }
+  function classNorm(c, ascii, cfg) { if (ascii || c < 128) { const k = asciiClass(c); return [cfg.ignoreCase && k === UPPER ? c + 32 : c, k]; } const k = nonAsciiClass(c); let fold = k === UPPER; if (cfg.normalize) { c = normalizeChar(c); fold = true; } if (fold && cfg.ignoreCase) c = toLowerCase(c); return [c, k]; }
+  function bonusFor(prev, k) { if (k > DELIMITER) { if (prev === WHITE) return BONUS_BOUNDARY_WHITE; if (prev === DELIMITER) return BONUS_BOUNDARY_DELIMITER; if (prev === NON_WORD) return BONUS_BOUNDARY; } if ((prev === LOWER && k === UPPER) || (prev !== NUMBER && k === NUMBER)) return BONUS_CAMEL123; if (k === WHITE) return BONUS_BOUNDARY_WHITE; if (k === NON_WORD) return BONUS_NON_WORD; return 0; }
+  const SEGMENTER = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter('en', { granularity: 'grapheme' }) : null;
+  const graphemes = s => (SEGMENTER ? Array.from(SEGMENTER.segment(s), g => g.segment.codePointAt(0)) : Array.from(s, g => g.codePointAt(0)));
+  const isAscii = s => /^[\x00-\x7f]*$/.test(s);
+  function utf32(s) { if (isAscii(s)) return { ascii: true, cs: Array.from(s, c => c.charCodeAt(0)) }; const cs = graphemes(s); if (cs.every(c => c < 128)) return { ascii: true, cs: Array.from(new TextEncoder().encode(s)) }; return { ascii: false, cs }; }
+  function calculateScore(h, n, start, end, cfg) {
+    const hs = h.cs, idx = [start]; let prevClass = start > 0 ? classOf(hs[start - 1], h.ascii) : WHITE;
+    let next = Math.min(2, n.cs.length), needleChar = n.cs.length > 1 ? n.cs[1] : n.cs[0], inGap = false, consecutive = 1;
+    const k0 = classOf(hs[start], h.ascii); let firstBonus = bonusFor(prevClass, k0); let score = SCORE_MATCH + firstBonus * BONUS_FIRST_CHAR_MULTIPLIER; prevClass = k0;
+    for (let j = start + 1; j < end; j++) {
+      const [c, k] = classNorm(hs[j], h.ascii, cfg);
+      if (c === needleChar) {
+        idx.push(j); let bonus = bonusFor(prevClass, k);
+        if (consecutive !== 0) { if (bonus >= BONUS_BOUNDARY && bonus > firstBonus) firstBonus = bonus; bonus = Math.max(bonus, firstBonus, BONUS_CONSECUTIVE); } else firstBonus = bonus;
+        score += SCORE_MATCH + bonus; inGap = false; consecutive++;
+        if (next < n.cs.length) needleChar = n.cs[next++];
+      } else { score = Math.max(0, score - (inGap ? PENALTY_GAP_EXTENSION : PENALTY_GAP_START)); inGap = true; consecutive = 0; }
+      prevClass = k;
+    }
+    return { score, idx };
+  }
+  function exactImpl(h, n, start, end, cfg) {
+    if (n.cs.length !== end - start || (h.ascii && !n.ascii)) return null;
+    for (let k = 0; k < n.cs.length; k++) { const x = h.cs[start + k], y = n.cs[k]; if (h.ascii ? (cfg.ignoreCase ? norm(x, true, cfg) !== norm(y, true, cfg) : x !== y) : norm(x, false, cfg) !== norm(y, n.ascii, cfg)) return null; }
+    return calculateScore(h, n, start, end, cfg);
+  }
+  function prefilterAscii(hs, ns, onlyGreedy, cfg) {
+    const eq = cfg.ignoreCase ? (b, c) => b === c || (c >= 97 && c <= 122 && b === c - 32) : (b, c) => b === c;
+    let start = -1; for (let i = 0; i < hs.length - ns.length + 1; i++) if (eq(hs[i], ns[0])) { start = i; break; }
+    if (start < 0) return null;
+    let greedyEnd = start + 1;
+    for (let k = 1; k < ns.length; k++) { let i = greedyEnd; while (i < hs.length && !eq(hs[i], ns[k])) i++; if (i >= hs.length) return null; greedyEnd = i + 1; }
+    if (onlyGreedy) return [start, greedyEnd, greedyEnd];
+    let end = greedyEnd; for (let i = hs.length - 1; i >= greedyEnd; i--) if (eq(hs[i], ns[ns.length - 1])) { end = i + 1; break; }
+    return [start, greedyEnd, end];
+  }
+  function prefilterNonAscii(hs, n, onlyGreedy, cfg) {
+    let start = -1; for (let i = 0; i < hs.length - n.cs.length + 1; i++) if (norm(hs[i], false, cfg) === n.cs[0]) { start = i; break; }
+    if (start < 0) return null;
+    if (onlyGreedy) return hs.length - start < n.cs.length ? null : [start, start + 1];
+    let end = -1; for (let i = hs.length - 1; i > start; i--) if (norm(hs[i], false, cfg) === n.cs[n.cs.length - 1]) { end = i + 1; break; }
+    return end < 0 || end - start < n.cs.length ? null : [start, end];
+  }
+  function* occurrences(hs, ns, limit) { let i = 0; while (i + ns.length <= limit) { let k = 0; while (k < ns.length && hs[i + k] === ns[k]) k++; if (k === ns.length) { yield i; i += ns.length; } else i++; } }
+  function substring1Ascii(hs, c, cfg) {
+    let maxScore = 0, maxPos = 0; const both = cfg.ignoreCase && c >= 97 && c <= 122, fixed = asciiClass(c);
+    for (let i = 0; i < hs.length; i++) {
+      if (!(hs[i] === c || (both && hs[i] === c - 32))) continue;
+      const bonus = bonusFor(i > 0 ? asciiClass(hs[i - 1]) : WHITE, both ? asciiClass(hs[i]) : fixed), score = bonus * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH;
+      if (score > maxScore) { maxPos = i; maxScore = score; if (bonus >= BONUS_BOUNDARY_WHITE) break; }
+    }
+    return maxScore ? { score: maxScore, idx: [maxPos] } : null;
+  }
+  function substringAscii(h, n, cfg) {
+    const hs = h.cs, ns = n.cs; let best = [0, 0];
+    const tail = i => { const stop = Math.min(i + ns.length, hs.length); if (stop - i - 1 !== ns.length - 1) return false; for (let k = 1; k < ns.length; k++) if (norm(hs[i + k], true, cfg) !== ns[k]) return false; return true; };
+    const withPrefilter = places => { let maxScore = 0, maxPos = 0; for (const i of places) { const bonus = bonusFor(i > 0 ? asciiClass(hs[i - 1]) : WHITE, asciiClass(hs[i])), score = bonus * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH; if (score > maxScore && tail(i)) { maxPos = i; maxScore = score; if (bonus >= BONUS_BOUNDARY_WHITE) break; } } return [maxScore, maxPos]; };
+    if (cfg.ignoreCase) {
+      const p = ns.findIndex(c => c >= 97 && c <= 122);
+      if (p === 0 || p === 1) { const places = []; for (let i = 0; i < hs.length - ns.length + 1; i++) if (hs[i] === ns[0] || (p === 0 && hs[i] === ns[0] - 32)) places.push(i); best = withPrefilter(places); if (!best[0]) return null; }
+      else if (p > 1) { best = withPrefilter(occurrences(hs, ns, hs.length - ns.length + p)); if (!best[0]) return null; }
+    }
+    if (!best[0]) {
+      const k0 = asciiClass(ns[0]); let maxScore = 0, maxPos = 0;
+      for (const i of occurrences(hs, ns, hs.length)) { const bonus = bonusFor(i > 0 ? asciiClass(hs[i - 1]) : WHITE, k0), score = bonus * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH; if (score > maxScore) { maxPos = i; maxScore = score; if (bonus >= BONUS_BOUNDARY_WHITE) break; } }
+      if (!maxScore) return null; best = [maxScore, maxPos];
+    }
+    return calculateScore(h, n, best[1], best[1] + ns.length, cfg);
+  }
+  function substring1NonAscii(hs, c, start, cfg) {
+    let maxScore = 0, maxPos = 0, prev = start > 0 ? classOf(hs[start - 1], false) : WHITE;
+    for (let i = 0; start + i < hs.length; i++) { const [x, k] = classNorm(hs[start + i], false, cfg); if (x !== c) continue; const bonus = bonusFor(prev, k); prev = k; const score = bonus * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH; if (score > maxScore) { maxPos = i; maxScore = score; if (bonus >= BONUS_BOUNDARY_WHITE) break; } }
+    return { score: maxScore, idx: [maxPos + start] };
+  }
+  function substringNonAscii(h, n, start, cfg) {
+    const hs = h.cs, ns = n.cs, end = hs.length - ns.length + 1; let maxScore = 0, maxPos = 0, prev = start > 0 ? classOf(hs[start - 1], false) : WHITE;
+    const tail = i => { for (let k = 1; k < ns.length; k++) if (norm(hs[i + k], false, cfg) !== ns[k]) return false; return true; };
+    for (let i = 0; start + i < end; i++) { const [x, k] = classNorm(hs[start + i], false, cfg); if (x !== ns[0]) continue; const bonus = bonusFor(prev, k); prev = k; const score = bonus * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH; if (score > maxScore && tail(start + i)) { maxPos = i; maxScore = score; if (bonus >= BONUS_BOUNDARY_WHITE) break; } }
+    return maxScore ? calculateScore(h, n, start + maxPos, start + maxPos + ns.length, cfg) : null;
+  }
+  function substringMatch(h, n, cfg) {
+    if (n.cs.length > h.cs.length) return null;
+    if (!n.cs.length) return { score: 0, idx: [] };
+    if (n.cs.length === h.cs.length) return exactImpl(h, n, 0, h.cs.length, cfg);
+    if (h.ascii && !n.ascii) return null;
+    if (h.ascii) return n.cs.length === 1 ? substring1Ascii(h.cs, n.cs[0], cfg) : substringAscii(h, n, cfg);
+    const f = prefilterNonAscii(h.cs, n, n.cs.length === 1, cfg);
+    return f && (n.cs.length === 1 ? substring1NonAscii(h.cs, n.cs[0], f[0], cfg) : substringNonAscii(h, n, f[0], cfg));
+  }
+  const leadingWhite = h => { const w = h.ascii ? isAsciiWhite : isWhite; const i = h.cs.findIndex(c => !w(c)); return i < 0 ? 0 : i; };
+  const trailingWhite = h => { const w = h.ascii ? isAsciiWhite : isWhite; for (let i = h.cs.length - 1; i >= 0; i--) if (!w(h.cs[i])) return h.cs.length - 1 - i; return 0; };
+  function exactMatch(h, n, cfg) {
+    if (!n.cs.length) return { score: 0, idx: [] };
+    const lead = isWhite(n.cs[0]) ? 0 : leadingWhite(h), trail = isWhite(n.cs[n.cs.length - 1]) ? 0 : trailingWhite(h);
+    return trail === h.cs.length ? null : exactImpl(h, n, lead, h.cs.length - trail, cfg);
+  }
+  function prefixMatch(h, n, cfg) {
+    if (!n.cs.length) return { score: 0, idx: [] };
+    const lead = isWhite(n.cs[0]) ? 0 : leadingWhite(h);
+    return h.cs.length - lead < n.cs.length ? null : exactImpl(h, n, lead, n.cs.length + lead, cfg);
+  }
+  function postfixMatch(h, n, cfg) {
+    if (!n.cs.length) return { score: 0, idx: [] };
+    const trail = isWhite(n.cs[n.cs.length - 1]) ? 0 : trailingWhite(h);
+    return h.cs.length - trail < n.cs.length ? null : exactImpl(h, n, h.cs.length - n.cs.length - trail, h.cs.length - trail, cfg);
+  }
+  function fuzzyMatch(h, n, cfg) {
+    if (n.cs.length > h.cs.length) return null;
+    if (!n.cs.length) return { score: 0, idx: [] };
+    if (n.cs.length === h.cs.length) return exactImpl(h, n, 0, h.cs.length, cfg);
+    if (h.ascii && !n.ascii) return null;
+    if (h.ascii) {
+      if (n.cs.length === 1) return substring1Ascii(h.cs, n.cs[0], cfg);
+      const f = prefilterAscii(h.cs, n.cs, false, cfg); if (!f) return null;
+      const [start, greedyEnd, end] = f;
+      return n.cs.length === end - start ? calculateScore(h, n, start, greedyEnd, cfg) : fuzzyOptimal(h, n, start, greedyEnd, end, cfg);
+    }
+    if (n.cs.length === 1) { const f = prefilterNonAscii(h.cs, n, true, cfg); return f && substring1NonAscii(h.cs, n.cs[0], f[0], cfg); }
+    const f = prefilterNonAscii(h.cs, n, false, cfg); if (!f) return null;
+    const [start, end] = f;
+    return n.cs.length === end - start ? exactImpl(h, n, start, end, cfg) : fuzzyOptimal(h, n, start, start + 1, end, cfg);
+  }
+  function slabFits(hl, nl, ascii) {
+    if (hl * nl > 100 * 1024 || hl > 65535 || nl > 2048) return false;
+    let size = 0; const add = (bytes, align) => { size = Math.ceil(size / align) * align + bytes; };
+    const c = ascii ? 1 : 4; add(hl * c, c); add(hl, 1); add(nl * 2, 2); add((hl + 1 - nl) * 8, 8); add((hl + 1 - nl) * nl, 1);
+    return size <= 133120;
+  }
+  function fuzzyGreedy(h, n, start, end, cfg) {
+    const hs = h.cs, ns = n.cs, both = h.ascii && n.ascii, firstEnd = both ? start + 1 : end;
+    if (!both && ns.length > 1) { let p = 1, found = false; for (let i = firstEnd; i < hs.length; i++) if (norm(hs[i], h.ascii, cfg) === ns[p]) { if (p + 1 >= ns.length) { end = i + 1; found = true; break; } p++; } if (!found) return null; }
+    let p = ns.length - 1;
+    for (let i = end - 1; i >= start; i--) if (norm(hs[i], h.ascii, cfg) === ns[p]) { if (p === 0) { start = i; break; } p--; }
+    return calculateScore(h, n, start, end, cfg);
+  }
+  const UNMATCHED = { score: 0, cb: 0, matched: true };
+  function nextMCell(p, bonus, m) {
+    if (m.score === 0 && m.cb === 0 && m.matched) return { score: p + bonus + SCORE_MATCH, matched: false, cb: bonus };
+    let cb = Math.max(m.cb, BONUS_CONSECUTIVE); if (bonus >= BONUS_BOUNDARY && bonus > cb) cb = bonus;
+    const viaMatch = m.score + Math.max(cb, bonus), viaSkip = p + bonus;
+    return viaMatch > viaSkip ? { score: viaMatch + SCORE_MATCH, matched: true, cb } : { score: viaSkip + SCORE_MATCH, matched: false, cb: bonus };
+  }
+  function pScore(prevP, prevM) { const viaMatch = Math.max(0, prevM - PENALTY_GAP_START), viaSkip = Math.max(0, prevP - PENALTY_GAP_EXTENSION); return viaMatch > viaSkip ? [viaMatch, true] : [viaSkip, false]; }
+  function fuzzyOptimal(h, n, start, greedyEnd, end, cfg) {
+    const nl = n.cs.length, hl = end - start;
+    if (!slabFits(hl, nl, h.ascii)) return fuzzyGreedy(h, n, start, greedyEnd, cfg);
+    const hay = h.cs.slice(start, end), bonus = new Array(hl), rowOffs = new Array(nl).fill(0);
+    let prevClass = start > 0 ? classOf(h.cs[start - 1], h.ascii) : WHITE, r = 0, needleChar = n.cs[0], matched = false;
+    for (let i = 0; i < hl; i++) {
+      const [c, k] = classNorm(hay[i], h.ascii, cfg); hay[i] = c; bonus[i] = bonusFor(prevClass, k); prevClass = k;
+      if (c === needleChar) { if (r + 1 < nl) { rowOffs[r] = i; needleChar = n.cs[++r]; } else if (!matched) { rowOffs[r] = i; matched = true; } }
+    }
+    if (!matched) return null;
+    const W = hl + 1 - nl, cur = new Array(W).fill(UNMATCHED), mat = new Uint8Array(W * hl);
+    const scoreRow = (first, rowOff, nextRowOff, needleIdx, nc, nnc, base) => {
+      nextRowOff -= 1; const rel = rowOff - needleIdx, nextRel = nextRowOff - needleIdx; let prevP = 0, prevM = 0;
+      const mOf = (col, at) => (first ? (hay[col] === nc ? { score: bonus[col] * BONUS_FIRST_CHAR_MULTIPLIER + SCORE_MATCH, matched: false, cb: bonus[col] } : UNMATCHED) : cur[at]);
+      for (let col = rowOff; col < nextRowOff; col++) { const [p, pm] = pScore(prevP, prevM), m = mOf(col, rel + col - rowOff); mat[base + col - rowOff] = (pm ? 1 : 0) | (m.matched ? 2 : 0); prevP = p; prevM = m.score; }
+      const count = Math.min(hl - nextRowOff - 1, W - nextRel);
+      for (let k = 0; k < count; k++) { const j = nextRowOff + k, [p, pm] = pScore(prevP, prevM), m = mOf(j, nextRel + k); cur[nextRel + k] = hay[j + 1] === nnc ? nextMCell(p, bonus[j + 1], m) : UNMATCHED; mat[base + nextRel - rel + k] = (pm ? 1 : 0) | (m.matched ? 2 : 0); prevP = p; prevM = m.score; }
+    };
+    scoreRow(true, 0, rowOffs[1], 0, n.cs[0], n.cs[1], 0);
+    let base = W;
+    for (let q = 1; q + 1 < nl; q++) { scoreRow(false, rowOffs[q], rowOffs[q + 1], q, n.cs[q], n.cs[q + 1], base); base += W + q - rowOffs[q]; }
+    const lastOff = rowOffs[nl - 1], relLast = lastOff + 1 - nl;
+    let best = -1, bestAt = 0; for (let x = relLast; x < W; x++) if (cur[x].score >= best) { best = cur[x].score; bestAt = x - relLast; }
+    const idx = new Array(nl).fill(0); idx[nl - 1] = start + bestAt + lastOff;
+    let rowIdx = nl - 2, rowOff = rowOffs[rowIdx], rowStart = base - (W - (rowOff - rowIdx)), col = bestAt + lastOff - rowOff - 1, m = cur[bestAt + relLast].matched;
+    for (;;) {
+      if (m) idx[rowIdx] = start + col + rowOff;
+      const nextM = (mat[rowStart + col] & (m ? 2 : 1)) !== 0;
+      if (m) { if (rowIdx === 0) break; const nextOff = rowOffs[rowIdx - 1]; rowStart -= W - (nextOff - (rowIdx - 1)); col += rowOff - nextOff; rowIdx -= 1; rowOff = nextOff; }
+      col -= 1; m = nextM;
+    }
+    return { score: best, idx };
+  }
+  function newAtom(needle, ignore, kind, escapeWhite, dollar) {
+    let ignoreCase, normalize = true, cs, ascii = isAscii(needle);
+    if (ascii) {
+      let t = escapeWhite ? needle.split('\\ ').join(' ') : needle;
+      if (ignore) { ignoreCase = true; t = t.toLowerCase(); } else ignoreCase = !/[A-Z]/.test(t);
+      if (dollar) t += '$';
+      cs = Array.from(t, c => c.charCodeAt(0));
+    } else {
+      ignoreCase = true; cs = []; let saw = false;
+      for (let c of graphemes(needle)) {
+        if (escapeWhite) { if (saw) { if (c === 32) { cs.push(32); saw = false; continue; } cs.push(92); } saw = c === 92; }
+        if (ignore) c = toLowerCase(c); else ignoreCase = ignoreCase && !isUpperCase(c);
+        normalize = normalize && normalizeChar(c) === c;
+        cs.push(c);
+      }
+      if (dollar) cs.push(36);
+    }
+    return { kind, cs, ascii, cfg: { ignoreCase, normalize }, negative: false };
+  }
+  function parseAtom(raw) {
+    let a = raw, negative = false, kind = FUZZY, dollar = false;
+    if (a.startsWith('!')) { a = a.slice(1); negative = true; } else if (a.startsWith('\\!')) a = a.slice(1);
+    if (a.startsWith('^')) { a = a.slice(1); kind = PREFIX; } else if (a.startsWith("'")) { a = a.slice(1); kind = SUBSTRING; } else if (a.startsWith('\\^') || a.startsWith("\\'")) a = a.slice(1);
+    if (a.endsWith('\\$')) { dollar = true; a = a.slice(0, -2); } else if (a.endsWith('$')) { kind = kind === FUZZY ? POSTFIX : EXACT; a = a.slice(0, -1); }
+    if (negative && kind === FUZZY) kind = SUBSTRING;
+    const atom = newAtom(a, false, kind, true, dollar); atom.negative = negative; return atom;
+  }
+  const isAddress = t => /^[0-9]+[A-Za-z]$/.test(t);
+  function atomsOf(query) {
+    const raw = []; let cur = '', saw = false;
+    for (const ch of query) { if (ch === ' ' && !saw) { raw.push(cur); cur = ''; continue; } saw = ch === '\\'; cur += ch; }
+    raw.push(cur);
+    return raw.map(parseAtom).filter(a => a.cs.length).map(a => { const t = String.fromCodePoint(...a.cs); if (!isAddress(t)) return a; const b = newAtom(t, true, a.kind, false, false); b.negative = a.negative; return b; });
+  }
+  function atomIndices(a, h) {
+    const r = [fuzzyMatch, substringMatch, prefixMatch, postfixMatch, exactMatch][a.kind](h, a, a.cfg);
+    return a.negative ? (r ? null : { score: 0, idx: [] }) : r;
+  }
+  const contiguous = a => (a.kind === FUZZY ? { ...a, kind: SUBSTRING } : a);
+  function fuzzy(query, text) { const h = utf32(text); let score = 0; const idx = []; for (const a of atomsOf(query)) { const r = atomIndices(a, h); if (!r) return null; score += r.score; idx.push(...r.idx); } return { score, idx: [...new Set(idx)].sort((x, y) => x - y) }; }
+  const NAMED = 1e9;
+  function fuzzyRow(query, r, inherit = true) {
+    const l = S.labels ? LABELS.get(rowKey(r)) : null; const [own, inherited] = textParts(r); const after = inherit ? inherited : ''; const title = drawnTitle(r);
+    if (!l && !after && !title) { const plain = fuzzy(query, own); return plain && { score: plain.score, idx: plain.idx, lab: [], title: [] }; }
+    if (l && l.withNumber && l.addr.toLowerCase() === query.trim().toLowerCase()) return { score: NAMED, idx: [], lab: [...l.addr].map((_, k) => k), title: [] };
+    const n = l ? l.addr.length + 1 : 0; const labelled = utf32(l ? l.addr + ' ' + own : own), alone = utf32(own), later = after ? utf32(after) : null, heading = title ? utf32(title) : null;
+    let score = 0, idx = [], lab = [], tit = [];
+    for (const atom of atomsOf(query)) {
+      const run = contiguous(atom), anchored = run.kind >= PREFIX;
+      if (atom.negative) { if (!atomIndices(atom, labelled) || !atomIndices(atom, alone) || (later && !anchored && !atomIndices(run, later)) || (heading && !atomIndices(run, heading))) return null; continue; }
+      const w = atomIndices(atom, labelled), p = atomIndices(atom, alone);
+      let best = null, from = '';
+      if (w && !(p && p.score > w.score)) { best = w; from = 'w'; } else if (p) { best = p; from = 'p'; }
+      const h = heading && atomIndices(run, heading);
+      if (h && (!best || h.score > best.score)) { best = h; from = 'h'; }
+      if (!best) { const a = later && !anchored && atomIndices(run, later); if (!a) return null; best = a; from = 'a'; }
+      score += best.score;
+      if (from === 'w') { idx = idx.concat(best.idx.filter(k => k >= n).map(k => k - n)); lab = lab.concat(best.idx.filter(k => k < (l ? l.addr.length : 0))); } else if (from === 'p') idx = idx.concat(best.idx); else if (from === 'h') tit = tit.concat(best.idx);
+    }
+    return { score, idx, lab, title: tit };
+  }
+
+  const glyph = st => S.symbols ? (({ blocked: '⏸', working: '⏵', done: '✓', idle: '○', unknown: '?' })[st] || '·') : (st ? '●' : '·');
+  const cls = st => ({ blocked: 'c-att', working: 'c-blu', done: 'c-grn', idle: 'c-dim', unknown: 'c-mag' })[st] || 'c-dim';
+  const winOf = (sid, idx) => S.windows.find(w => w.s === sid && w.idx === idx) || { name: 'zsh', cmds: ['zsh'] };
+  const where = (sid, win, pidx) => { const w = winOf(sid, win); return `${win}:${w.name}` + (w.cmds.length > 1 ? `.${pidx}` : ''); };
+  const whatOf = r => r.kind === 'agent' ? r.a.kind : r.kind === 'pane' ? (r.w.cmds[r.pidx - 1] || 'zsh') : '';
+  const ownText = r => (r.kind === 'session' ? `${r.s.name} ${headerGit(r.s)}`.trim() : r.kind === 'agent' ? `${r.s.name} ${r.a.kind} ${where(r.s.id, r.a.win, r.a.pidx)} ${r.a.state}` : r.kind === 'pane' ? `${r.s.name} ${whatOf(r)} ${where(r.s.id, r.win, r.pidx)}` : r.kind === 'worktree' ? `${r.s.name} ${r.wt.branch} worktree, closed` : '') + (r.s && r.s.machine ? ' ' + r.s.machine : '');
+  const headerGit = s => (S.git && s.branch ? [s.branch, s.git].filter(Boolean).join(' ') : '');
+  const textParts = r => [ownText(r), r.kind === 'agent' || r.kind === 'pane' || r.kind === 'worktree' ? headerGit(r.s) : ''];
+  const textOf = r => textParts(r).filter(Boolean).join(' ');
+  let HEAD_TITLE = false;
+  const drawnTitle = r => { if (r.kind === 'session') { const t = HEAD_TITLE && S.titles && !staleS(r.s) ? sessionTarget(r.s) : null; return t ? stripTitle(t.title) : ''; } if (!S.titles || r.kind !== 'agent') return ''; const t = stripTitle(r.a.title); return t && t !== r.a.kind ? t : ''; };
+  const query = () => S.model === 'search' ? S.q : (S.filter || '');
+  function childRowsAt(s, depth, closed = true) { if (depth === 'sessions') return []; const out = []; for (const w of S.windows.filter(w => w.s === s.id).sort((x, y) => x.idx - y.idx)) for (let p = 1; p <= w.cmds.length; p++) { const a = S.agents.find(x => x.session === s.id && x.win === w.idx && x.pidx === p); if (a) out.push({ kind: 'agent', a, s }); else if (depth === 'all') out.push({ kind: 'pane', s, win: w.idx, pidx: p, w }); } if (closed) S.worktrees.filter(wt => wt.s === s.id && !wt.open).forEach(wt => out.push({ kind: 'worktree', wt, s })); return out; }
+  const childRows = s => childRowsAt(s, S.depth);
+  const FILTER_PROJECTS = 8;
+  const filterOpen = () => S.model === 'search' || S.filter !== null;
+  const projectRows = () => { if (!S.projectsInFilter || !filterOpen()) return []; const q = query().trim(); return candidatesFor(q, FILTER_PROJECTS).map(path => ({ kind: 'project', path, m: q ? fuzzy(q, path) : { score: 0, idx: [] } })); };
+  function buildTreeRows() { const q = query().trim() ? query() : ''; const key = r => r.kind === 'agent' ? [0, ...flatKey(r.a)] : r.kind === 'pane' ? [1, sessOrder(r.s.id), r.win, r.pidx] : [2, sessOrder(r.s.id), 0, 0]; const flatNow = S.flat && S.depth !== 'sessions'; LABELS = labelsOf(flatNow ? drawnSessions().flatMap(childRows).sort((x, y) => cmpKeys(key(x), key(y))) : drawnSessions().flatMap(s => [{ kind: 'session', s }, ...childRows(s)])); const scored = rows => rows.map(r => ({ ...r, m: q ? fuzzyRow(q, r) : { score: 0, idx: [] } }));
+    const scoredKids = (rows, headMatched) => rows.map(r => ({ ...r, m: q ? fuzzyRow(q, r, !headMatched) : { score: 0, idx: [] } })); if (flatNow) { let all = drawnSessions().flatMap(childRows).map(r => ({ ...r, m: q ? fuzzyRow(q, r, false) : { score: 0, idx: [] } })).filter(r => r.m); if (q) all.sort((x, y) => y.m.score - x.m.score); else all.sort((x, y) => cmpKeys(key(x), key(y))); return all; } const out = [];
+    for (const s of drawnSessions()) {
+      const head = scored([{ kind: 'session', s }])[0]; const headMatched = !!head.m; let kids = scoredKids(childRows(s), headMatched);
+      if (q && S.depth === 'sessions') {
+        HEAD_TITLE = true; const drawn = fuzzyRow(q, { kind: 'session', s }); HEAD_TITLE = false;
+        const own = head.m; const target = sessionTarget(s);
+        head.m = drawn ? (own ? { ...own, score: Math.max(own.score, drawn.score) } : { score: drawn.score, idx: [], lab: [], title: [] }) : null;
+        const standing = !head.m ? [] : own ? agentsOf(s) : target ? [target] : []; if (standing.length) head.stands = standing;
+      }
+      if (q) { const anyKid = kids.some(r => r.m); if (!head.m && !anyKid) continue; kids = kids.filter(r => r.m || head.m); }
+      out.push(head, ...kids);
+    }
+    return out; }
+  const buildRows = () => buildTreeRows().concat(projectRows());
+  let ROWS_CACHE = [];
+  let TREE_LINES = [];
+
+  const BOXED = { '%7': { runtime: 'docker', profile: 'mine' }, '%66': { runtime: 'docker', profile: 'mine' }, '%16': { runtime: 'docker', profile: 'default' }, '%31': { runtime: 'docker', profile: 'default' }, '%71': { runtime: 'docker', profile: null } };
+  const boxOf = a => (a && BOXED[a.pane]) || null;
+  const boxWords = b => (b.profile ? `${b.runtime}, profile ${b.profile}` : `${b.runtime}, not started by taw`);
+  const BOX = '📦';
+  const markAfter = a => (boxOf(a) ? { text: ' ' + BOX, cols: 1 + BOX.length } : null);
+  const markLegend = () => ' ' + span(pad(BOX, 11), 'c-dim') + span('in a container that taw started, or saw start', 'c-dim');
+  function kindCell(a, idx, c) {
+    const after = markAfter(a); if (!after) return cutCell(a.kind, WHATW, idx, c);
+    const room = WHATW - after.cols; const cut = a.kind.length > room; const name = cut ? a.kind.slice(0, room - 1) + '…' : a.kind;
+    return hl(name, cut ? cutHits(idx, room - 1) : idx.filter(i => i < name.length), c) + span(after.text, '') + ' '.repeat(Math.max(0, WHATW - name.length - after.cols));
+  }
+  function titleCell(a, titleCls, hits) { const title = drawnTitle({ kind: 'agent', a }); if (!title) return ''; return hits && hits.length ? hlTitle(title, hits, titleCls) : span('  ' + title, titleCls); }
+  const segmentsOf = t => (SEGMENTER ? Array.from(SEGMENTER.segment(t), g => g.segment) : Array.from(t));
+  function hlTitle(title, hits, c) { const set = new Set(hits); let out = '  '; segmentsOf(title).forEach((g, k) => { out += set.has(k) ? `<span class="hl">${esc(g)}</span>` : esc(g); }); return `<span class="${c || ''}">${out}</span>`; }
+  function cutLit(r, html, n) { const hits = r && r.kind === 'agent' && r.m && r.m.title; if (!hits || !hits.length) return false; const plain = vis(html); if (plain.length <= n) return false; const title = drawnTitle(r); let u = plain.length - title.length; const at = segmentsOf(title).map(g => { const here = u; u += g.length; return here; }); return hits.some(k => at[k] >= n - 1); }
+
+  const MACHINES = [{ name: 'studio', dest: 'studio.local' }, { name: 'build-box', dest: 'build-box.local' }, { name: 'pi', dest: 'pi' }];
+  const baseRemote = () => ({
+    sessions: [
+      { id: 'studio$1', machine: 'studio', path: '~/code/garden', name: 'garden', renamed: true, branch: 'main', git: '±3', cur: 1, last: 0 },
+      { id: 'build-box$1', machine: 'build-box', path: '~/code/runner', name: 'runner', renamed: true, branch: 'main', git: '±1', cur: 1, last: 0 },
+      { id: 'pi$1', machine: 'pi', path: '~/homelab', name: 'homelab', renamed: true, branch: 'main', git: '', cur: 1, last: 0 },
+    ],
+    windows: [
+      { s: 'studio$1', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: 'studio$1', idx: 2, name: 'tests', cmds: ['zsh'] }, { s: 'studio$1', idx: 3, name: 'zsh', cmds: ['zsh'] },
+      { s: 'build-box$1', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: 'build-box$1', idx: 2, name: 'zsh', cmds: ['zsh'] }, { s: 'build-box$1', idx: 3, name: 'zsh', cmds: ['zsh'] },
+      { s: 'pi$1', idx: 1, name: 'zsh', cmds: ['zsh'] }, { s: 'pi$1', idx: 2, name: 'zsh', cmds: ['zsh'] },
+    ],
+    agents: [
+      { pane: 'studio%3', machine: 'studio', session: 'studio$1', win: 1, pidx: 1, kind: 'claude', state: 'working', seen: true, since: t(17, 52), title: '✳ Water schedule from the forecast' },
+      { pane: 'studio%8', machine: 'studio', session: 'studio$1', win: 2, pidx: 1, kind: 'codex', state: 'done', seen: false, since: t(17, 56), title: 'resize the thumbnails' },
+      { pane: 'studio%9', machine: 'studio', session: 'studio$1', win: 3, pidx: 1, kind: 'gemini', state: 'idle', seen: true, since: t(17, 18), title: '' },
+      { pane: 'build-box%2', machine: 'build-box', session: 'build-box$1', win: 1, pidx: 1, kind: 'claude', state: 'blocked', seen: false, since: t(17, 51), title: '✳ Which runner takes the release?' },
+      { pane: 'build-box%4', machine: 'build-box', session: 'build-box$1', win: 2, pidx: 1, kind: 'codex', state: 'working', seen: true, since: t(17, 44), title: 'write the release notes' },
+      { pane: 'build-box%7', machine: 'build-box', session: 'build-box$1', win: 3, pidx: 1, kind: 'opencode', state: 'idle', seen: true, since: t(16, 58), title: 'cache the image layers' },
+      { pane: 'pi%5', machine: 'pi', session: 'pi$1', win: 1, pidx: 1, kind: 'opencode', state: 'blocked', seen: false, since: t(17, 47), title: 'restic prune schedule' },
+      { pane: 'pi%2', machine: 'pi', session: 'pi$1', win: 2, pidx: 1, kind: 'claude', state: 'idle', seen: true, since: t(16, 50), title: '✳ Caddy config for the new box' },
+    ],
+    worktrees: [],
+  });
+  let RSTASH = baseRemote();
+  function machinesIn() { S.sessions = S.sessions.filter(s => !s.machine).concat(RSTASH.sessions); S.windows = S.windows.concat(RSTASH.windows); S.agents = S.agents.concat(RSTASH.agents); S.worktrees = S.worktrees.concat(RSTASH.worktrees); }
+  function machinesOut() { const ids = new Set(S.sessions.filter(s => s.machine).map(s => s.id)); RSTASH = { sessions: S.sessions.filter(s => s.machine), windows: S.windows.filter(w => ids.has(w.s)), agents: S.agents.filter(a => a.machine), worktrees: S.worktrees.filter(w => w.machine) }; S.sessions = S.sessions.filter(s => !s.machine); S.windows = S.windows.filter(w => !ids.has(w.s)); S.agents = S.agents.filter(a => !a.machine); S.worktrees = S.worktrees.filter(w => !w.machine); }
+  const startPlaces = () => { const dot = S.sessions.find(s => s.id === '$1'), api = S.sessions.find(s => s.id === '$4'); const a = S.agents.find(x => x.pane === '%7'); S.appFrom = dot ? (a ? { kind: 'agent', s: dot, a } : { kind: 'session', s: dot }) : null; S.appPrev = api ? { kind: 'session', s: api } : null; };
+  function setRemote(on) { if (on === S.remote) return; S.remote = on; if (on) { machinesIn(); startPlaces(); S.inside = null; return; } machinesOut(); S.inside = null; S.rmSlow = false; S.rmFail = null; S.rmPending = null; if (S.pageNoteRemote) S.pageNote = null; if (S.overlay && S.overlay.machine) S.overlay = null; if (S.toast && RMT.has(S.toast)) S.toast = null; if (S.notice && RMT.has(S.notice)) S.notice = null; }
+  function remoteReset() { RSTASH = baseRemote(); S.rmSlow = false; S.rmFail = null; S.rmPending = null; if (S.remote) { machinesIn(); startPlaces(); S.inside = null; if (S.overlay && S.overlay.machine) S.overlay = null; } }
+  const appMode = () => S.remote && S.rmWhere === 'app';
+  const insideNow = () => appMode() && !!S.inside;
+  const machineState = m => (!m || m === 'studio' || m === 'build-box' ? 'live' : S.rmPi);
+  const machineLive = m => machineState(m) === 'live';
+  const machineRows = m => { const st = machineState(m); return st === 'live' || st === 'dropped'; };
+  const staleS = s => !!(s && s.machine && !machineLive(s.machine));
+  const liveAgent = a => !a.machine || machineLive(a.machine);
+  const localSessions = () => S.sessions.filter(s => !s.machine);
+  const drawnSessions = () => S.sessions.filter(s => !s.machine || machineRows(s.machine));
+  const numbered = () => S.sessions.filter(s => !s.machine || machineRows(s.machine));
+  const sessLabel = s => (s.machine ? `${s.machine} · ${s.name}` : s.name);
+  const thisName = () => 'this Mac';
+  const nameOf = m => m || thisName();
+  const machineOrder = () => ['', ...MACHINES.map(m => m.name)];
+  const offlineMachines = () => MACHINES.map(m => m.name).filter(m => !machineLive(m));
+  const MACHINE_WORDS = { dropped: 'offline, last seen 2m ago', connecting: 'connecting', notaw: 'no taw there: install it as you did here', oldtaw: 'runs taw 0.1.0, which has no machines: update it there' };
+  const MH_DOT = { live: ['●', 'mh-ok'], connecting: ['●', 'mh-wait'], dropped: ['●', 'mh-off'], notaw: ['●', 'mh-off'], oldtaw: ['●', 'mh-off'], none: ['○', 'mh-none'] };
+  function machineHeaderHtml(m, width) {
+    const st = machineState(m); const live = st === 'live';
+    const counts = live ? ['blocked', 'done', 'working', 'idle', 'unknown'].map(k => [k, S.agents.filter(a => (a.machine || '') === m && a.state === k).length]).filter(([, n]) => n).map(([k, n]) => span(glyph(k) + n, cls(k))).join(' ') : '';
+    const [dot, dotCls] = MH_DOT[st];
+    const left = span('━━ ', 'mh-rule') + span(dot, dotCls) + ' ' + span(m || thisName(), 'mh-name') + (live ? '' : span('  ' + MACHINE_WORDS[st], 'mh-words'));
+    const right = counts ? ' ' + counts + ' ' + span('━━', 'mh-rule') : '';
+    return left + span(' ' + '━'.repeat(Math.max(2, (width || 0) - vis(left).length - vis(right).length - 1)), 'mh-rule') + right;
+  }
+  function withMachineHeaders(items) {
+    if (!S.remote || (S.flat && S.depth !== 'sessions')) return items;
+    const order = machineOrder(), out = [], filtering = !!(query().trim() ? query() : ''); let at = 0;
+    const head = m => out.push({ i: -3, m, html: machineHeaderHtml(m) });
+    const flush = upto => { while (at < upto) { const m = order[at++]; if (!filtering) head(m); } };
+    for (const it of items) { const r = ROWS_CACHE[it.i]; const k = order.indexOf((r && r.s && r.s.machine) || ''); if (k >= at) { flush(k); head(order[k]); at = k + 1; } out.push(it); }
+    flush(order.length);
+    return out;
+  }
+  const PI_OPTION = { dropped: 'not answering, last seen 2 min ago', live: 'connected, taw 0.4.0', connecting: 'connecting, never reached yet', notaw: 'no taw on pi', oldtaw: 'taw 0.1.0 there, which has no machines' };
+  const machinesOptions = () => [' [machines]', ' studio = "studio.local"         # connected, taw 0.4.0', ' build-box = "build-box.local"   # connected, taw 0.4.0', ` pi = "pi"                       # ${PI_OPTION[S.rmPi]}`];
+  const pickerTitle = () => (S.remote ? ` new session on ${thisName()} ` : ' new session ');
+  const enterHelp = () => (!S.remote ? 'go to the row under the cursor' : appMode() ? 'go into that tmux, in this terminal; the popup key comes back here' : 'go to the row under the cursor; on another machine, through the app');
+  const barCounts = () => { if (!S.remote) return `  ${S.sessions.length} sessions  ·  ${S.agents.length} agents  ·  `; const off = offlineMachines(); return `  ${MACHINES.length + 1} machines${off.length ? `, ${off.join(', ')} offline` : ''}  ·  ${S.sessions.filter(s => !s.machine || machineLive(s.machine)).length} sessions  ·  ${S.agents.filter(liveAgent).length} agents  ·  `; };
+  const offlineMark = () => { const off = S.remote ? offlineMachines() : []; return off.length ? span(` ${off.join(', ')} offline`, 'c-dim') : ''; };
+  const remotePreview = r => (!r.s || !r.s.machine ? null : !machineLive(r.s.machine) ? [`no preview: ${r.s.machine} is not connected`] : null);
+  const machineAt = (r, at) => (r && r.s && r.s.machine ? `${r.s.machine}:${at}` : at);
+  const RMT = new Set();
+  const rtoast = msg => { toast(msg); S.rmToast = msg; RMT.add(msg); };
+  const rpage = msg => { S.pageNote = msg; S.pageNoteRemote = S.remote; clearTimeout(S.pageNoteT); S.pageNoteT = setTimeout(() => { S.pageNote = null; draw(); }, 8000); };
+  const rnotice = msg => { notice(msg); S.rmToast = msg; RMT.add(msg); };
+  const notConnected = m => `${m} is not connected (last seen 2 min ago)`;
+  const placeAt = (s, win, pidx) => `${s.name}:${win}` + (winOf(s.id, win).cmds.length > 1 ? `.${pidx}` : '');
+  const placeLabel = id => !id ? '' : id.kind === 'agent' ? placeAt(id.s, id.a.win, id.a.pidx) : id.kind === 'pane' ? placeAt(id.s, id.win, id.pidx) : id.kind === 'session' ? id.s.name : `${id.s.name} ${id.wt.branch}`;
+  const machineOf = id => (id && id.s && id.s.machine) || '';
+  const leaveScreen = () => { S.toast = null; S.notice = null; };
+  function goInside(r) {
+    const m = (r.s && r.s.machine) || '';
+    if (m && !machineLive(m)) { rtoast(notConnected(m)); return; }
+    if (r.kind === 'worktree') { rtoast(`opening worktree on ${m}`); return; }
+    const id = identity(r); leaveScreen();
+    S.inside = { id, via: 'enter' }; S.overlay = { type: 'inside', machine: true };
+  }
+  function keyBack() {
+    S.appPrev = S.appFrom; S.appFrom = S.inside.id; S.inside = null; S.overlay = null; leaveScreen();
+    ROWS_CACHE = buildRows(); const i = ownRow(); if (i >= 0) S.sel = i; S.keptCursor = true;
+  }
+  function appEsc() {
+    if (!S.appFrom) { rpage(APP_ENDS); return; }
+    if (S.appFrom.s && S.appFrom.s.machine && !machineLive(S.appFrom.s.machine)) { rtoast(notConnected(S.appFrom.s.machine)); return; }
+    leaveScreen(); S.inside = { id: S.appFrom, via: 'esc' }; S.overlay = { type: 'inside', machine: true };
+  }
+  function insideNextUp() {
+    const here = S.inside.id, m = machineOf(here);
+    const pool = S.sessions.flatMap(agentsOf).filter(liveAgent);
+    if (!pool.length) { rtoast('taw: no agents'); return; }
+    const seq = nextUpPool(pool);
+    const at = a => [sessOrder(a.session), a.win, a.pidx]; const from = here.kind === 'agent' ? at(here.a) : [sessOrder(here.s.id), here.win || here.s.cur, here.pidx || 1];
+    const a = seq.find(x => cmpKeys(at(x), from) > 0) || seq[0]; const s = S.sessions.find(x => x.id === a.session);
+    const id = { kind: 'agent', s, a };
+    if ((a.machine || '') === m) { S.inside = { id, via: 'switch' }; rpage(`here taw would switch the client on ${nameOf(m)} to ${placeLabel(id)}, next up (${GROUP_NAME[GROUP(a)]})`); return; }
+    leaveScreen(); S.inside = { id, via: 'next', from: m }; S.overlay = { type: 'inside', machine: true };
+  }
+  function keyInside(e) {
+    const k = e.key, m = nameOf(machineOf(S.inside.id));
+    if (e.ctrlKey && k === 'b') { S.prefixAt = Date.now(); return; }
+    if (S.prefixAt && Date.now() - S.prefixAt < 2000) { S.prefixAt = 0; if (k === 'A') keyBack(); else if (k === 'O') insideNextUp(); return; }
+    if (k === 'Escape') { S.overlay = S.overlay ? null : { type: 'inside', machine: true }; return; }
+    if (!S.overlay) { S.overlay = { type: 'inside', machine: true }; return; }
+    rpage(`keys here would go to ${m}'s tmux; ctrl-b then A would take you back to the app`);
+  }
+  function insidePanel() {
+    const id = S.inside.id, m = machineOf(id), M = nameOf(m), from = nameOf(S.inside.from || '');
+    const how = { enter: `Enter in the app attached ${M}'s tmux here, at ${placeLabel(id)}: ${m ? `ssh -t ${m} taw machine attach, over the kept-open connection` : 'tmux attach, run by the app'}.`, esc: `Esc in the app took you back into ${placeLabel(id)}.`, door: `The popup's doorway: this terminal left this machine's tmux and runs the app now, which attached ${M} at ${placeLabel(id)}.`, next: `Next up was on ${M}: ${from}'s client detached and the app attached ${M} at ${placeLabel(id)}.`, switch: `switch-client on ${M} to ${placeLabel(id)}.` }[S.inside.via] || '';
+    const back = `ctrl-b then A, the popup key, takes you back to the app: this client detaches, and the app, which started it and is waiting, draws its list again with the cursor on this row.`;
+    const next = 'ctrl-b then O, next up, walks every machine; when the next agent is on another machine, the app takes you there.';
+    const lines = [how, `You are in ${M}'s own tmux, in this terminal: one status line, its own, and every key is that tmux's. Within ${M}, its own keys move you (prefix s, prefix w).`, back, next, `Another machine's agent that needs you shows on this status line with its machine's name, and your phone gets one push, from the app.`, 'Esc hides this panel.'];
+    const width = Math.max(40, Math.min(96, COLS - 6));
+    return [` inside ${M} `, ...lines.flatMap(l => wrapWords(l, width).map(x => ' ' + x))];
+  }
+  function insideScene() {
+    const id = S.inside.id, s = id.s, m = machineOf(id);
+    const win = id.kind === 'agent' ? id.a.win : id.kind === 'pane' ? id.win : s.cur;
+    const a = id.kind === 'agent' ? id.a : id.kind === 'session' ? S.agents.find(x => x.session === s.id && x.win === s.cur) : null;
+    const w = winOf(s.id, win), cmd = id.kind === 'pane' ? (w.cmds[id.pidx - 1] || 'zsh') : (w.cmds[0] || 'zsh');
+    const screen = a ? (PREV[a.state] || PREV.idle) : (PREV[cmd] || PREV.zsh);
+    return { s, m, win, screen };
+  }
+  function insideStatus(inner) {
+    const { s, m, win } = insideScene();
+    const msg = !S.toast ? S.notice : !S.notice || S.toastSeq > S.noticeSeq ? S.toast : S.notice;
+    if (msg) return `<span class="toast">${esc(pad(' ' + msg, inner + 2))}</span>`;
+    const by = {}; S.agents.filter(a => (a.machine || '') === m).forEach(a => by[a.state] = (by[a.state] || 0) + 1);
+    const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' ');
+    const wins = S.windows.filter(x => x.s === s.id).map(x => (x.idx === win ? span(`${x.idx}:${x.name}*`, 'c-fg bold') : span(`${x.idx}:${x.name}`, 'c-dim'))).join('  ');
+    const left = span(` [${s.name}] `, 'c-acc bold') + wins; const right = rail + span(m ? `  │  ${m}  17:58 ` : '  │  17:58 ', 'c-dim');
+    const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right;
+    return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`;
+  }
+  function drawInside(term) {
+    const lines = [], status = insideStatus(COLS - 2), bodyH = ROWS - 1, { screen } = insideScene();
+    if (S.statusTop) lines.push(status);
+    const shown = screen.slice(-bodyH);
+    for (let i = 0; i < bodyH; i++) { const l = shown[i - (bodyH - shown.length)]; lines.push(span(pad(l === undefined ? '' : l, COLS), 'c-fg')); }
+    if (!S.statusTop) lines.push(status);
+    TREE_LINES = [];
+    term.innerHTML = lines.slice(0, ROWS).map(l => `<div class="row">${l}</div>`).join('');
+    if (S.overlay) drawOverlay(term, bodyH);
+  }
+  function goRemote(r) { const m = r.s.machine; if (!machineLive(m)) { rtoast(notConnected(m)); return; } if (r.kind === 'worktree') { rtoast(`${m}'s rows are acted on from the app`); return; } S.rmWhere = 'app'; leaveScreen(); S.inside = { id: identity(r), via: 'door' }; S.overlay = { type: 'inside', machine: true }; }
+  const APP_ENDS = 'here taw would end and the terminal would close';
+  const RERR = { pane: m => `${m}: closing pane '%9': \`tmux kill-pane -t %9\` failed (exit status: 1): can't find pane %9`, session: m => `${m}: closing workspace '$3': \`tmux kill-session -t $3\` failed (exit status: 1): can't find session: $3`, rename: m => `${m}: renaming tab '@3': \`tmux rename-window -t @3\` failed (exit status: 1): can't find window: @3`, worktree: m => `${m}: not_a_git_repo: '/home/${m}/notes' is not inside a git repository` };
+  const FAILS = { rdrop: m => `${m} did not answer; look again before trying once more`, rerr: (m, what) => RERR[what || 'worktree'](m), rgone: m => `${m}: that row is gone` };
+  const slow = (m, what) => { if (S.rmFail) { const f = S.rmFail; S.rmFail = null; rtoast(FAILS[f](m, what)); return true; } if (!S.rmSlow) return false; S.rmSlow = false; S.rmPending = m; rtoast(`waiting for ${m}`); return true; };
+  function remoteAct(kind) {
+    const r = cur(); if (!r || !r.s || !r.s.machine) return false; const m = r.s.machine;
+    if (!appMode()) { rtoast(`${m}'s rows are acted on from the app: Enter goes there`); return true; }
+    if (!machineLive(m)) { rtoast(notConnected(m)); return true; }
+    if (S.rmPending === m) { rtoast(`${m} is still answering the last action`); return true; }
+    if (kind === 'close') remoteClose(r, m); else if (kind === 'rename') remoteRename(r, m); else remoteWorktree(r, m);
+    return true;
+  }
+  function dropRemote(x, parked) { S.agents = S.agents.filter(a => a.session !== x.id); S.windows = S.windows.filter(w => w.s !== x.id); S.sessions = S.sessions.filter(y => y !== x); if (parked && x.wtOf && S.sessions.some(y => y.id === x.wtOf)) S.worktrees.push({ s: x.wtOf, machine: x.machine, branch: x.branch, session: x.name, open: false }); }
+  function remoteGroup(s, m, lead, wts) { const names = wts.map(x => x.name), shown = names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', '); S.overlay = { type: 'confirm', machine: true, strict: true, message: `${lead} It has ${wts.length} worktree session${wts.length > 1 ? 's' : ''} open (${shown}). Close them too?`, onYes: () => { if (slow(m, 'session')) return; wts.concat(s).forEach(x => dropRemote(x, false)); rtoast(`closed ${m} · ${s.name} and its ${wts.length} worktree session${wts.length === 1 ? '' : 's'}`); } }; }
+  function remoteClose(r, m) {
+    if (r.kind === 'agent' || r.kind === 'pane') {
+      const win = rowWin(r), pidx = r.kind === 'agent' ? r.a.pidx : r.pidx, w = winOf(r.s.id, win), last = w.cmds.length === 1;
+      const target = `${r.s.name}:${win}` + (last ? '' : `.${pidx}`), what = r.kind === 'agent' ? r.a.kind : whatOf(r);
+      const refused = r.s.id === 'studio$1';
+      const killIt = () => { if (slow(m, 'pane')) return; if (refused) { rtoast(`pre-close hook on ${m}: uncommitted changes in ${r.s.path}`); return; } removePane(r.s.id, win, pidx); };
+      const sessionLast = last && S.windows.filter(x => x.s === r.s.id).length === 1;
+      const wts = sessionLast ? S.sessions.filter(x => x.wtOf === r.s.id) : [];
+      const closes = sessionLast ? " It is the session's last pane, so the session closes with it." : last ? " It is the window's last pane, so the window closes too." : '';
+      if (wts.length) remoteGroup(r.s, m, `kill-pane ${m} · ${target} (${what})?${closes}`, wts);
+      else S.overlay = { type: 'confirm', machine: true, message: `kill-pane ${m} · ${target} (${what})?${closes}`, onYes: killIt };
+    } else if (r.kind === 'session') {
+      const wts = S.sessions.filter(x => x.wtOf === r.s.id);
+      const one = () => { if (slow(m, 'session')) return; if (r.s.id === 'studio$1') { rtoast(`pre-close hook on ${m}: uncommitted changes in ${r.s.path}`); return; } dropRemote(r.s, true); };
+      if (!wts.length) S.overlay = { type: 'confirm', machine: true, message: `kill-session ${m} · ${r.s.name}?`, onYes: one };
+      else remoteGroup(r.s, m, `kill-session ${m} · ${r.s.name}?`, wts);
+    } else if (r.kind === 'worktree') S.overlay = { type: 'confirm', machine: true, message: `git worktree remove ${m} · ${r.wt.branch}? (the branch is kept)`, onYes: () => {
+      if (slow(m, 'worktree')) return;
+      const gone = () => { S.worktrees = S.worktrees.filter(x => x !== r.wt); rtoast(`removed worktree ${r.wt.branch} on ${m}`); };
+      if (!r.wt.dirty) { gone(); return; }
+      S.overlay = { type: 'confirm', machine: true, strict: true, message: `git will not remove ${r.wt.branch}: it has modified or untracked files. remove anyway? uncommitted changes are lost`, onYes: gone };
+    } };
+  }
+  function remoteRename(r, m) {
+    const win = rowWin(r);
+    const renameWin = () => { const w = winOf(r.s.id, win); S.overlay = { type: 'prompt', machine: true, title: `rename-window ${m} · ${r.s.name}:${win}`, q: w.name, onSubmit: v => { const e = badName(v); if (e) { S.overlay.error = e; return false; } if (slow(m, 'rename')) return; w.name = v; } }; };
+    const nameAgent = () => { S.overlay = { type: 'prompt', machine: true, title: `name agent on ${m} (taw label for ${r.a.kind}, not a tmux rename)`, q: '', onSubmit: v => { const e = agentNameProblem(r.a, v); if (e) { S.overlay.error = e; return false; } if (slow(m, 'rename')) return; r.a.kind = v; r.a.named = true; rtoast(`renamed agent to ${v}`); } }; };
+    if (r.kind === 'agent') { S.overlay = { type: 'menu', machine: true, title: `rename what? ${m} · ${r.s.name}:${where(r.s.id, r.a.win, r.a.pidx)}`, sel: 0, items: [{ key: 'w', label: `the window  (now "${winOf(r.s.id, r.a.win).name}")`, act: renameWin }, { key: 'a', label: `the agent  (taw label, now "${r.a.kind}"; also the CLI handle)`, act: nameAgent }] }; return; }
+    if (r.kind === 'pane') { renameWin(); return; }
+    if (r.kind === 'session') { const was = r.s.name; S.overlay = { type: 'prompt', machine: true, title: `rename-session ${m} · ${was}`, q: was, onSubmit: v => { const e = badName(v) || (S.sessions.some(x => x !== r.s && x.machine === m && x.name === v) ? `duplicate session: ${v}` : null); if (e) { S.overlay.error = e; return false; } if (slow(m, 'rename')) return; r.s.name = v; } }; return; }
+    rtoast('a closed worktree keeps its branch name');
+  }
+  function remoteWorktree(r, m) { const from = r.s.name; S.overlay = { type: 'prompt', machine: true, title: `new worktree in ${m} · ${from}: branch`, q: '', onSubmit: v => { if (slow(m, 'worktree')) return; rtoast(`opening worktree on ${m}`); } }; }
+  function remoteScenario(sc) {
+    if (!S.remote) return;
+    if (sc === 'rask') { const a = S.agents.find(x => x.pane === 'studio%3'); if (!a) return; a.state = 'blocked'; a.seen = false; a.since = now(); const s = S.sessions.find(x => x.id === a.session); if (!s) return; rnotice(insideNow() && machineOf(S.inside.id) === 'studio' ? `⏸ blocked claude · ${s.name}:${a.win} · Do you want to proceed?   prefix+O next up` : `⏸ blocked claude · studio · ${s.name}:${a.win} · Do you want to proceed?   prefix+O next up`); return; }
+    if (sc === 'rterm') { S.rmWhere = 'app'; S.overlay = null; leaveScreen(); startPlaces(); S.inside = null; S.appFrom = null; ROWS_CACHE = buildRows(); const p = S.appPrev && S.appPrev.s; const i = p ? ROWS_CACHE.findIndex(r => r.kind === 'session' && r.s === p) : ownRow(); if (i >= 0) S.sel = i; }
+    if (sc === 'rslow') S.rmSlow = true;
+    if (sc === 'rwait' && S.rmPending) { const m = S.rmPending; S.rmPending = null; rtoast(`no answer from ${m} in 20 s; it may still have run`); }
+    if (sc === 'rdrop' || sc === 'rerr' || sc === 'rgone') S.rmFail = sc;
+  }
+  const PHONE = { app: "press it: your phone gets one push, sent by the app (this machine's [hooks] notification, with TAW_MACHINE=studio), while studio's own hook stays quiet under the app's lease", popup: "press it: the app that runs in another terminal keeps the feeds and sends your phone one push, with TAW_MACHINE=studio; studio's own hook stays quiet under its lease" };
+  const whereWords = () => (!appMode() ? ['prefix + A opens taw · ', ' · you are in api:1 (its Claude Code), you came from docs'] : S.inside ? [`${nameOf(machineOf(S.inside.id))}'s own tmux, attached by the app in this terminal · `, ' · the app waits behind it, out of sight'] : ['taw app, the program this terminal runs, outside tmux · ', ` · you came out of ${placeLabel(S.appFrom) || 'nowhere yet'}`]);
+
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/[●✻✽✢✶⏵⏸⎿❯✓○◌▢·…⚠⏺▐▛▜▀▝⟩◆◀▶✔↓↑±▏»←│]/g, c => `<span class="g">${c}</span>`).replace(/📦/gu, c => `<span class="g2">${c}</span>`);
+  const span = (txt, c) => `<span class="${c || ''}">${esc(txt)}</span>`;
+  const cutAt = (s, a, b) => { const out = s.slice(a, b); return /[\uD800-\uDFFF]/.test(out) ? out.replace(/^[\uDC00-\uDFFF]/, ' ').replace(/[\uD800-\uDBFF]$/, ' ') : out; };
+  const clipEnd = (s, n) => s.length <= n ? s : n <= 0 ? '' : cutAt(s, 0, n - 1) + '…';
+  const pad = (s, n) => s.length >= n ? cutAt(s, 0, n) : s + ' '.repeat(n - s.length);
+  const vis = html => html.replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<');
+  const clipHtml = (html, n) => { let out = '', seen = 0, m; const open = [], re = /<(\/?)(\w+)[^>]*>|&(?:amp|lt);|[\uD800-\uDBFF][\uDC00-\uDFFF]|[\s\S]/g; while ((m = re.exec(html)) && seen < n) { if (m[2]) { if (m[1]) open.pop(); else open.push(m[2]); out += m[0]; } else if (m[0].length === 2 && seen + 2 > n) { out += ' '; seen++; } else { seen += m[0].length === 2 ? 2 : 1; out += m[0]; } } return out + open.reverse().map(t => `</${t}>`).join(''); };
+  const padHtml = (html, n, lit) => { const plain = vis(html); if (plain.length > n) return clipHtml(html, Math.max(0, n - 1)) + (n > 0 ? (lit ? '<span class="c-dim"><span class="hl"><span class="g">…</span></span></span>' : span('…', 'c-dim')) : ''); return plain.length === n ? html : html + ' '.repeat(n - plain.length); };
+  function hl(text, idx, c) { const set = new Set(idx || []); let out = ''; for (let i = 0; i < text.length; i++) out += set.has(i) ? `<span class="hl">${esc(text[i])}</span>` : esc(text[i]); return `<span class="${c || ''}">${out}</span>`; }
+  function wrapHints(text, width) { const parts = text.split('  ·  '); const lines = []; let cur = ''; for (const p of parts) { const cand = cur ? cur + '  ·  ' + p : p; if (cand.length > width && cur) { lines.push(cur); cur = p; } else cur = cand; } if (cur) lines.push(cur); return lines.slice(0, 2); }
+  const sub = (m, off, len) => (m ? m.idx : []).map(i => i - off).filter(i => i >= 0 && i < len);
+
+  const PREV = {
+    working: ['⏺ The flake is a race: the expiry check reads the clock twice, so a session', '  can expire between the two reads.', '', '⏺ Update(src/auth/session.ts)', '  ⎿  Updated src/auth/session.ts with 3 additions and 2 removals', '', '⏺ Bash(npm test -- src/auth)', '  ⎿  Running…', '', '✻ Running the auth tests… (38s · ↓ 2.4k tokens · esc to interrupt)', '─'.repeat(100), '❯ ', '─'.repeat(100), '  ⏵⏵ accept edits on (shift+tab to cycle)'],
+    idle: ['⏺ Update(src/signup/schema.ts)', '  ⎿  Updated src/signup/schema.ts with 12 additions', '', '⏺ Bash(npm test -- src/signup)', '  ⎿  14 passed', '', '⏺ Done. The form checks the email, the password and the terms box, and the', '  tests pass.', '', '✻ Brewed for 2m 10s', '─'.repeat(100), '❯ ', '─'.repeat(100), '  ? for shortcuts'],
+    blocked: ['⏺ I will run the test suite next.', '', '⏺ Bash(cargo test --workspace)', '  ⎿  Waiting…', '', '─'.repeat(100), '  Bash command', '', '    cargo test --workspace', '    Run the workspace test suite', '', '  Do you want to proceed?', '  ❯ 1. Yes', '    2. Yes, and don\'t ask again for: cargo test --workspace', '    3. No', '', '  Enter to confirm · Esc to cancel'],
+    node: ['~/code/web on feat/signup', '$ npm run dev', '', '> web@0.4.1 dev', '> vite', '', '  VITE v6.0.3  ready in 412 ms', '', '  Local:   http://localhost:5173/', '  press h + enter to show help'],
+    nvim: ['  1 use taw::detect::{AgentState, evaluate};', '  2 ', '  3 fn main() {', '  4     let rows = tree::build(&snapshot, &cfg);', '  5     view::draw(rows);', '  6 }', '~', '~', '-- NORMAL --' + ' '.repeat(74) + 'src/main.rs  4,5   All'],
+    htop: ['  CPU[||||||||                 21%]   Tasks: 412, 1802 thr; 2 running', '  Mem[|||||||||||||||    18.2G/32G]   Load average: 2.31 1.90 1.77', '  PID USER      PRI  NI  VIRT   RES S CPU% MEM%   TIME+  Command', ' 4821 you        24   0 1.2G  380M S  6.1  1.2  3:12.44 claude'],
+    tail: ['[17:57:58] GET /api/orders 200 12ms', '[17:57:59] GET /api/orders/42 200 8ms', '[17:58:01] POST /api/orders 201 41ms'],
+    lazygit: ['╭─Status──────────────────────────╮╭─Diff────────────────────────────────────────────────────────────────────────────────────────────────╮', '│ ✓ mobile on main                ││ diff --git a/src/auth/oidc.rs b/src/auth/oidc.rs                                                    │', '╰─────────────────────────────────╯│ -    let redirect = format!("{base}/callback");                                                    │', '╭─Files───────────────────────────╮│ +    let redirect = format!("{base}/auth/callback");                                               │', '│ M  src/auth/oidc.rs             ││                                                                                                     │', '│ M  tests/oidc.rs                ││                                                                                                     │', '╰─────────────────────────────────╯╰─────────────────────────────────────────────────────────────────────────────────────────────────────╯'],
+    zsh: ['$ '],
+  };
+  PREV.done = PREV.idle;
+  const wtFolder = (s, branch) => `${s.path.split('/').pop()}--${branch.replace(/\//g, '-')}`;
+  const previewFor = r => { if (!r) return ['no preview']; const rp = remotePreview(r); if (rp) return rp; if (r.kind === 'agent') return PREV[r.a.state] || PREV.idle; if (r.kind === 'pane') return PREV[whatOf(r)] || PREV.zsh; if (r.kind === 'session') { const a = S.agents.find(x => x.session === r.s.id && x.win === r.s.cur); return a ? (PREV[a.state] || PREV.idle) : PREV.zsh; } if (r.kind === 'worktree') return [`worktree ${r.wt.branch} of ${r.s.name}`, '', `checkout: ~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, r.wt.branch)}`, `session:  ${r.wt.session} (closed)`, '', 'Enter creates that session in the checkout and switches to it;', 'it then appears as a session of its own and this row is gone.']; return ['no preview']; };
+  const FULLSCREEN = new Set(['nvim', 'vim', 'htop', 'lazygit', 'less', 'ssh']);
+  const fullScreenRow = r => !r ? false : r.kind === 'pane' ? FULLSCREEN.has(whatOf(r)) : r.kind === 'session' ? (!S.agents.some(x => x.session === r.s.id && x.win === r.s.cur) && FULLSCREEN.has(winOf(r.s.id, r.s.cur).cmds[0])) : false;
+  function wrapPreview(lines, r, width) { if (!S.wrap || fullScreenRow(r) || width < 8) return lines; const out = []; for (const l of lines) { let rest = l; while (rest.length > width) { out.push(rest.slice(0, width)); rest = rest.slice(width); } out.push(rest); } return out; }
+  const previewTitle = r => { const at = machineAt(r, r ? (r.kind === 'project' ? r.path : r.kind === 'worktree' ? `~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, r.wt.branch)}` : r.s.path) : ''); const box = r && r.kind === 'agent' ? boxOf(r.a) : null; return box ? `${at} · ${BOX} in a sandbox: ${boxWords(box)}` : at; };
+
+  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' ') + offlineMark(); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const need = needsBy(); const left = S.bar === 'taw' || appMode() ? span(appMode() ? ' taw app ' : ' taw ', 'c-acc bold') + span(barCounts(), 'c-fg') + (need.length ? need.map(p => span(glyph(p.st) + p.n, cls(p.st) + ' bold')).join(' ') + span(' ' + needWords(need), 'c-fg') : span('nothing needs you', 'c-dim')) : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
+
+  function draw() {
+    const term = document.getElementById('term'); const inner = COLS; const lines = []; const popupRows = ROWS - 1;
+    if (S.overlay && S.overlay.type === 'inside' && !insideNow()) S.overlay = null;
+    document.getElementById('pagenote').textContent = S.pageNote ? 'page: ' + S.pageNote : '';
+    const ww = whereWords(); document.getElementById('where0').textContent = ww[0]; document.getElementById('where1').textContent = ww[1];
+    if (insideNow()) { drawInside(term); document.getElementById('focushint').textContent = S.focus ? '' : 'click the window, then use the keys'; document.getElementById('clientw').textContent = COLS; renderOrderTable(); renderNameTable(); return; }
+    const status = statusLine(inner - 2); if (S.statusTop) lines.push(status);
+    ROWS_CACHE = buildRows(); if (!ROWS_CACHE[S.sel]) S.sel = 0;
+    const hintsText = S.overlay ? overlayHints() : S.model === 'search'
+      ? ['type filter (fzf syntax)', typedHint(), '↑/↓ ctrl-n/p move', enterHint(), 'right-click menu', 'Esc quit'].filter(Boolean).join('  ·  ')
+      : S.filter !== null ? [`/${withCursor(S.filter, S.filterc)}`, typedHint(), 'Esc clear', 'Tab next up', '↑/↓ move', enterHint()].filter(Boolean).join('  ·  ')
+      : [jumpHint(), 'Tab next up', enterHint(), 'j/k move', '/ filter', '? help'].filter(Boolean).join('  ·  ');
+    const cur0 = ROWS_CACHE[S.sel]; const bottomInfo = !S.preview && !S.overlay && cur0 ? previewTitle(cur0) : null;
+    const hintLines = S.toast ? [clipEnd(S.toast, inner - 1)] : wrapHints(hintsText, inner - 2); const bodyH = popupRows - hintLines.length - (bottomInfo ? 1 : 0);
+    for (const l of drawTree(inner, bodyH)) lines.push(l);
+    if (bottomInfo) lines.push(span(pad(' ' + bottomInfo, inner), 'c-dim'));
+    const hintHtml = h => ' ' + h.split('  ·  ').map(part => { if (part.startsWith('/') && part.includes('▏')) return span(part, 'c-acc'); const i = part.indexOf(' '); return i < 0 ? span(part, 'c-yel bold') : span(part.slice(0, i), 'c-yel bold') + span(part.slice(i), 'c-dim'); }).join(span('  ·  ', 'c-dim'));
+    for (const h of hintLines) lines.push(S.toast ? span(pad(' ' + h, inner), 'c-yel') : padHtml(hintHtml(h), inner));
+    if (!S.statusTop) lines.push(status);
+    while (lines.length < ROWS) lines.push('');
+    term.innerHTML = lines.slice(0, ROWS).map(l => `<div class="row">${l}</div>`).join('');
+    if (S.overlay) drawOverlay(term, bodyH);
+    document.getElementById('focushint').textContent = S.focus ? '' : 'click the window, then use the keys';
+    document.getElementById('clientw').textContent = COLS;
+    renderOrderTable(); renderNameTable();
+  }
+  const popupTop = () => (S.statusTop ? 1 : 0);
+
+  const WHATW = 10, WHEREW = 11;
+  const PROJECT_INDENT = 4, PROJECT_GAP = 2, PROJECT_PATH_MIN = 12;
+  const projectRoom = inner => {
+    const ps = ROWS_CACHE.filter(r => r.kind === 'project'); const longest = Math.max(0, ...ps.map(r => r.path.length));
+    if (inner === Infinity) return { tagged: longest, bare: Infinity };
+    const after = Math.max(0, inner - PROJECT_INDENT); const tags = ps.map(r => sourceTag(r.path)).filter(Boolean); const widest = Math.max(0, ...tags.map(t => t.length));
+    const beside = Math.max(0, after - (tags.length ? PROJECT_GAP + widest : 0));
+    return { tagged: Math.min(longest, Math.max(beside, PROJECT_PATH_MIN)), bare: Math.max(after, PROJECT_PATH_MIN) };
+  };
+  function shorten(path, cols) {
+    if (path.length <= cols) return null;
+    const budget = Math.max(0, cols - 1); const at = path.lastIndexOf('/'); const leaf = at >= 0 ? path.slice(at) : '';
+    if (!leaf || leaf.length > budget) { const tail = budget ? path.slice(-budget) : ''; return { head: '', tail, from: path.length - tail.length }; }
+    const before = path.slice(0, at); const room = budget - leaf.length; let head = '';
+    for (let i = before.indexOf('/'); i >= 0; i = before.indexOf('/', i + 1)) { if (i + 1 > room) break; head = before.slice(0, i + 1); }
+    return { head, tail: leaf, from: before.length };
+  }
+  const projectHtml = (r, room) => {
+    const tag = sourceTag(r.path); const idx = r.m ? r.m.idx : []; const cut = shorten(r.path, tag ? room.tagged : room.bare); let text, used;
+    if (cut) { text = hl(cut.head, idx, 'c-fg') + span('…', 'c-dim') + hl(cut.tail, idx.map(i => i - cut.from), 'c-fg'); used = cut.head.length + 1 + cut.tail.length; } else { text = hl(r.path, idx, 'c-fg'); used = r.path.length; }
+    return '    ' + text + (tag ? ' '.repeat(Math.max(0, room.tagged - used)) + span('  ' + tag, 'c-dim') : '');
+  };
+  const cutHits = (idx, kept) => idx.filter(i => i < kept).concat(idx.some(i => i >= kept) ? [kept] : []);
+  function cutCell(text, n, idx, c) {
+    if (text.length <= n) return hl(pad(text, n), idx, c);
+    return hl(cutAt(text, 0, n - 1) + '…', cutHits(idx, n - 1), c);
+  }
+  const whereCell = (wh, idx, c) => cutCell(wh, WHEREW, idx, c);
+  const flatSession = (r, c) => { const lab = '  ' + sessLabel(r.s); return hl(lab, sub(r.m, 0, r.s.name.length).map(i => i + lab.length - r.s.name.length), c); };
+  function rowHtml(r, i) {
+    if (r.kind === 'project') return projectHtml(r, projectRoom(Infinity));
+    const lab = labelOf(i);
+    if (r.kind === 'session') {
+      const gitPart = S.git && r.s.branch ? '  ' + r.s.branch + (r.s.git ? ' ' + r.s.git : '') : '';
+      let counts = '', title = '';
+      if (S.depth === 'sessions' && !staleS(r.s)) { const by = {}; agentsOf(r.s).forEach(a => by[a.state] = (by[a.state] || 0) + 1); counts = ['blocked', 'done', 'working', 'idle', 'unknown'].filter(k => by[k]).map(k => '  ' + span(glyph(k) + by[k], cls(k))).join(''); const t = sessionTarget(r.s); if (S.titles && t && stripTitle(t.title)) title = span('  ' + stripTitle(t.title), 'c-dim'); }
+      return span(lab, lab !== ' ' && numbersWork() && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' + span(flagOf(r.s) || ' ', (appMode() ? r.s === currentSession() : r.s.attached) ? 'c-acc bold' : 'c-dim') + ' ' + hl(r.s.name, sub(r.m, 0, r.s.name.length), staleS(r.s) ? 'c-dim bold' : 'c-acc bold') + span(gitPart, 'c-dim') + counts + title;
+    }
+    const last = !S.flat && (i + 1 >= ROWS_CACHE.length || ROWS_CACHE[i + 1].kind === 'session' || ROWS_CACHE[i + 1].kind === 'project');
+    const mine = r.s === currentSession(); const letter = ROW_LETTERS.get(i) || null; const keyed = LETTERED.includes(i) || letterHit(r, i); const grey = staleS(r.s); const lit = !grey && S.openMark && (r.kind === 'agent' ? r.a.win === r.s.cur : r.kind === 'pane' ? r.win === r.s.cur : false); const ind = S.flat ? span(lab, lab !== ' ' && numbersWork() && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' : '  ' + (letter ? span(letter, keyed && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' : '  ') + span(last ? '└' : '├', lit ? 'c-fg bold' : mine ? 'c-acc bold' : 'c-dim') + ' '; const off = r.s.name.length + 1;
+    if (r.kind === 'agent') { const wh = where(r.s.id, r.a.win, r.a.pidx); const hot = grey ? null : hotCls(r.a.state, r.a.seen); const nameC = hot || (lit ? 'c-fg bold' : grey ? 'c-dim' : 'c-fg'); return ind + span(glyph(r.a.state), hot || (grey ? 'c-dim' : cls(r.a.state))) + ' ' + kindCell(r.a, sub(r.m, off, r.a.kind.length), nameC) + ' ' + whereCell(wh, sub(r.m, off + r.a.kind.length + 1, wh.length), hot || (lit ? 'c-fg bold' : 'c-dim')) + ' ' + hl(pad(`${r.a.state} ${elapsed(r.a.since)}`, 12), sub(r.m, off + r.a.kind.length + 1 + wh.length + 1, r.a.state.length), hot || (lit ? 'c-fg' : 'c-dim')) + (S.flat ? flatSession(r, lit && !hot ? 'c-fg' : 'c-dim') : '') + titleCell(r.a, hot || (lit ? 'c-fg' : 'c-dim'), r.m && r.m.title); }
+    if (r.kind === 'pane') { const what = whatOf(r), wh = where(r.s.id, r.win, r.pidx); return ind + span('▢', lit ? 'c-fg' : 'c-dim') + ' ' + cutCell(what, WHATW, sub(r.m, off, what.length), lit ? 'c-fg bold' : 'c-dim') + ' ' + whereCell(wh, sub(r.m, off + what.length + 1, wh.length), lit ? 'c-fg bold' : 'c-dim') + (S.flat ? flatSession(r, lit ? 'c-fg' : 'c-dim') : ''); }
+    if (r.kind === 'worktree') return ind + span('◌', 'c-dim') + ' ' + cutCell(r.wt.branch, WHATW, sub(r.m, off, r.wt.branch.length), 'c-dim') + ' ' + span('worktree, closed', 'c-dim') + (S.flat ? flatSession(r, 'c-dim') : '');
+    return '';
+  }
+  function needChip(room) {
+    const parts = needsBy(); if (!parts.length) return null;
+    const plain = (ps, w) => ' ' + ps.map(p => glyph(p.st) + p.n).join(' ') + (w ? ' ' + w : '') + ' ';
+    const html = (ps, w) => ' ' + ps.map(p => span(glyph(p.st) + p.n, cls(p.st) + ' bold')).join(' ') + (w ? ' ' + span(w, 'c-fg') : '') + ' ';
+    const tries = [[parts, needWords(parts)]]; for (let k = parts.length; k >= 1; k--) tries.push([parts.slice(0, k), '']);
+    const fit = tries.find(([ps, w]) => plain(ps, w).length <= room);
+    return fit ? { plain: plain(...fit), html: html(...fit) } : null;
+  }
+  function drawTree(inner, bodyH) {
+    const rows = ROWS_CACHE; LETTERED = litLetters(); ROW_LETTERS = rowLetters();
+    const firstProject = rows.findIndex(r => r.kind === 'project'); const treeN = firstProject < 0 ? rows.length : firstProject;
+    const items = withMachineHeaders(rows.slice(0, treeN).map((r, i) => ({ i, html: rowHtml(r, i) }))); const wanted = rows.slice(treeN).map(r => projectHtml(r, projectRoom(Infinity)));
+    const beside = S.preview && inner >= WIDE_COLUMNS;
+    const auto = Math.min(S.titles ? 68 : 52, Math.max(36, ...items.map(it => vis(it.html).length + 2), ...wanted.map(h => vis(h).length + 2), wanted.length ? ' open a directory'.length + 2 : 0) + 2); const sideW = beside ? Math.min(auto, inner - PREVIEW_MIN) : inner; const prevW = inner - sideW;
+    const title = ' sessions '; const chip = needChip(sideW - 2 - title.length - 1);
+    const out = []; const pt = previewTitle(rows[S.sel]); const ptitle = pt ? ` preview · ${pt} ` : ' preview ';
+    const boxedSel = rows[S.sel] && rows[S.sel].kind === 'agent' && boxOf(rows[S.sel].a); const ptShown = boxedSel && ptitle.length > prevW - 4 ? cutAt(ptitle, 0, prevW - 5) + '…' : cutAt(ptitle, 0, prevW - 4);
+    out.push(span('╭' + title + '─'.repeat(Math.max(0, sideW - 2 - title.length - (chip ? chip.plain.length : 0))), 'c-acc') + (chip ? chip.html : '') + span('╮', 'c-acc') + (beside ? span('╭' + ptShown + '─'.repeat(Math.max(0, prevW - 2 - Math.min(ptitle.length, prevW - 4))) + '╮', 'c-dim') : ' '.repeat(prevW)));
+    const qRow = S.model === 'search' ? 1 : 0; const visibleH = bodyH - 2 - qRow; const prevLines = wrapPreview(previewFor(rows[S.sel]), rows[S.sel], prevW - 2);
+    const dirs = rows.slice(treeN).map((r, k) => ({ i: treeN + k, html: projectHtml(r, projectRoom(sideW - 2)) }));
+    const secH = dirs.length ? Math.min(Math.floor(visibleH / 2), dirs.length + 1) : 0; const withHeader = secH >= 2; const secRows = withHeader ? secH - 1 : secH; const treeH = visibleH - secH;
+    const selItem = items.findIndex(it => it.i === S.sel); let start = selItem >= 0 ? Math.max(0, Math.min(selItem - Math.floor(treeH / 2), items.length - treeH)) : Math.max(0, Math.min(S.treeStart || 0, items.length - treeH)); if (start < 0) start = 0; if (selItem >= 0) S.treeStart = start;
+    const selDir = dirs.findIndex(it => it.i === S.sel); const dirStart = selDir >= secRows ? selDir - secRows + 1 : 0;
+    const shown = items.slice(start, start + treeH); const gap = !secH ? treeH : items.length ? Math.min(items.length + 1, treeH) : 0; while (shown.length < gap) shown.push(null);
+    if (secH) { if (withHeader) shown.push({ i: -2, html: span(' open a directory', 'c-dim') }); shown.push(...dirs.slice(dirStart, dirStart + secRows)); }
+    TREE_LINES = shown.map(it => (it ? it.i : -1));
+    const rightCol = i => beside ? span('│', 'c-dim') + `<span class="b-panel">${esc(pad(' ' + (prevLines[i - (visibleH + qRow - prevLines.length)] ?? ''), prevW - 2))}</span>` + span('│', 'c-dim') : ' '.repeat(prevW);
+    let li = 0;
+    if (S.model === 'search') { const qline = ' ' + span('>', 'c-acc') + ' ' + span(S.q.slice(0, cursorAt(S.q, S.qc)), 'c-acc') + span('▏', 'c-acc') + (cursorAt(S.q, S.qc) < S.q.length ? span(S.q.slice(cursorAt(S.q, S.qc)), 'c-acc') : '') + span(S.q ? '' : 'search…', 'c-dim'); out.push(span('│', 'c-acc') + `<span class="b-panel">${padHtml(qline, sideW - 2)}</span>` + span('│', 'c-acc') + rightCol(li++)); }
+    for (let i = 0; i < visibleH; i++) { const it = shown[i]; const left = it ? `<span class="${it.i === S.sel ? 'b-sel' : 'b-panel'}">${padHtml(it.i === -3 ? machineHeaderHtml(it.m, sideW - 2) : it.html, sideW - 2, it.i >= 0 && cutLit(rows[it.i], it.html, sideW - 2))}</span>` : `<span class="b-panel">${' '.repeat(sideW - 2)}</span>`; out.push(span('│', 'c-acc') + left + span('│', 'c-acc') + rightCol(li++)); }
+    const chipL = S.flat && S.depth !== 'sessions' ? ' flat ' : S.depth !== 'all' ? ` ${S.depth} ` : '';
+    out.push(span('╰' + '─'.repeat(sideW - 2 - chipL.length) + chipL + '╯', 'c-acc') + (beside ? span('╰' + '─'.repeat(prevW - 2) + '╯', 'c-dim') : ' '.repeat(prevW)));
+    if (!rows.length) { const msg = query() ? ` nothing matches "${query()}"` + (S.model === 'search' ? '' : '  ·  n creates a session') : ' no sessions'; out[1 + qRow] = span('│', 'c-acc') + `<span class="b-panel c-dim">${esc(pad(msg, sideW - 2))}</span>` + span('│', 'c-acc') + rightCol(0); }
+    return out;
+  }
+
+  const filterHelp = () => (S.projectsInFilter ? 'filter (fzf syntax), by state too; directories to open show below' : 'filter (fzf syntax), by state too');
+  function overlayHints() { const o = S.overlay; return o.type === 'menu' ? 'press a key  ·  ↑/↓ and Enter  ·  Esc cancel' : o.type === 'picker' ? 'type a path or project  ·  Tab complete  ·  ↑/↓ choose  ·  Enter create or switch  ·  Esc cancel' : o.type === 'prompt' ? 'Enter confirm  ·  Esc cancel  ·  ctrl-w/a/e/u edit' : o.type === 'confirm' ? (o.choice ? 'y close them too  ·  n or Enter just this one  ·  Esc cancel' : o.strict ? 'y confirm  ·  n,\u00a0Enter\u00a0or\u00a0Esc cancel' : 'y or Enter confirm  ·  n or Esc cancel') : 'Esc close'; }
+  function candidatesFor(q, limit) { let comp = []; const m = q.match(/^(~(?:\/[^/]*)*)$/); if (m) { const lastSlash = q.lastIndexOf('/'); const dir = lastSlash > 0 ? q.slice(0, lastSlash) : q; const partial = lastSlash > 0 ? q.slice(lastSlash + 1) : ''; const kids = FS[dir] || FS[q] || []; const base = FS[q] ? q : dir; comp = kids.filter(k => k.toLowerCase().startsWith((FS[q] ? '' : partial).toLowerCase())).map(k => `${base}/${k}`); } const sources = []; if (S.zoxide) sources.push(...zoxide); if (S.dirs) for (const d of PROJECT_DIRS) for (const k of (FS[d] || [])) sources.push(`${d}/${k}`); const src = Array.from(new Set(sources)).map(p => ({ p, m: fuzzy(q, p) })).filter(x => x.m && !comp.includes(x.p)).sort((a, b) => b.m.score - a.m.score).map(x => x.p); const seen = new Set(); const out = []; for (const p of comp.concat(src)) if (!seen.has(p)) { seen.add(p); out.push(p); } return out.slice(0, limit); }
+  const pickerCandidates = o => candidatesFor(o.q.trim(), 10);
+  const sourceTag = p => runningAt(p) ? 'running' : (S.zoxide && zoxide.includes(p) ? 'zoxide' : (S.dirs && PROJECT_DIRS.some(d => p.startsWith(d + '/')) ? 'project dir' : ''));
+  function drawOverlay(term, bodyH) {
+    const o = S.overlay; const rows = term.querySelectorAll('.row');
+    const paint = (y, x, html) => { const row = rows[y + popupTop()]; if (!row) return; const plain = vis(row.innerHTML); row.innerHTML = span(cutAt(plain, 0, x), 'c-dim') + html + span(cutAt(plain, x + vis(html).length), 'c-dim'); };
+    let box = []; let boxHtml = null; let selLine = -1; let errLine = -1;
+    if (o.type === 'help') {
+      const s = S.model === 'search';
+      const K = (k, d) => ' ' + span(pad(k, 18), 'c-yel bold') + span(d, 'c-fg');
+      const H = t => ' ' + span(t, 'c-acc bold');
+      const L = (g, st, d) => ' ' + span(pad(g, 2), cls(st)) + span(pad(d.split('  ')[0], 9), 'c-fg') + span(d.split('  ').slice(1).join('  '), 'c-dim');
+      boxHtml = s
+        ? [span(' help ', 'c-acc bold'), H('move'), K('type', filterHelp()), ...(S.labels ? [K('4a', 'row a of session 4: type its number, then its letter')] : []), K('↓ / ↑', 'next / previous row (also ctrl-j / ctrl-k, ctrl-n / ctrl-p)'), K('prefix+O', 'next up from anywhere in tmux: what needs you, else every agent'), '', H('go'), K('Enter', enterHelp()), K('Esc', 'quit')]
+        : [span(' help ', 'c-acc bold'), H('move'), K('j / k', 'next / previous row'), K('J / K', 'next / previous session'), ...(numbersWork() ? [K('1-9', 'jump to that session (yellow: a key that works now)')] : []), ...(S.labels ? [K('a-e   4a', 'jump to a row of your session  ·  row a of session 4, in the search too')] : []), K('Tab / Shift-Tab', 'next up: who to deal with next (what needs you, else every agent)'), K('prefix+O', 'the same next up from anywhere in tmux, straight there without the popup'), K('h / l', 'show less / more: sessions, agents, every pane'), K('f', 'flat: one list of what is in view (agents, or every pane), most urgent first'), K('/', filterHelp()), '', H('go'), K('Enter', enterHelp()), ...(S.remote ? [] : ['']), H('act on the row'), K('r   x   ctrl-v', 'rename  ·  close  ·  paste image'), K('n   w', 'new session  ·  new worktree'), ...(appMode() ? [K('o   ?   Q', 'options  ·  this help  ·  quit the app; Esc and q go back in')] : [K('o   ?   q', 'options  ·  this help  ·  quit')])]
+      boxHtml.push(H('mouse'), K('click', 'select the row'), K('double-click', 'go to the row'), K('right-click', 'menu: go, rename, close, new worktree, paste image'), K('wheel', 'scroll the tree, or the preview under the pointer'));
+      boxHtml.push(H('legend'), L(glyph('blocked'), 'blocked', 'blocked  waiting on you'), L(glyph('working'), 'working', 'working  busy'), L(glyph('done'), 'done', 'done  finished, you have not looked yet'), L(glyph('idle'), 'idle', 'idle  looked at, or quiet; a finished agent you have looked at is idle too'), L(glyph('unknown'), 'unknown', 'unknown  agent present, state unreadable'), L('▢', null, 'pane  no agent; the column shows the program in it'), L('◌', null, 'closed  a worktree whose session is closed'), markLegend(), ' ' + span(pad('3', 11), numbersWork() ? 'c-yel bold' : 'c-dim') + span(numbersWork() ? (s ? 'session: bold, numbered; typing its number puts the cursor on it  ·  * current  ·  - previous' : 'session: bold, numbered; its number puts the cursor on it  ·  * current  ·  - previous') : 'session: bold, numbered in tmux order  ·  * current  ·  - previous', 'c-dim'), ' ' + span(pad('├', 11), 'c-dim') + span('row: under its session (agent, pane or worktree); coloured only when it needs you', 'c-dim'), ' ' + span(pad('├', 11), 'c-dim') + span("tree line: white on each session's open window, blue down your own session", 'c-dim'), ' ' + span(pad('2:zsh.1', 11), 'c-dim') + span('window 2, named zsh, pane 1, the way tmux writes it', 'c-dim'));
+    } else if (o.type === 'menu') { box = [' ' + o.title + ' ', ...o.items.map((it, i) => (i === o.sel ? ' » ' : '   ') + pad(it.key, 2) + ' ' + it.label)]; selLine = o.sel + 1; }
+    else if (o.type === 'picker') { const cands = pickerCandidates(o); o.cands = cands; if (o.sel >= cands.length) o.sel = 0; const target = cands.length ? cands[o.sel] : o.q.trim(); const run = target ? runningAt(target) : null; const nm = target ? sessionNameFor(target, S.naming, localSessions()) : null; const outcome = !target ? '' : run ? `Enter: switch to running session "${run.name}"` : `Enter: new-session -s "${nm.name}" -c ${target}` + (nm.why ? `   (${nm.why})` : ''); box = [pickerTitle(), ` > ${withCursor(o.q, o.c)}`, ...cands.map((p, i) => { const tag = sourceTag(p); return (i === o.sel ? ' » ' : '   ') + pad(p, 40) + (tag ? '   ' + tag : ''); }), cands.length ? '' : (o.q.trim() ? '   no such directory yet' : '   type a path (~/…) or a project name'), ' ' + outcome, ...(o.error ? [' ' + o.error] : [])]; if (o.error) errLine = box.length - 1; selLine = cands.length ? o.sel + 2 : -1; }
+    else if (o.type === 'prompt') box = [` ${o.title} `, ` > ${withCursor(o.q, o.c)}`, o.error ? ' ' + o.error : ''];
+    else if (o.type === 'confirm') box = [' confirm ', ...(o.strict || o.choice ? wrapWords(o.message, Math.max(30, Math.min(72, COLS - 8))).map(l => ' ' + l) : [` ${o.message}`]), o.strict || o.choice ? ' y / N' : ' y / Enter · n / Esc'];
+    else if (o.type === 'inside') box = insidePanel();
+    else if (o.type === 'settings') box = [' options ', ' # effective configuration (read-only)', ' [ui]', ` layout = "${S.flat ? 'flat' : 'tree'}"`, ` depth = "${S.depth}"`, ` preview = ${S.preview}`, ` show_git = ${S.git}`, ` agent_panel_sort = "${S.sort}"      # flat list only; herdr's "priority" = attention`, ` status_indicators = "${S.symbols ? 'symbols' : 'dots'}"`, ' [sessions]', ` name = "${S.naming}"           # directory | full-path | short-path`, ` zoxide = ${S.zoxide}`, ` project_dirs = ${S.dirs ? '["~/code", "~/work"]' : '[]'}`, ' pre_create_hook = ""', ' post_create_hook = "~/.config/tmux/post-create-session-hook.sh"', ' [ui.toast]', ' delivery = "system"', ' delay_seconds = 1', ' done_delay_seconds = 5', ' [keys]', ` preset = "${S.model}"`, ...(S.remote ? machinesOptions() : []), ' config: ~/.config/tmux-agent-wizard/config.toml'];
+    if (boxHtml) {
+      const w = Math.min(COLS, Math.max(56, ...boxHtml.map(l => vis(l).length + 2))), x = Math.max(0, Math.floor((COLS - w) / 2)), y0 = Math.max(boxHtml.length + 1 < bodyH ? 1 : 0, Math.floor((bodyH - boxHtml.length) / 2));
+      const head = vis(boxHtml[0]).length > w - 2 ? clipHtml(boxHtml[0], w - 2) : boxHtml[0], title = vis(head);
+      paint(y0, x, span('╭', 'c-acc') + head + span('─'.repeat(w - 2 - title.length) + '╮', 'c-acc'));
+      for (let i = 1; i < boxHtml.length; i++) paint(y0 + i, x, span('│', 'c-acc') + `<span class="b-panel">${padHtml(boxHtml[i], w - 2)}</span>` + span('│', 'c-acc'));
+      paint(y0 + boxHtml.length, x, span('╰' + '─'.repeat(w - 2) + '╯', 'c-acc'));
+      return;
+    }
+    const w = Math.min(COLS, Math.max(44, ...box.map(l => l.length + 2))), x = Math.max(0, Math.floor((COLS - w) / 2)), y0 = Math.max(2, Math.floor((bodyH - box.length) / 2));
+    const head = clipEnd(box[0], w - 2); paint(y0, x, span('╭' + head + '─'.repeat(w - 2 - head.length) + '╮', 'c-acc'));
+    for (let i = 1; i < box.length; i++) { const isSel = i === selLine; paint(y0 + i, x, span('│', 'c-acc') + `<span class="${isSel ? 'b-sel' : 'b-panel'} ${i === errLine ? 'c-red' : 'c-fg'}">${esc(pad(clipEnd(box[i], w - 2), w - 2))}</span>` + span('│', 'c-acc')); }
+    paint(y0 + box.length, x, span('╰' + '─'.repeat(w - 2) + '╯', 'c-acc'));
+  }
+
+  function wrapWords(text, width) { const lines = []; let line = ''; for (const word of text.split(' ')) { if (line && line.length + 1 + word.length > width) { lines.push(line); line = word; } else line = line ? line + ' ' + word : word; } if (line) lines.push(line); return lines; }
+  let MSG_SEQ = 0;
+  function toast(msg) { S.toast = msg; S.toastSeq = ++MSG_SEQ; clearTimeout(S.toastT); S.toastT = setTimeout(() => { S.toast = null; draw(); }, 4000); }
+  function notice(msg) { S.notice = msg; S.noticeSeq = ++MSG_SEQ; clearTimeout(S.noticeT); S.noticeT = setTimeout(() => { S.notice = null; draw(); }, 4000); }
+  const cur = () => ROWS_CACHE[S.sel];
+  function moveSel(d) { const n = ROWS_CACHE.length; if (!n) return; S.sel = ((S.sel + d) % n + n) % n; }
+  function nextSession(dir) { const n = ROWS_CACHE.length; if (!n) return; let i = S.sel; if (S.flat) { const curS = ROWS_CACHE[S.sel] && ROWS_CACHE[S.sel].s; for (let k = 0; k < n; k++) { i = ((i + dir) % n + n) % n; if (ROWS_CACHE[i].kind !== 'project' && ROWS_CACHE[i].s !== curS) { S.sel = i; return; } } return; } for (let k = 0; k < n; k++) { i = ((i + dir) % n + n) % n; if (ROWS_CACHE[i].kind === 'session') { S.sel = i; return; } } }
+  function nextAttention(dir) { const i = nextUpRow(S.sel, dir); if (i >= 0) { S.sel = i; return; } nextSession(dir); }
+  function cursorToMostUrgent() { const a = needsYou()[0]; let i = a ? ROWS_CACHE.findIndex(r => r.kind === 'agent' && r.a === a) : -1; if (i < 0) i = 0; S.sel = Math.max(0, i); }
+  function cursorToBestMatch() { let best = -1, bs = -Infinity; ROWS_CACHE.forEach((r, i) => { if (!r.m || r.kind === 'project') return; const s = r.m.score + (r.kind === 'session' ? 0 : 0.5); if (s > bs) { bs = s; best = i; } }); S.sel = best >= 0 ? best : Math.max(0, ROWS_CACHE.findIndex(r => r.kind === 'project')); }
+  const ownRow = () => { if (appMode() && herePlace()) { const k = ROWS_CACHE.findIndex(r => sameRow(r, herePlace())); if (k >= 0) return k; } const cur = currentSession(); if (!cur) return -1; const w = cur.cur; let i = ROWS_CACHE.findIndex(r => r.kind === 'agent' && r.s === cur && r.a.win === w && r.a.pidx === 1); if (i < 0) i = ROWS_CACHE.findIndex(r => r.kind === 'pane' && r.s === cur && r.win === w && r.pidx === 1); if (i < 0) i = ROWS_CACHE.findIndex(r => r.s === cur && (S.flat || r.kind === 'session')); return i; };
+  const rowGroups = r => (staleS(r.s) ? [] : r.kind === 'agent' ? [GROUP(r.a)] : r.kind === 'session' && S.depth === 'sessions' ? (query().trim() ? (r.stands || []) : agentsOf(r.s)).map(GROUP) : []);
+  const nextUpRows = () => { const groups = ROWS_CACHE.map(rowGroups); const hot = groups.some(g => g.includes(0)); return groups.map((g, i) => ((hot ? g.includes(0) : g.length > 0) ? i : -1)).filter(i => i >= 0); };
+  function nextUpRow(from, dir) { const seq = nextUpRows(); if (!seq.length) return -1; const ahead = seq.filter(i => (dir > 0 ? i > from : i < from)); if (ahead.length) return dir > 0 ? ahead[0] : ahead[ahead.length - 1]; return dir > 0 ? seq[0] : seq[seq.length - 1]; }
+  function cursorToStart() { if (S.cursor === 'you') { const i = ownRow(); if (i >= 0) { S.sel = i; return; } } if (S.cursor === 'previous') { const p = previousSession(); if (p) { const i = ROWS_CACHE.findIndex(r => r.s === p && (S.flat || r.kind === 'session')); if (i >= 0) { S.sel = i; return; } } } cursorToMostUrgent(); }
+  const settleCursor = () => (query().trim() ? cursorToBestMatch() : cursorToStart());
+  function enterHint() { return 'Enter go'; }
+  const LETTERS = 'abcde';
+  const typing = () => S.model === 'search' || S.filter !== null;
+  const lettersShown = () => !S.flat && S.depth !== 'sessions' && S.labels;
+  const numbersWork = () => S.labels && (S.model === 'modal' || typing());
+  const cursorLetters = () => { const at = ROWS_CACHE[S.sel]; if (!at || !lettersShown()) return []; return ROWS_CACHE.map((r, i) => { const l = labelAt(i); return r.s === at.s && l && l.letter ? [l.letter, i] : null; }).filter(Boolean).sort((x, y) => (x[0] < y[0] ? -1 : 1)).map(x => x[1]); };
+  const letteredRows = () => (typing() ? [] : cursorLetters());
+  const litLetters = () => { if (!typing()) return letteredRows(); const at = ROWS_CACHE[S.sel]; return at && at.s && labelOfSession(at.s) !== ' ' && query().trim() === labelOfSession(at.s) ? cursorLetters() : []; };
+  const letterHit = (r, i) => { const l = labelAt(i); return !!(l && l.letter && r.m && r.m.lab && r.m.lab.includes(l.addr.length - 1)); };
+  let LETTERED = [];
+  const rowLetters = () => { const out = new Map(); if (!lettersShown()) return out; ROWS_CACHE.forEach((r, i) => { const l = labelAt(i); if (l && l.letter) out.set(i, l.letter); }); return out; };
+  let ROW_LETTERS = new Map();
+  const typedHint = () => (!S.labels ? '' : lettersShown() ? '4a session 4 row a' : '1-9 session');
+  const jumpHint = () => [numbersWork() ? '1-9 session' : '', lettersShown() ? 'a-e rows' : ''].filter(Boolean).join('  ·  ');
+  function selectSession(n) { const i = ROWS_CACHE.findIndex((r, k) => labelOf(k) === String(n)); if (i === undefined || i < 0) { toast(`no session numbered ${n} is shown`); return; } S.sel = i; }
+  const jumpTo = a => { const s = S.sessions.find(x => x.id === a.session); if (s && appMode()) { goInside({ kind: 'agent', a, s }); return; } if (s && s.machine) { goRemote({ kind: 'agent', a, s }); return; } rpage(`here taw switches the client to ${s.name}, selects window ${a.win} and the pane, and the popup closes`); };
+  function goNextUp() {
+    const cur = currentSession(); const all = S.sessions.flatMap(agentsOf).filter(liveAgent); if (!all.length) { toast('taw: no agents'); return; }
+    const seq = nextUpPool(all);
+    const at = a => [sessOrder(a.session), a.win, a.pidx]; const from = cur ? [sessOrder(cur.id), cur.cur, 1] : [-1, 0, 0];
+    const a = seq.find(x => cmpKeys(at(x), from) > 0) || seq[0]; jumpTo(a);
+  }
+  function createAt(path) { const run = runningAt(path); if (run) { rpage(`here taw switches the client to ${run.name} and the popup closes`); return; } const n = sessionNameFor(path, S.naming, localSessions()); rpage(`here taw opens the session ${n.name} in ${path}, runs your create hooks, and the popup closes` + (n.why ? ` (${n.why})` : '')); }
+  function go() { const r = cur(); if (!r) { toast(S.model === 'search' ? 'nothing here' : 'nothing here; n creates a session'); return; }
+    if (appMode() && r.kind !== 'project') { goInside(r); return; }
+    if (r.s && r.s.machine) { goRemote(r); return; }
+    if (S.sel === ownRow()) { rpage('here the popup closes: this is the session you are in'); return; }
+    if (r.kind === 'agent') jumpTo(r.a); else if (r.kind === 'pane') rpage(`here taw switches the client to ${r.s.name}, selects window ${r.win} and pane ${r.pidx}, and the popup closes`); else if (r.kind === 'session') rpage(`here taw switches the client to ${r.s.name} and the popup closes`); else if (r.kind === 'worktree') rpage(`here taw opens the session ${r.wt.session} in the worktree and the popup closes; next time it is a session of its own`); else if (r.kind === 'project') createAt(r.path); }
+  function dropSession(x, parked) { S.agents = S.agents.filter(a => a.session !== x.id); S.windows = S.windows.filter(w => w.s !== x.id); S.sessions = S.sessions.filter(y => y !== x); if (parked && x.wtOf && S.sessions.some(y => y.id === x.wtOf)) S.worktrees.push({ s: x.wtOf, branch: x.branch, session: x.name, open: false }); }
+  function groupClose(s, lead, wts, justThis) { const names = wts.map(x => x.name), shown = names.length > 3 ? `${names.slice(0, 3).join(', ')} and ${names.length - 3} more` : names.join(', '); S.overlay = { type: 'confirm', choice: true, message: `${lead} It has ${wts.length} worktree session${wts.length > 1 ? 's' : ''} open (${shown}). Close them too?`, onYes: () => { const all = wts.concat(s); all.forEach(x => dropSession(x, false)); toast(`closed ${s.name} and its ${wts.length} worktree session${wts.length === 1 ? '' : 's'}`); }, onNo: justThis }; }
+  function removePane(sid, win, pidx) { const w = winOf(sid, win); S.agents = S.agents.filter(a => !(a.session === sid && a.win === win && a.pidx === pidx)); if (w.cmds.length > 1) { w.cmds.splice(pidx - 1, 1); S.agents.filter(a => a.session === sid && a.win === win && a.pidx > pidx).forEach(a => a.pidx -= 1); } else S.windows = S.windows.filter(x => x !== w); if (!S.windows.some(x => x.s === sid)) S.sessions = S.sessions.filter(s => s.id !== sid); }
+  const rowWin = r => r.kind === 'agent' ? r.a.win : r.kind === 'pane' ? r.win : null;
+  const agentNameError = v => !v ? 'name must not be empty' : v.length > 32 ? 'name must be at most 32 characters' : !/^[a-z]/.test(v) ? 'name must start with a lowercase letter' : /[^a-z0-9_-]/.test(v) ? `'${v.match(/[^a-z0-9_-]/)[0]}' is not allowed in a name (a-z, 0-9, _, -)` : null;
+  const agentNameProblem = (a, v) => agentNameError(v) || (S.agents.some(x => x !== a && x.machine === a.machine && x.named && x.kind === v) ? `another agent is already named '${v}'` : null);
+  const badName = v => !v ? 'a name is needed' : /[.:]/.test(v) ? 'tmux would rewrite "." and ":" to "_", so pick a name without them' : null;
+  const A = {
+    killPane() { if (remoteAct('close')) return; const r = cur(); if (!r || r.kind === 'project') return; if (r.kind === 'agent' || r.kind === 'pane') { const win = rowWin(r), pidx = r.kind === 'agent' ? r.a.pidx : r.pidx, w = winOf(r.s.id, win), last = w.cmds.length === 1; const target = `${r.s.name}:${win}` + (last ? '' : `.${pidx}`); const what = r.kind === 'agent' ? r.a.kind : whatOf(r); const killIt = () => { removePane(r.s.id, win, pidx); }; const sessionLast = last && S.windows.filter(x => x.s === r.s.id).length === 1; const wts = sessionLast ? S.sessions.filter(x => x.wtOf === r.s.id) : []; const closes = sessionLast ? " It is the session's last pane, so the session closes with it." : last ? " It is the window's last pane, so the window closes too." : ''; if (wts.length) groupClose(r.s, `kill-pane ${target} (${what})?${closes}`, wts, killIt); else S.overlay = { type: 'confirm', message: `kill-pane ${target} (${what})?${closes}`, onYes: killIt }; } else if (r.kind === 'session') {
+      const wts = S.sessions.filter(x => x.wtOf === r.s.id);
+      if (!wts.length) S.overlay = { type: 'confirm', message: `kill-session ${r.s.name}?`, onYes: () => { dropSession(r.s, true); } };
+      else groupClose(r.s, `kill-session ${r.s.name}?`, wts, () => { dropSession(r.s, false); });
+    } else if (r.kind === 'worktree') S.overlay = { type: 'confirm', message: `git worktree remove ${r.wt.branch}? (the branch is kept)`, onYes: () => {
+      const gone = () => { S.worktrees = S.worktrees.filter(w => w !== r.wt); toast(`removed worktree ${r.wt.branch}`); };
+      if (!r.wt.dirty) { gone(); return; }
+      S.overlay = { type: 'confirm', strict: true, message: `git will not remove ${r.wt.branch}: it has modified or untracked files. remove anyway? uncommitted changes are lost`, onYes: () => gone() };
+    } }; },
+    renameWindow() { const r = cur(); const win = r && rowWin(r); if (win === null || win === undefined) { toast('r on a header renames the session'); return; } const w = winOf(r.s.id, win); S.overlay = { type: 'prompt', title: `rename-window ${r.s.name}:${win}`, q: w.name, onSubmit: v => { const e = badName(v); if (e) { S.overlay.error = e; return false; } w.name = v; } }; },
+    rename() { if (remoteAct('rename')) return; const r = cur(); if (!r || r.kind === 'project') return; if (r.kind === 'agent') { S.overlay = { type: 'menu', title: `rename what? ${r.s.name}:${where(r.s.id, r.a.win, r.a.pidx)}`, sel: 0, items: [ { key: 'w', label: `the window  (now "${winOf(r.s.id, r.a.win).name}")`, act: A.renameWindow }, { key: 'a', label: `the agent  (taw label, now "${r.a.kind}"; also the CLI handle)`, act: A.nameAgent } ] }; return; } if (r.kind === 'pane') { A.renameWindow(); return; } if (r.kind === 'session') { A.renameSession(); return; } toast('a closed worktree keeps its branch name'); },
+    renameSession() { const r = cur(); if (!r) return; S.overlay = { type: 'prompt', title: `rename-session ${r.s.name}`, q: r.s.name, onSubmit: v => { const e = badName(v) || (S.sessions.some(s => s !== r.s && s.name === v) ? `duplicate session: ${v}` : null); if (e) { S.overlay.error = e; return false; } r.s.name = v; r.s.renamed = true; } }; },
+    nameAgent() { const r = cur(); if (!r || r.kind !== 'agent') { toast('only an agent row has an agent to name'); return; } S.overlay = { type: 'prompt', title: `name agent (taw label for ${r.a.kind}, not a tmux rename)`, q: '', onSubmit: v => { const e = agentNameProblem(r.a, v); if (e) { S.overlay.error = e; return false; } r.a.kind = v; r.a.named = true; toast(`renamed agent to ${v}`); } }; },
+    newSession() { S.overlay = { type: 'picker', q: '', sel: 0, cands: [] }; },
+    newWorktree() { if (remoteAct('worktree')) return; const r = cur(); if (!r || r.kind === 'project') return; const label = r.s.name; S.overlay = { type: 'prompt', title: `new worktree in ${label}: branch`, q: '', onSubmit: v => { rpage(`here taw makes the worktree ~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, v)} on a new branch ${v}, opens its session, and the popup closes`); } }; },
+    settings() { S.overlay = { type: 'settings' }; },
+    pasteImage() { const r = cur(); if (!r || r.kind !== 'agent') { toast('only an agent row takes an image'); return; } const m = r.s.machine; if (m && !machineLive(m)) { rtoast(notConnected(m)); return; } if (r.a.state === 'blocked') { (m ? rtoast : toast)('the agent is waiting on a question: answer it, then paste the image'); return; } const pane = m ? r.a.pane.slice(m.length) : r.a.pane; if (m) rtoast(`pasting the image into ${m}:${pane}`); else toast(`pasting the image into ${pane}`); setTimeout(() => { if (m) rtoast(`image pasted into ${pane} on ${m}`); else toast(`image pasted into ${pane}`); draw(); }, 900); },
+    help() { S.overlay = { type: 'help' }; },
+  };
+  function contextMenu() { const r = cur(); if (!r || r.kind === 'project') return; const items = [];
+    items.push({ key: 'Enter', label: 'go', act: go });
+    if (r.kind !== 'worktree') items.push({ key: 'r', label: r.kind === 'agent' ? 'rename (window or agent)' : r.kind === 'pane' ? 'rename the window' : 'rename the session', act: A.rename });
+    items.push({ key: 'x', label: r.kind === 'session' ? 'close the session (kill-session)' : r.kind === 'worktree' ? 'remove the worktree' : 'close this pane (kill-pane)', act: A.killPane });
+    items.push({ key: 'w', label: 'new worktree…', act: A.newWorktree });
+    if (r.kind === 'agent') items.push({ key: 'v', label: 'paste image', act: A.pasteImage });
+    S.overlay = { type: 'menu', machine: !!r.s.machine, title: r.kind === 'agent' ? `${sessLabel(r.s)}:${where(r.s.id, r.a.win, r.a.pidx)} ${r.a.kind}` : r.kind === 'pane' ? `${sessLabel(r.s)}:${where(r.s.id, r.win, r.pidx)}` : r.kind === 'session' ? sessLabel(r.s) : r.wt.branch, items, sel: 0 }; }
+
+  function field(o, text, cursor) { return { get: () => o[text], set: v => { o[text] = v; }, at: () => cursorAt(o[text], o[cursor]), go: n => { o[cursor] = n >= o[text].length ? undefined : Math.max(0, n); } }; }
+  function cursorAt(text, c) { return c === undefined ? text.length : Math.min(c, text.length); }
+  function withCursor(text, c) { const at = cursorAt(text, c); return text.slice(0, at) + '▏' + text.slice(at); }
+  function editQuery(e, f, fzf) {
+    const k = e.key, text = f.get(), at = f.at(), head = text.slice(0, at), tail = text.slice(at), back = /[^/\s]*\/?\s*$/, wordAhead = fzf ? /^[^\p{L}\p{N}]*(?:[\p{L}\p{N}]+|$)/u : /^\s*(?:[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]+|$)/u, wordBack = fzf ? /[\p{L}\p{N}]*[^\p{L}\p{N}]*$/u : /(?:[\p{L}\p{N}_]+|[^\p{L}\p{N}_\s]+)?\s*$/u;
+    const put = (h, t, kept) => { if (kept) S.killed = kept; f.set(h + t); f.go(h.length); };
+    const cutBack = () => { const keep = head.replace(back, ''); put(keep, tail, head.slice(keep.length)); };
+    if (k === 'Backspace' && e.ctrlKey && fzf || k === 'Backspace' && !e.ctrlKey && !e.altKey || e.ctrlKey && k === 'h') put(head.slice(0, -1), tail);
+    else if (k === 'Backspace') cutBack();
+    else if (k === 'Delete' || e.ctrlKey && k === 'd') put(head, tail.slice(1));
+    else if (e.ctrlKey && k === 'u') put('', tail, head);
+    else if (e.ctrlKey && k === 'k') put(head, '', tail);
+    else if (e.ctrlKey && k === 'w') cutBack();
+    else if (e.altKey && k === 'd') { const cut = tail.match(wordAhead)[0]; put(head, tail.slice(cut.length), cut); }
+    else if (e.ctrlKey && k === 'y') put(head + (S.killed || ''), tail);
+    else if (k === 'ArrowLeft') f.go(at - 1);
+    else if (k === 'ArrowRight' || e.ctrlKey && k === 'f') f.go(at + 1);
+    else if (k === 'Home' || e.ctrlKey && k === 'a') f.go(0);
+    else if (k === 'End' || e.ctrlKey && k === 'e') f.go(text.length);
+    else if (e.altKey && k === 'b') f.go(head.match(wordBack).index);
+    else if (e.altKey && k === 'f') f.go(at + tail.match(wordAhead)[0].length);
+    else if (k.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) put(head + k, tail);
+    else return false;
+    return true;
+  }
+  const DEPTHS = ['sessions', 'agents', 'all'];
+  const identity = r => !r ? null : r.kind === 'session' ? { kind: 'session', s: r.s } : r.kind === 'agent' ? { kind: 'agent', s: r.s, a: r.a } : r.kind === 'pane' ? { kind: 'pane', s: r.s, win: r.win, pidx: r.pidx } : r.kind === 'project' ? { kind: 'project', path: r.path } : { kind: 'worktree', s: r.s, wt: r.wt };
+  const sameRow = (r, id) => id && r.kind === id.kind && r.s === id.s && (id.kind === 'session' || (id.kind === 'agent' && r.a === id.a) || (id.kind === 'pane' && r.win === id.win && r.pidx === id.pidx) || (id.kind === 'worktree' && r.wt === id.wt) || (id.kind === 'project' && r.path === id.path));
+  function keepCursor(change) { const before = identity(cur()); change(); ROWS_CACHE = buildRows(); const find = id => ROWS_CACHE.findIndex(r => sameRow(r, id)); let i = -1; if (S.anchor && S.anchor.kind !== 'session' && before && S.anchor.s === before.s) i = find(S.anchor); if (i < 0) i = find(before); if (i < 0 && before) i = ROWS_CACHE.findIndex(r => r.s === before.s && (S.flat || r.kind === 'session')); if (i >= 0) S.sel = i; else S.sel = Math.min(S.sel, Math.max(0, ROWS_CACHE.length - 1)); S.keptCursor = true; }
+  function stepDepth(d) { keepCursor(() => { const i = DEPTHS.indexOf(S.depth); S.depth = DEPTHS[Math.max(0, Math.min(2, i + d))]; }); }
+  function toggleFlat() { keepCursor(() => { S.flat = !S.flat; }); }
+  function prefixChord(e) { if (e.ctrlKey && e.key === 'b') { S.prefixAt = Date.now(); return true; } if (S.prefixAt && Date.now() - S.prefixAt < 2000) { S.prefixAt = 0; if (e.key === 'O') goNextUp(); else if (e.key === 'A' && appMode()) rpage('the popup key does nothing on this page'); return true; } return false; }
+  function keySearch(e) {
+    const k = e.key, c = e.ctrlKey;
+    if (prefixChord(e)) return;
+    if (k === 'Escape' || (c && !e.altKey && k === 'd' && S.q === '')) { if (appMode()) { appEsc(); return; } rpage('here the popup closes'); return; }
+    if (k === 'Enter') { go(); return; }
+    if ((k === 'ArrowDown' && !c) || (c && (k === 'j' || k === 'n'))) { moveSel(1); return; } if ((k === 'ArrowUp' && !c) || (c && (k === 'k' || k === 'p'))) { moveSel(-1); return; }
+    if (editQuery(e, field(S, 'q', 'qc'), true)) { ROWS_CACHE = buildRows(); settleCursor(); }
+  }
+  function keyModal(e) {
+    const k = e.key;
+    if (prefixChord(e)) return;
+    if (S.filter !== null) {
+      if (k === 'Escape') { S.filter = null; ROWS_CACHE = buildRows(); settleCursor(); return; }
+      if (k === 'Enter') { go(); return; }
+      if (k === 'Tab') { nextAttention(e.shiftKey ? -1 : 1); return; }
+      if (k === 'ArrowDown' || (e.ctrlKey && (k === 'j' || k === 'n'))) { moveSel(1); return; } if (k === 'ArrowUp' || (e.ctrlKey && (k === 'k' || k === 'p'))) { moveSel(-1); return; }
+      if (editQuery(e, field(S, 'filter', 'filterc'))) { ROWS_CACHE = buildRows(); settleCursor(); }
+      return;
+    }
+    if (e.ctrlKey && !e.altKey && k === 'v') { A.pasteImage(); return; }
+    if (e.ctrlKey || e.altKey) return;
+    const li = k.length === 1 ? LETTERS.indexOf(k) : -1; const lettered = letteredRows();
+    if (li >= 0 && lettersShown()) { if (li < lettered.length) S.sel = lettered[li]; else toast(`no row ${k} in this session`); return; }
+    if (S.labels && /^[1-9]$/.test(k)) { selectSession(+k); return; }
+    switch (k) {
+      case 'Tab': nextAttention(e.shiftKey ? -1 : 1); break;
+      case 'j': case 'ArrowDown': moveSel(1); break;
+      case 'k': case 'ArrowUp': moveSel(-1); break;
+      case 'J': nextSession(1); break;
+      case 'K': nextSession(-1); break;
+      case 'h': case 'ArrowLeft': stepDepth(-1); break;
+      case 'l': case 'ArrowRight': stepDepth(1); break;
+      case 'f': toggleFlat(); break;
+      case 'Enter': go(); break;
+      case '/': S.filter = ''; S.filterc = undefined; S.toast = null; break;
+      case 'r': A.rename(); break;
+      case 'x': A.killPane(); break;
+      case 'n': A.newSession(); break;
+      case 'w': A.newWorktree(); break;
+      case 'o': A.settings(); break;
+      case '?': A.help(); break;
+      case 'q': case 'Escape': if (appMode()) { appEsc(); break; } rpage('here the popup closes'); break;
+      case 'Q': if (appMode()) rpage(APP_ENDS); break;
+      default: return;
+    }
+  }
+  function keyOverlay(e) {
+    const o = S.overlay, k = e.key;
+    if (k === 'Escape') { S.overlay = null; return; }
+    if (o.type === 'help' || o.type === 'settings') { if (k === 'q' || k === 'Enter' || k === '?') S.overlay = null; return; }
+    if (o.type === 'confirm') { const yes = k === 'y' || k === 'Y', no = k === 'n' || k === 'N', enter = k === 'Enter'; if (yes || (enter && !o.strict && !o.choice)) { S.overlay = null; o.onYes(); } else if (o.choice && (enter || no)) { S.overlay = null; o.onNo(); } else if (no || k === 'q' || (enter && o.strict)) S.overlay = null; return; }
+    if (o.type === 'menu') { const byKey = o.items.find(it => it.key === k); if (byKey) { S.overlay = null; byKey.act(); return; } if (k === 'ArrowDown' || k === 'Tab' || k === 'j') o.sel = (o.sel + 1) % o.items.length; else if (k === 'ArrowUp' || k === 'k') o.sel = (o.sel - 1 + o.items.length) % o.items.length; else if (k === 'Enter') { const it = o.items[o.sel]; S.overlay = null; it.act(); } return; }
+    if (o.type === 'picker') { const cands = o.cands || []; if (k !== 'Enter') o.error = null; if (k === 'Tab') { if (cands.length) { const p = cands[o.sel]; o.q = FS[p] ? p + '/' : p; o.c = undefined; o.sel = 0; } return; } if (k === 'ArrowDown' || (e.ctrlKey && (k === 'j' || k === 'n'))) { if (cands.length) o.sel = (o.sel + 1) % cands.length; return; } if (k === 'ArrowUp' || (e.ctrlKey && (k === 'k' || k === 'p'))) { if (cands.length) o.sel = (o.sel - 1 + cands.length) % cands.length; return; } if (k === 'Enter') { const target = cands.length ? cands[o.sel] : o.q.trim().replace(/\/+$/, ''); if (!target) return; const exists = FS[target] || zoxide.includes(target) || Object.entries(FS).some(([d, kids]) => kids.some(kid => `${d}/${kid}` === target)); if (!exists) { o.error = `no such directory: ${target}`; return; } S.overlay = null; createAt(target); return; } if (editQuery(e, field(o, 'q', 'c'))) o.sel = 0; return; }
+    if (o.type === 'prompt') { if (k === 'Enter') { const r = o.onSubmit(o.q.trim()); if (r !== false) S.overlay = null; return; } if (editQuery(e, field(o, 'q', 'c'))) o.error = null; }
+  }
+
+  function renderOrderTable() { const tb = document.querySelector('#ordertable tbody'); const ags = attentionOrder(); const fmt = s => `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`; tb.innerHTML = ags.map((a, i) => { const s = S.sessions.find(x => x.id === a.session); const tier = TIER(a); const why = tier <= 1 ? 'waiting on you' : tier === 2 ? 'finished and you have not looked' : tier === 3 ? 'busy; nothing to do yet' : tier === 4 ? 'you already looked, or it is quiet' : 'cannot tell'; return `<tr><td>${i + 1}</td><td>${sessLabel(s)} ${where(s.id, a.win, a.pidx)} <span class="note">${a.kind} ${a.pane}</span></td><td>${a.state}${a.seen ? '' : ' (not looked at)'}</td><td>${fmt(a.since)}</td><td>${tier}: ${TIER_NAME[tier]}</td><td>${why}</td></tr>`; }).join(''); }
+  function renderNameTable() { const tb = document.getElementById('nametable'); const path = (document.getElementById('nameprobe').value || '').trim() || '~/oss/api'; const run = runningAt(path); tb.innerHTML = ['directory', 'full-path', 'short-path'].map(mode => { const n = sessionNameFor(path, mode, localSessions()); return `<tr><td>${mode}${mode === S.naming ? ' <span class="note">(selected)</span>' : ''}</td><td class="mono">${run ? `<span class="note">already running as</span> ${run.name}` : n.name}</td><td class="note">${run ? 'Enter switches; nothing is created' : (n.why || (mode === 'directory' ? 'basename, tmux rule applied' : mode === 'full-path' ? 'path with ~, tmux rule applied' : 'parents cut to two characters'))}</td></tr>`; }).join(''); }
+
+  const term = document.getElementById('term');
+  const setRadio = (name, value) => document.querySelectorAll(`input[name=${name}]`).forEach(x => { x.checked = x.value === value; x.parentElement.classList.toggle('on', x.checked); });
+  const CHECKS = [['opt-pif', 'projectsInFilter'], ['opt-openmark', 'openMark'], ['opt-wrap', 'wrap'], ['opt-preview', 'preview'], ['opt-git', 'git'], ['opt-symbols', 'symbols'], ['opt-statustop', 'statusTop'], ['opt-zoxide', 'zoxide'], ['opt-dirs', 'dirs'], ['opt-labels', 'labels'], ['opt-titles', 'titles']];
+  function syncControls() { setRadio('model', S.model); setRadio('depth', S.depth); setRadio('cursor', S.cursor); setRadio('naming', S.naming); setRadio('layout', S.flat ? 'flat' : 'tree'); setRadio('sort', S.sort); setRadio('bar', S.bar); setRadio('width', String(COLS)); for (const [id, key] of CHECKS) { const el = document.getElementById(id); el.checked = S[key]; el.parentElement.classList.toggle('on', S[key]); } syncRemote(); }
+  const SHIFTED = { '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '/': '?', "'": '"', ',': '<', '.': '>', ';': ':' };
+  term.addEventListener('keydown', e => { if (e.metaKey) return; if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(e.key)) return; const key = e.shiftKey && SHIFTED[e.key] ? SHIFTED[e.key] : (e.shiftKey && /^[a-z]$/.test(e.key) ? e.key.toUpperCase() : e.key); const ev = { key, ctrlKey: e.ctrlKey, altKey: e.altKey, metaKey: e.metaKey, shiftKey: e.shiftKey }; if (['Tab', 'Backspace', ' ', '/', 'ArrowUp', 'ArrowDown', "'", '"'].includes(key) || e.ctrlKey) e.preventDefault(); S.keptCursor = false; S.pageNote = null; if (appMode() && !insideNow() && ev.ctrlKey && key === 'c') rpage(APP_ENDS); else if (insideNow() && (!S.overlay || S.overlay.type === 'inside')) keyInside(ev); else if (S.overlay) keyOverlay(ev); else if (S.model === 'search') keySearch(ev); else keyModal(ev); ROWS_CACHE = buildRows(); const at = cur(); if (!S.keptCursor && at) S.anchor = identity(at); syncControls(); draw(); });
+  term.addEventListener('focus', () => { S.focus = true; draw(); });
+  term.addEventListener('blur', () => { S.focus = false; draw(); });
+  const rowAt = el => { const rowEl = el.closest('.row'); if (!rowEl) return -1; const line = Array.from(term.children).indexOf(rowEl) - popupTop() - 1 - (S.model === 'search' ? 1 : 0); return line >= 0 && line < TREE_LINES.length ? TREE_LINES[line] : -1; };
+  term.addEventListener('click', e => { const y = rowAt(e.target); if (y >= 0 && y < ROWS_CACHE.length) { S.sel = y; draw(); } });
+  term.addEventListener('contextmenu', e => { e.preventDefault(); if (insideNow()) return; const y = rowAt(e.target); if (y === -2 || y === -3 || (y >= 0 && ROWS_CACHE[y] && ROWS_CACHE[y].kind === 'project')) return; if (y >= 0 && y < ROWS_CACHE.length) S.sel = y; contextMenu(); draw(); });
+  document.addEventListener('keydown', e => { if (e.target === term || e.metaKey || e.key === ' ' || e.target.id === 'nameprobe' || (e.key === 'Tab' && e.target.tagName === 'INPUT')) return; if (['INPUT', 'BUTTON'].includes(e.target.tagName)) { term.focus(); term.dispatchEvent(new KeyboardEvent('keydown', e)); e.preventDefault(); } });
+  document.getElementById('nameprobe').addEventListener('input', renderNameTable);
+  document.querySelectorAll('[data-sc]').forEach(b => b.addEventListener('click', () => {
+    const sc = b.dataset.sc;
+    if (sc === 'reset') { S.sessions = baseSessions(); S.windows = baseWindows(); S.agents = baseAgents(); S.worktrees = baseWorktrees(); remoteReset(); S.q = ''; S.qc = undefined; S.filter = null; applyNaming(); ROWS_CACHE = buildRows(); cursorToStart(); }
+    if (sc === 'ask') { const a = S.agents.find(x => x.pane === '%16'); if (a) { a.state = 'blocked'; a.seen = false; a.since = now(); const s = S.sessions.find(x => x.id === a.session); notice(`⏸ blocked claude · ${s.name}:${a.win} · Do you want to proceed?   prefix+O next up`); } }
+    if (sc === 'finish') { const a = S.agents.find(x => x.pane === '%94'); if (a) { a.state = 'done'; a.seen = false; a.since = now(); const s = S.sessions.find(x => x.id === a.session); notice(`✓ done claude · ${s.name}:${a.win}   prefix+O next up`); } }
+    if (sc === 'look') { const a = S.agents.find(x => x.pane === '%31'); if (a) { a.seen = true; } }
+    remoteScenario(sc);
+    ROWS_CACHE = buildRows(); draw(); term.focus();
+  }));
+  const onRadio = (name, fn) => document.querySelectorAll(`input[name=${name}]`).forEach(r => r.addEventListener('change', () => { S.keptCursor = false; fn(r.value); ROWS_CACHE = buildRows(); if (!S.keptCursor) settleCursor(); syncControls(); draw(); term.focus(); }));
+  onRadio('model', v => { S.model = v; S.q = ''; S.qc = undefined; S.filter = null; });
+  onRadio('depth', v => { keepCursor(() => { S.depth = v; }); });
+  onRadio('cursor', v => { S.cursor = v; });
+  onRadio('naming', v => { S.naming = v; applyNaming(); });
+  onRadio('layout', v => { keepCursor(() => { S.flat = v === 'flat'; }); });
+  onRadio('sort', v => { S.sort = v; });
+  onRadio('bar', v => { S.bar = v; });
+  onRadio('width', v => { keepCursor(() => { COLS = +v; }); });
+  for (const [id, key] of CHECKS) { const el = document.getElementById(id); el.addEventListener('change', () => { S[key] = el.checked; ROWS_CACHE = buildRows(); syncControls(); draw(); term.focus(); }); }
+  const RM_RADIOS = [['rmpi', 'rmPi'], ['rmwhere', 'rmWhere']];
+  function syncRemote() { for (const [name, key] of RM_RADIOS) setRadio(name, S[key]); const el = document.getElementById('opt-remote'); el.checked = S.remote; el.parentElement.classList.toggle('on', S.remote); document.getElementById('rmopts').classList.toggle('off', !S.remote); document.getElementById('rmphone').textContent = PHONE[S.rmWhere]; }
+  const remoteChange = fn => { const at = cur(); if (at && S.anchor && !sameRow(at, S.anchor) && ROWS_CACHE.some(r => sameRow(r, S.anchor))) S.anchor = identity(at); keepCursor(fn); ROWS_CACHE = buildRows(); syncControls(); draw(); term.focus(); };
+  for (const [name, key] of RM_RADIOS) document.querySelectorAll(`input[name=${name}]`).forEach(r => r.addEventListener('change', () => remoteChange(() => { setRemote(true); S[key] = r.value; if (key === 'rmWhere') { S.inside = null; if (S.overlay && S.overlay.machine) S.overlay = null; } })));
+  { const el = document.getElementById('opt-remote'); el.addEventListener('change', () => remoteChange(() => setRemote(el.checked))); }
+  S.wrap = false;
+  setRemote(true);
+  applyNaming(); ROWS_CACHE = buildRows(); cursorToStart(); syncControls(); draw();
+
+  const termWrap = document.getElementById('termwrap'), pageNote = document.getElementById('pagenote'), qlabel = document.getElementById('qlabel'), qarrow = document.getElementById('qarrow'), qpath = document.getElementById('qpath');
+  const ZONE = EMBED ? 52 : 58;
+  termWrap.append(pageNote, qarrow, qlabel);
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:100px/1 ' + getComputedStyle(term).fontFamily;
+  probe.textContent = 'x'.repeat(50);
+  document.body.appendChild(probe);
+  const advance = () => probe.getBoundingClientRect().width / 5000;
+  function fitTerm() {
+    let size = Math.min(12.5, (termWrap.clientWidth - 22) / (COLS * advance()));
+    if (EMBED) {
+      const top = termWrap.getBoundingClientRect().top + window.scrollY, controls = document.querySelector('.controls');
+      size = Math.min(size, (window.innerHeight - top - ZONE - controls.offsetHeight - 10 - 16) / (ROWS * 1.35));
+    }
+    size = Math.max(6, Math.floor(size * 10) / 10);
+    term.style.fontSize = size + 'px';
+    term.style.setProperty('--lh', Math.floor(size * 1.35) + 'px');
+  }
+  function placeArrow() {
+    const calm = !S.overlay && S.filter === null && S.model !== 'search' && !S.toast && !insideNow();
+    const hit = calm ? Array.from(term.children).slice(-4).flatMap(row => Array.from(row.querySelectorAll('span.c-yel'))).find(el => el.textContent === '?') : null;
+    termWrap.classList.toggle('noarrow', !hit);
+    if (!hit) return;
+    const box = termWrap.getBoundingClientRect(), key = hit.getBoundingClientRect(), win = term.getBoundingClientRect();
+    const x = key.left - box.left + key.width / 2, y = key.bottom - box.top + 12, base = win.bottom - box.top + ZONE - 18;
+    const lw = qlabel.offsetWidth, lh = qlabel.offsetHeight;
+    let tx = x + 90, left = tx + 14;
+    if (left + lw > box.width - 6) { tx = x - 90; left = tx - 14 - lw; }
+    qpath.setAttribute('d', 'M ' + tx + ' ' + base + ' C ' + tx + ' ' + (base - 34) + ', ' + x + ' ' + (y + 40) + ', ' + x + ' ' + y);
+    qlabel.style.left = Math.max(0, left) + 'px';
+    qlabel.style.top = (base - lh / 2) + 'px';
+  }
+  const refit = () => { fitTerm(); placeArrow(); };
+  new MutationObserver(refit).observe(term, { childList: true });
+  window.addEventListener('resize', refit);
+  const themeOf = () => {
+    try { const scheme = window.parent.document.body.getAttribute('data-md-color-scheme'); if (scheme) return scheme === 'slate' ? 'dark' : 'light'; } catch (e) { }
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  };
+  if (EMBED) {
+    const paint = () => document.documentElement.classList.toggle('dark', themeOf() === 'dark');
+    paint();
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
+    try { new MutationObserver(paint).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-md-color-scheme'] }); } catch (e) { }
+  }
+  refit();
+})();
+</script>
+</body>
+</html>

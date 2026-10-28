@@ -1,0 +1,63 @@
+# Checks every push to a branch and every pull request: formatting, clippy with
+# warnings as errors, and a release build, on Linux and macOS. The test suite is not
+# run here: it drives real tmux servers and shells and runs in the release gate on the
+# maintainer's machine (docs/RELEASING.md).
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to a branch cancels the run still going for an older one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (the version mise.toml pins)
+        run: |
+          rust=$(sed -n 's/^rust = "\([^"]*\)".*$/\1/p' mise.toml | head -n 1)
+          if [ -z "$rust" ]; then
+            echo "mise.toml pins no rust version" >&2
+            exit 1
+          fi
+          rustup toolchain install "$rust" --profile minimal --component rustfmt --component clippy
+          rustup default "$rust"
+          echo "RUST_VERSION=$rust" >>"$GITHUB_ENV"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ matrix.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.os }}-${{ env.RUST_VERSION }}-
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo build --release
+        run: cargo build --locked --release

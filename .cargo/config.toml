@@ -1,0 +1,15 @@
+# Defaults for every cargo process started in this repository (cargo test, cargo run, cargo bench).
+#
+# A test, or anything it starts, that shows a notification or plays a sound with no recorder of its own
+# would put it on the desktop of whoever runs the tests: taw's `system` toast runs osascript (macOS) or
+# notify-send (Linux), its sound afplay, paplay or aplay, unless TAW_NOTIFY_CMD and TAW_SOUND_CMD name a
+# program to run in their place. `mise run check` makes both name refusing recorders of its own, but a
+# targeted `cargo test` run outside it does not, so these name a refusing one in the repository
+# (scripts/refuse-desktop.sh). `force` is not set: the gate's recorders, and a test's own, win.
+#
+# The cost: `cargo run -- ...` has them too, so a notification or a sound shown from a `cargo run` is
+# refused unless you unset the two variables (or set your own) for it. The binary built by `mise run
+# build` (target/release/taw, which the plugin runs) is not run by cargo and is not affected.
+[env]
+TAW_NOTIFY_CMD = { value = "scripts/refuse-desktop.sh", relative = true }
+TAW_SOUND_CMD = { value = "scripts/refuse-desktop.sh", relative = true }

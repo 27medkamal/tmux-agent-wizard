@@ -1,0 +1,12 @@
+  ┃  Write the migration guide for v2
+  ┃
+  ┃  Done. docs/migration-v2.md covers the
+  ┃  three breaking changes, each with a
+  ┃  before and after, and the changelog
+  ┃  links to it.
+
+  ┃  >
+  ┃
+  ┃  Build  claude-sonnet · docs
+
+  ctrl+p commands               tab agents

@@ -1,0 +1,7 @@
+⏺ Bash(cd ~/code/api && ./run-tests.sh)
+  ⎿  Running…
+● Verifying… (1m 20s · ↓ 1.2k tokens)
+──────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────
+  -- INSERT -- ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents

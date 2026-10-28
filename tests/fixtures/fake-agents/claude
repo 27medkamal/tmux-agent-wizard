@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Fake Claude Code for tmux integration tests. Named `claude` so identity resolves.
+# Renders: idle screen → (on SIGUSR1) working screen → (on SIGUSR2) permission prompt → (SIGUSR1 again) idle.
+# On SIGALRM: six 250 ms blank frames, each followed by 420 ms of the current screen — a
+# turn's redraws caught half-way; the title stays put, so under `✻` a blank matches no rule.
+# Emits OSC 2 titles like the real thing. Never exits until SIGTERM.
+here="$(cd "$(dirname "$0")" && pwd)"
+screens="$here/../screens"
+draw() { printf '\033[2J\033[H'; cat "$screens/$1"; }
+title() { printf '\033]2;%s\007' "$1"; }
+state=idle
+render() {
+  case "$state" in
+    idle)    title "✳ fake task";  draw claude-idle.txt ;;
+    working) title "✻ fake task";  draw claude-2.1.227-working.txt ;;
+    blocked) title "✳ fake task";  draw claude-permission.txt ;;
+  esac
+}
+trap 'state=$([ "$state" = idle ] && echo working || echo idle); render' USR1
+trap 'state=blocked; render' USR2
+trap 'for _ in 1 2 3 4 5 6; do printf "\033[2J\033[H"; sleep 0.25; render; sleep 0.42; done' ALRM
+trap 'exit 0' TERM INT
+render
+while :; do sleep 0.2; done

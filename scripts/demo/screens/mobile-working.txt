@@ -1,0 +1,13 @@
+ > Make the settings screen respect the
+   system text size
+
+✦ I'll read the settings screen, then
+  switch its fixed font sizes to the
+  scaled ones.
+
+ ✓  ReadFile  lib/screens/settings.dart
+ ✓  ReadFile  lib/theme/text.dart
+
+ ⠼ Scaling the text… (esc to cancel, {SECS}s)
+
+ ~/code/mobile (main)   gemini-2.5-pro

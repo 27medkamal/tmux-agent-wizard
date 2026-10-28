@@ -1,0 +1,54 @@
+[package]
+name = "tmux-agent-wizard"
+description = "herdr-style agent awareness for tmux: detection, popup, notifications, CLI, plugins"
+license = "MIT"
+repository = "https://github.com/27medkamal/tmux-agent-wizard"
+readme = "README.md"
+keywords = ["tmux", "ai-agents", "cli", "notifications", "productivity"]
+categories = ["command-line-utilities", "development-tools"]
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ansi-to-tui = "8.0.1"
+anyhow = "1.0.104"
+clap = { version = "4.6.6", features = ["derive"] }
+crossterm = "0.29.0"
+dirs = "6.0.0"
+jsonc-parser = { version = "0.33.1", default-features = false, features = ["cst", "serde_json"] }
+libc = "0.2.189"
+log = "0.4.34"
+# A patched copy of nucleo-matcher 0.3.1 (third_party/nucleo-matcher/TAW-CHANGES.md). A path
+# and no version, so a `cargo publish` fails instead of shipping the registry's unpatched crate.
+nucleo-matcher = { path = "third_party/nucleo-matcher" }
+ratatui = "0.30.2"
+regex = "1.13.1"
+semver = "1.0.28"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.151", features = ["preserve_order"] }
+sha2 = "0.10"
+shell-words = "1.1.1"
+simplelog = "0.12.2"
+thiserror = "2.0.20"
+toml = "1.1.5"
+tui-input = { version = "0.15", features = ["ratatui-crossterm"] }
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+ureq = "3.4.0"
+which = "8.0.6"
+
+[[bin]]
+name = "taw"
+path = "src/main.rs"
+
+[lib]
+name = "taw"
+path = "src/lib.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

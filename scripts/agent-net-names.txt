@@ -1,0 +1,65 @@
+# The commands the test net (scripts/agent-net.sh) puts a refusing stub first on PATH for: every agent
+# taw knows, by its id, every alias of it and every name of its program (src/detect/identity.rs, its
+# manifests, src/detect/job.rs and the integrations taw installs), the names of agents taw does not know
+# that a test could still type, and every container runtime taw recognises (src/detect/container.rs).
+# One name a line. A unit test of src/detect/identity.rs holds this to the tables it is made from, and
+# to nothing else: the programs that reach the desktop of whoever runs the tests (a notifier, a sound
+# player) have a net of their own, scripts/desktop-net-names.txt.
+.cline
+agy
+aider
+amp
+amp-local
+antigravity
+antigravity-cli
+claude
+claude-code
+cline
+codex
+copilot
+crush
+cursor
+cursor-agent
+devin
+devin-cli
+droid
+gemini
+ghcs
+github-copilot
+goose
+grok
+grok-build
+hermes
+hermes-agent
+kilo
+kilo-code
+kimi
+kimi-code
+kiro
+kiro-cli
+letta
+letta-code
+maki
+mastra-code
+mastracode
+muse
+muse-cli
+muse-code
+omp
+open-code
+opencode
+opencode2
+pi
+prime-agent
+qoder
+qodercli
+qoderclicn
+qodercn
+qwen
+qwen-code
+com.docker.cli
+container
+docker
+nerdctl
+podman
+sbx

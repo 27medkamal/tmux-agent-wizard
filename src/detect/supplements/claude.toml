@@ -1,0 +1,147 @@
+# taw's own detection rules (beyond herdr's), appended by the loader after manifest precedence.
+# Not a manifest: no `id`/`version` header, only `[[rules]]` — see
+# `LoadedManifest::append_supplement` in src/detect/engine.rs. herdr's vendored
+# manifests (src/detect/manifests/*.toml) are never edited to carry these.
+#
+# `taw_stop_hooks_working`: a Claude turn running its Stop hooks after the
+# agent's own reply is still working, not idle or done — an idle/done verdict there
+# is the false notification this project exists to avoid. `live_turn_working` cannot
+# see it: its status line nests a second aside inside the first, e.g. "Mustering…
+# (running stop hooks… 1/2 · 6s · ↓ 4 tokens)", and that bundled rule's
+# `.*…(?:\s+\(\d+[smh]…)` clause binds greedily to the *last* ellipsis, then to the
+# first on backtrack, and neither position is immediately followed by `(<digits><unit>`
+# — the parenthetical text sits in the way at both. `contains` sidesteps that
+# entirely by keying on the literal phrase instead of the timer shape.
+#
+# `taw_background_agents_working_asterisk`: herdr's `background_agents_working` with the
+# `✳` (U+2733) frame its glyph class lacks. herdr 2026.09.11.1 added that frame to
+# `live_turn_working` only, and the wait line has no `…` for that rule to match, so a
+# `✳ Waiting for N background agents to finish` frame read as the prompt box's idle —
+# `done` in the background while Claude was still waiting.
+#
+# `taw_subagent_running`: a Claude whose sub-agents outlive its own turn is still working.
+# Claude Code lists its sub-agents under the prompt box, `main` first and then one row each:
+#
+#   ⏺ main
+#   ◯ reviewer  Review the parser change...                                      idle
+#   ◯ builder   Build the release and run the suite...      4m 46s · ↓ 170.2k tokens
+#
+# When the main agent's turn ends, the prompt box is back at rest, herdr's `live_prompt_box`
+# reads it idle and the watcher writes `done`, with a toast, while the sub-agents are still
+# at it. A row that is still counting ends in its time, and its tokens once it has counted
+# any (the time as `12s`, `4m 46s` or `1h 3m 0s`, the tokens as `842`, `6.0k` or `1.2m`,
+# either arrow, then the messages waiting for the agent, ` · 2 queued`, when there are any).
+# A finished agent's row ends in `idle`, a waiting one's in `waiting` or `awaiting
+# approval`, and none of those is read.
+#  * Two alternatives. A row with its tokens is read wherever it stands under the box. A
+#    row with its time alone, an agent that has not counted a token yet, is read only in
+#    the list: Claude draws `main` at the head of the list whenever any row exists, so the
+#    second alternative starts at that row and goes down the rows under it, and a status
+#    line that ends in a duration anywhere else under the box never counts.
+#  * The region is the text under the last horizontal rule, the prompt box's bottom border.
+#    A footer quoted in the transcript, or pasted into the box, is above that rule and does
+#    not count. A dialog that Claude draws under the list has a rule of its own, which puts
+#    the rows above the region: it reads its own blocker rule. A capture with no horizontal
+#    rule at all is read whole.
+#  * Priority 960: under the 980 blockers and the turn rules (970 and 965), over the prompt
+#    box (950). The permission prompts (850 and 840) and the legacy blocker (300) sit under
+#    it, so it carries the `not` phrases of the other working rules here and the legacy
+#    blocker's own: a plan approval, an edit approval without the Esc footer, the review
+#    page of a questionnaire and the interview's skip are read by no other rule. A dialog
+#    with the list drawn under it stays blocked.
+#  * The bullet is `◯`, or `⏺` (`●` where Claude draws that instead) for the agent whose
+#    transcript is open. The row the cursor is on starts with `❯`, and a nested agent's
+#    with its branch.
+#  * Claude Code 2.1.284 keeps a finished agent's row on the list for about 30 seconds (a
+#    completed one that has a name shows `idle` at once), and for as long as its transcript
+#    is open, with its final time and tokens. Such a row reads the same as a running one,
+#    so the pane can read working after the last agent has finished, and `done` can come late.
+
+[[rules]]
+id = "taw_live_turn_working_dot"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^\s*\x{25CF}\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)']
+
+[[rules]]
+id = "taw_live_turn_working_vim_footer"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^\s*-- [A-Z]+ --\s+[⏸⏵].*esc to interrupt(?:\s|·|$)']
+
+[[rules]]
+id = "taw_background_shell_working"
+state = "working"
+priority = 965
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+any = [
+  { line_regex = ['· [1-9]\d* shells? still running\s*$'] },
+  { line_regex = ['^\s*(?:-- [A-Z]+ --\s+)?⏵⏵ .*· [1-9]\d* (?:shell|agent|task)s?\s*$'] },
+]
+# The legacy blocker's own gates as well, as `taw_subagent_running` carries them below: a
+# plan approval, an edit approval without the Esc footer, the review page of a
+# questionnaire and the interview's skip are read only by that rule, and this one is over it.
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["review your answers"] },
+  { contains = ["skip interview and plan immediately"] },
+]
+
+[[rules]]
+id = "taw_background_agents_working_asterisk"
+state = "working"
+priority = 965
+region = "last_non_empty_above_prompt_box"
+visible_working = true
+line_regex = ['^\s*\x{2733}\s+Waiting for [1-9]\d* background agents? to finish\s*$']
+
+[[rules]]
+id = "taw_stop_hooks_working"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+contains = ["running stop hooks"]
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+]
+
+[[rules]]
+id = "taw_subagent_running"
+state = "working"
+priority = 960
+region = "after_last_horizontal_rule"
+visible_working = true
+any = [
+  { line_regex = ['^\s*(?:\x{276F}\s+)?(?:[\x{251C}\x{2514}]\s+)?[\x{25EF}\x{23FA}\x{25CF}]\s+\S.*\s\d+[dhms](?:\s+\d+[dhms])*\s+·\s+[↓↑]\s+\d[\d.,]*[kKmMbB]?\s+tokens?(?:\s+·\s+\d+\s+queued)?\s*$'] },
+  { regex = ['(?m)^[ \t]*(?:\x{276F}[ \t]+)?[\x{25EF}\x{23FA}\x{25CF}][ \t]+main(?:[ \t]+\x{2191}[ \t]+\d+[ \t]+more)?[ \t]*\n(?:[ \t]*(?:\x{276F}[ \t]+)?(?:[\x{251C}\x{2514}][ \t]+)?[\x{25EF}\x{23FA}\x{25CF}][ \t]+[^\n]*\n)*[ \t]*(?:\x{276F}[ \t]+)?(?:[\x{251C}\x{2514}][ \t]+)?[\x{25EF}\x{23FA}\x{25CF}][ \t]+\S[^\n]*[ \t]\d+[dhms](?:[ \t]+\d+[dhms])*(?:[ \t]+·[ \t]+\d+[ \t]+queued)?[ \t]*$'] },
+]
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["review your answers"] },
+  { contains = ["skip interview and plan immediately"] },
+]

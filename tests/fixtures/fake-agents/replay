@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fake agent for the e2e "every bundled manifest" identity check. Draws a fixed
+# idle-looking screen for the agent id given as $1 (tests/fixtures/screens/<id>-idle.txt
+# when that fixture exists, else a generic prompt line) and sleeps until SIGTERM.
+#
+# Deliberately a POSIX sh script, never renamed or exec'd by its own name: identity for
+# a pane running this must come entirely from the pane's @agent_kind_hint option (set by
+# the harness before this runs), never from this script's own name or interpreter --
+# see tests/e2e/README.md and detect::identify's kind_hint precedence
+# (src/detect/identity.rs). #{pane_current_command} reads "sh" here, which names no
+# bundled manifest, so a test that passed by name-matching instead of the hint would be
+# testing nothing.
+here="$(cd "$(dirname "$0")" && pwd)"
+screens="$here/../screens"
+id="${1:-unknown}"
+fixture="$screens/$id-idle.txt"
+
+if [ -f "$fixture" ]; then
+  printf '\033[2J\033[H'
+  cat "$fixture"
+else
+  printf '\033[2J\033[H%s> \n' "$id"
+fi
+
+trap 'exit 0' TERM INT
+while :; do sleep 0.2; done

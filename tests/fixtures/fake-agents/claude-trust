@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Fake Claude Code that starts at its folder trust question, as a real one does in a folder it has
+# not been told to trust. Named `claude` by the wrapper a test puts on the pane's PATH.
+# Renders: the trust dialog -> (on SIGUSR1, the question answered) idle -> (SIGUSR1) working ->
+# (SIGUSR1) idle, and so on. Emits OSC 2 titles like the real thing. Never exits until SIGTERM.
+# The dialog is claude-2.1.286-trust-folder.txt, laid out from the strings Claude Code 2.1.286 draws
+# it with (its TrustDialog: "Accessing workspace:", the safety question, "No, exit" focused first,
+# "Yes, I trust this folder", the enter and escape chords), not a capture.
+here="$(cd "$(dirname "$0")" && pwd)"
+screens="$here/../screens"
+draw() { printf '\033[2J\033[H'; cat "$screens/$1"; }
+title() { printf '\033]2;%s\007' "$1"; }
+state=trust
+render() {
+  case "$state" in
+    trust)   title "✳ Claude Code"; draw claude-2.1.286-trust-folder.txt ;;
+    idle)    title "✳ fake task";  draw claude-idle.txt ;;
+    working) title "✻ fake task";  draw claude-2.1.227-working.txt ;;
+  esac
+}
+trap 'case "$state" in idle) state=working ;; *) state=idle ;; esac; render' USR1
+trap 'exit 0' TERM INT
+render
+while :; do sleep 0.2; done

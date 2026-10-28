@@ -1,0 +1,10 @@
+⏺ Both agents are on it. I will report when they finish.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  -- INSERT -- ⏵⏵ auto mode on · 1 shell · ← for agents
+
+  ⏺ main
+  ◯ reviewer   Review the parser change and report anything that loo...                       idle
+  ◯ builder    Build the release and run the test suite before the r...                       idle

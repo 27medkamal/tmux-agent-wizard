@@ -1,0 +1,14 @@
+# Tools required to build and test tmux-agent-wizard. Run `mise install` once.
+[tools]
+rust = "1.95.0"        # `taw` binary (cargo build --release)
+tmux = "3.6b"          # runtime floor is 3.2; tests run against this version
+shellcheck = "0.11.0"  # scripts/check.sh
+bats = "1.11.0"        # tests/bats
+
+[tasks.build]
+run = "cargo build --release && mkdir -p bin && ln -sf ../target/release/taw bin/taw"
+description = "Build taw and link it into bin/ for the tmux plugin"
+
+[tasks.check]
+run = "scripts/check.sh"
+description = "fmt, clippy (all targets), cargo test, shellcheck, bats"

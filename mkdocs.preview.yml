@@ -1,0 +1,9 @@
+# A preview of the site that opens from disk: `open site-preview/index.html`.
+# Pages are files (install.html), not folders (install/), so every link and style resolves
+# without a server. The live build is mkdocs.yml and keeps directory URLs.
+INHERIT: mkdocs.yml
+use_directory_urls: false
+site_dir: site-preview
+plugins:
+  - search
+  - offline

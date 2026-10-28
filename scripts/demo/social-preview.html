@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>taw social preview</title>
+<style>
+  html, body { margin: 0; width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    background: radial-gradient(1200px 640px at 0% 0%, #313244 0%, #1e1e2e 55%, #181825 100%);
+    color: #cdd6f4;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+    display: grid; grid-template-columns: 410px 1fr; gap: 34px;
+    padding: 0 28px 0 56px; box-sizing: border-box; align-items: center;
+  }
+  .text { display: flex; flex-direction: column; justify-content: center; }
+  .name { font: 600 22px ui-monospace, Menlo, monospace; color: #89b4fa; letter-spacing: 0.5px; }
+  h1 { font-size: 52px; line-height: 1.02; margin: 18px 0 22px; color: #f5e0dc; letter-spacing: -1.5px; }
+  p { font-size: 24px; line-height: 1.35; margin: 0 0 28px; color: #bac2de; }
+  .facts { white-space: nowrap; font: 500 15px ui-monospace, Menlo, monospace; color: #a6adc8; }
+  .facts b { color: #fab387; font-weight: 600; }
+  .shot {
+    align-self: center; justify-self: end;
+    border-radius: 12px; overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px #45475a;
+    width: 752px;
+  }
+  .shot img { display: block; width: 100%; }
+</style>
+</head>
+<body>
+  <div class="text">
+    <div class="name">tmux-agent-wizard</div>
+    <h1>Every agent. One key. Your tmux.</h1>
+    <p>See which coding agent needs you and get there in one key, inside the tmux you already run.</p>
+    <div class="facts"><b>22</b> agents · <b>3</b> keys · no central daemon · MIT</div>
+  </div>
+  <div class="shot"><img src="popup-frame.png" alt=""></div>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# The ssh programs the test net (scripts/agent-net.sh) puts a refusing stub first on PATH for, beside the
+# agents and container runtimes of scripts/agent-net-names.txt: taw logs in to other machines by ssh
+# (src/machine/ssh.rs), and a test that reached a real one would log in to a real machine. One name a
+# line. tests/ssh_net.rs holds this list to exactly these five names. A test that wants a machine runs
+# taw with TAW_SSH_BIN naming a stand-in (tests/common/machine.rs), never one of these.
+ssh
+scp
+sftp
+ssh-add
+ssh-agent

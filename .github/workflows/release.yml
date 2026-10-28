@@ -1,0 +1,157 @@
+# Builds taw for macOS and Linux (Intel and ARM) and publishes the release that
+# `scripts/install.sh --download` fetches from. See docs/RELEASING.md.
+#
+# Three things start it:
+#   - a push to master that changes Cargo.toml: a merged version bump. The `check` job
+#     reads the version and stops the run when the tag v<version> is already on the
+#     remote, so a Cargo.toml change that keeps the version builds nothing;
+#   - a push of a tag v*, made by hand: the tag must match Cargo.toml's version, and the
+#     release is published for it;
+#   - the Run button (workflow_dispatch) on master: the same as a version bump push.
+#
+# The release job creates the release and, when it is new, its tag at the commit that
+# was built. A tag made with the workflow's own token starts no other workflow run
+# (GitHub's rule), so the tag it makes does not start a second run of this one.
+# The tag appears only after every target has built, so a failed build leaves no tag
+# and the run can simply be started again.
+name: release
+
+on:
+  push:
+    branches: [master]
+    paths: ["Cargo.toml"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release at a time; a run that is waiting is not cancelled by a running one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: what to release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.what.outputs.tag }}
+      build: ${{ steps.what.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version and look for its tag
+        id: what
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ -z "$version" ]; then
+            echo "no version found in Cargo.toml" >&2
+            exit 1
+          fi
+          tag="v$version"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            # A tag made by hand: it must name Cargo.toml's version. The tag exists
+            # already, so the question is whether its release does: a run that came
+            # after the release was made (the master push of the same commit, say)
+            # has nothing to build.
+            if [ "$tag" != "$GITHUB_REF_NAME" ]; then
+              echo "tag $GITHUB_REF_NAME does not match Cargo.toml version $version" >&2
+              exit 1
+            fi
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "release $tag already exists, so nothing is released"
+              build=false
+            else
+              build=true
+            fi
+          else
+            if [ "$GITHUB_REF" != refs/heads/master ]; then
+              echo "a release is made from master, not from $GITHUB_REF" >&2
+              exit 1
+            fi
+            # A branch push or the Run button: release only a version with no tag yet.
+            # The checkout's token authenticates the look at the remote.
+            found=$(git ls-remote --tags origin "refs/tags/$tag")
+            if [ -n "$found" ]; then
+              echo "tag $tag already exists, so nothing is released"
+              build=false
+            else
+              echo "tag $tag does not exist yet, so it is released"
+              build=true
+            fi
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-14
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain (the version mise.toml pins)
+        run: |
+          rust=$(sed -n 's/^rust = "\([^"]*\)".*$/\1/p' mise.toml | head -n 1)
+          if [ -z "$rust" ]; then
+            echo "mise.toml pins no rust version" >&2
+            exit 1
+          fi
+          rustup toolchain install "$rust" --profile minimal --target ${{ matrix.target }}
+          rustup default "$rust"
+
+      - name: musl C toolchain
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build and package
+        run: scripts/package-release.sh ${{ matrix.target }} dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taw-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    name: publish ${{ needs.check.outputs.tag }}
+    needs: [check, build]
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          # A run started again after the release was made has nothing left to do.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists, so nothing is published"
+            exit 0
+          fi
+          # --target makes the tag at the built commit when the tag is new; for a tag
+          # made by hand the tag exists and names that commit already.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "$TAG" --generate-notes

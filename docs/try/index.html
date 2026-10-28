@@ -54,12 +54,15 @@
 
   .controls { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; align-items: baseline; font-size: 15px; margin: 12px 0 4px; }
   .controls > span { color: var(--muted); }
-  .controls div { display: flex; flex-wrap: wrap; gap: 6px; }
-  .controls button, .controls label { font: 14px var(--serif); color: var(--ink); background: #eef0f4; border: 1px solid var(--rule);
-    border-radius: 3px; padding: 3px 9px; cursor: pointer; }
-  .controls button:hover { border-color: var(--ink); }
-  .controls label input { vertical-align: -1px; margin: 0 4px 0 0; }
-  .controls label.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .controls div { display: flex; flex-wrap: wrap; gap: 2px 18px; }
+  .controls button, .controls label { position: relative; font: 14px/1.5 var(--serif); color: var(--muted); background: none; border: 0;
+    padding: 0; cursor: pointer; }
+  .controls label input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; }
+  .controls label.on { color: var(--ink); text-decoration: underline 2px var(--arrow); text-underline-offset: 5px; }
+  .controls button { color: var(--link); }
+  .controls label:hover, .controls button:hover { color: var(--ink); }
+  .controls label:focus-within, .controls button:focus-visible { outline: 2px solid var(--link); outline-offset: 3px; }
+  .controls label:has(> input[name=layout][value=flat]) { margin-right: 10px; }
   .controls label.on kbd { color: var(--ink); }
   .naming input[type=text] { font: 14px var(--mono); padding: 4px 8px; border: 1px solid var(--rule); border-radius: 3px; width: 34ch; background: #fff; color: var(--ink); }
   .naming td.mono { white-space: nowrap; }
@@ -106,7 +109,7 @@
   .ctl-sec { margin: 18px 0 0; }
   .ctl-head { margin: 0 0 6px; padding: 0 0 4px; border-bottom: 1px solid var(--rule); font: 700 15px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink); }
   .controls .ctl-body { display: block; }
-  .controls .acts > div { display: flex; flex-wrap: wrap; gap: 6px; }
+  .controls .acts > div { display: flex; flex-wrap: wrap; gap: 2px 18px; }
   h1.start .cta { color: var(--arrow); }
   .cta-arrow { display: inline-block; width: 64px; height: 40px; margin: 0 0 -18px 10px; overflow: visible; }
   .cta-arrow path { fill: none; stroke: var(--arrow); stroke-width: 4; }
@@ -127,16 +130,12 @@
   html.embed .term-wrap { margin-top: 0; padding-bottom: 52px; }
   html.embed .qlabel { font-size: 18px; }
   html.embed .pagenote { font-size: 13px; }
-  html.embed .controls { display: block; margin: 0; font-size: 13px; }
-  html.embed .ctl-sec { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 0; }
-  html.embed .ctl-head { flex: 0 0 150px; margin: 0; padding: 0 0 0 8px; border: 0; border-left: 3px solid var(--arrow); font-size: 12px; }
-  html.embed .ctl-body { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
-  html.embed .controls .grp { margin: 0; gap: 6px; }
-  html.embed .controls .grp > div { flex: 0 1 auto; }
-  html.embed .controls .grp > span { flex: 0 0 auto; font-size: 12px; }
-  html.embed .controls div { gap: 4px; }
-  html.embed .controls button, html.embed .controls label { font-size: 12.5px; padding: 1px 7px; background: rgba(127, 127, 140, .16); border-color: rgba(127, 127, 140, .5); color: var(--ink); }
-  html.embed .controls label.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  html.embed .controls { display: grid; grid-template-columns: max-content 1fr; gap: 5px 24px; align-items: baseline; margin: 4px 0 0; }
+  html.embed .ctl-sec, html.embed .ctl-body, html.embed .controls .grp { display: contents; }
+  html.embed .ctl-sec:first-child .ctl-head { display: none; }
+  html.embed .ctl-head, html.embed .controls .grp > span { margin: 0; padding: 0; border: 0; font: 13px/1.5 var(--serif); letter-spacing: 0; text-transform: none; color: var(--muted); }
+  html.embed .controls .grp > div { display: flex; flex-wrap: wrap; gap: 2px 18px; }
+  html.embed .controls button, html.embed .controls label { font-size: 13px; }
   html.embed.dark { --ink: #e8eaf2; --paper: #14161e; --muted: #a9afc2; --rule: #4a5063; --link: #8fb1ff; --arrow: #ffa94d; color-scheme: dark; }
   html.embed:not(.dark) { --ink: #1c2130; --paper: #f4f6fa; --muted: #4d566a; color-scheme: light; }
   @media (max-width: 699px) {

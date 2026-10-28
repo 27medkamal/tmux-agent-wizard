@@ -22,7 +22,7 @@ use super::{Feed, Record};
 use crate::config::ToastDelivery;
 use crate::machine::ssh::{self, Mode};
 use crate::machine::wire::{Down, Toast};
-use crate::machine::{files, this_machine_word, words};
+use crate::machine::{Machine, files, this_machine_word, words};
 use crate::notify::{self, Class, Forwarded, Notification, NotifiedAgent, SoundChoice};
 use crate::paths::Paths;
 use crate::tui::app::App;
@@ -87,6 +87,21 @@ impl Toaster {
     /// at the last look: one that was is not said to have dropped off.
     pub(super) fn forget_live(&mut self) {
         self.live.clear();
+    }
+
+    /// The list of machines changed: what is kept by a machine's place moves to its new place (`now_of` says
+    /// where each machine of the old list went, `None` for one that is gone), and nothing stays of a machine that
+    /// is no longer listed.
+    pub(super) fn machines_changed(&mut self, now_of: &[Option<usize>], machines: &[Machine]) {
+        let mut live = vec![false; machines.len()];
+        for (old, now) in now_of.iter().enumerate() {
+            if let Some(now) = now {
+                live[*now] = self.live.get(old).copied().unwrap_or(false);
+            }
+        }
+        self.live = live;
+        self.had_sessions
+            .retain(|name| machines.iter().any(|m| &m.name == name));
     }
 
     /// The words for each machine of `snap` that listed a session when this was last asked and lists none now
@@ -1864,6 +1879,42 @@ mod tests {
             .announce(1, toast_of("claude", "after"), Left::default());
         feed.announce_toasts();
         assert!(top_of(&mut feed, &cfg).unwrap().ends_with("after"));
+    }
+
+    /// What the toaster keeps by a machine's place (was it live, did it list a session) follows the machine to
+    /// its place in the new list; a machine that is gone leaves nothing behind, and one that is new starts as not
+    /// live.
+    #[test]
+    fn what_is_kept_by_a_machines_place_follows_the_machine_to_its_new_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut toaster = Toaster::new(&paths_in(dir.path()), Path::new("/nonexistent/taw"));
+        toaster.live = vec![true, false, true];
+        toaster.had_sessions = ["a", "b", "c"].map(String::from).into();
+
+        // a is gone, b moved to the second place, c to the first: the list is now c, b.
+        toaster.machines_changed(
+            &[None, Some(1), Some(0)],
+            &[machine("c", None), machine("b", None)],
+        );
+
+        assert_eq!(toaster.live, vec![true, false], "c was live and b was not");
+        assert_eq!(
+            toaster.had_sessions,
+            ["b", "c"].map(String::from).into(),
+            "a is no longer listed"
+        );
+
+        // A machine that is new has no place in the old list: it is not live, and the others stay where they went.
+        toaster.machines_changed(
+            &[Some(1), Some(0)],
+            &[machine("b", None), machine("c", None), machine("d", None)],
+        );
+
+        assert_eq!(
+            toaster.live,
+            vec![false, true, false],
+            "d is new, so not live"
+        );
     }
 }
 

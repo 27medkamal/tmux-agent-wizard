@@ -562,7 +562,7 @@ fn the_docs_add_machines_with_a_command_and_each_old_limit_sits_where_it_is_met(
         "`taw machine remove pi`",
         "keeps every comment and line of the file as it was",
         "It refuses a name that is already listed, and changes nothing when it refuses",
-        "The app shows a change the next time it opens",
+        "A running app picks a change up within a couple of seconds, with no restart",
         "Keep taw at the same version on every machine: a machine whose taw is older can drop a toast forwarded through it without a word",
         "Nothing is copied between machines: the app lists and shows, and taw on each machine does the work there",
     ] {

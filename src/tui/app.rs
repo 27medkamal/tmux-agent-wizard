@@ -189,10 +189,12 @@ enum RowId {
     Worktree(String),
     /// A directory the filter lists, by its path in tilde form.
     Project(String),
-    /// A machine's header. The cursor is never on one, but the rows are all compared by it.
-    Machine(Option<usize>),
-    /// The row that starts a session on a machine that has none, by the machine's place in the list.
-    NoSession(usize),
+    /// A machine's header, by the machine's name (`None` for this machine's own rows): the cursor is never on
+    /// one, but the rows are all compared by it. Not by place, which moves when `[machines]` is edited.
+    Machine(Option<String>),
+    /// The row that starts a session on a machine that has none, by the machine's name: its place in the list
+    /// moves when `[machines]` is edited while the app runs, and the cursor must stay on that machine's row.
+    NoSession(String),
 }
 
 /// How the app child's screen ends, which is what the supervisor's terminal does next. Only the
@@ -1047,9 +1049,19 @@ impl<'a> App<'a> {
                     .map(|project| project.path.clone())
                     .unwrap_or_default(),
             ),
-            Row::Machine(machine) => RowId::Machine(*machine),
-            Row::NoSession(machine) => RowId::NoSession(*machine),
+            Row::Machine(machine) => RowId::Machine(machine.map(|at| self.machine_name(at))),
+            Row::NoSession(machine) => RowId::NoSession(self.machine_name(*machine)),
         }
+    }
+
+    /// The name of the machine at place `at` in the snapshot's list; empty when it has none, which matches no
+    /// machine.
+    fn machine_name(&self, at: usize) -> String {
+        self.snap
+            .machines
+            .get(at)
+            .map(|machine| machine.name.clone())
+            .unwrap_or_default()
     }
 
     /// The cursor row's session, when the snapshot still has it.

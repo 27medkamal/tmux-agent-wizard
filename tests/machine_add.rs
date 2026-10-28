@@ -50,7 +50,7 @@ fn a_machine_is_added_listed_and_removed_with_the_file_kept_as_it_was() {
     assert_eq!(got["result"]["type"], "machine_added", "{stdout}");
     assert_eq!(got["result"]["machine"]["name"], "studio", "{stdout}");
     assert_eq!(
-        got["result"]["note"], "The app shows this the next time it opens.",
+        got["result"]["note"], "A running app picks this up within a couple of seconds.",
         "{stdout}"
     );
     assert_eq!(

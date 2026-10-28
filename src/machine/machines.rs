@@ -7,7 +7,7 @@
 //! is quiet. Any other app only reads the files, and tries the lock once a second: when the keeper goes
 //! it takes over.
 
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use super::conn::{self, ConnCtx, ConnEvent, ConnHandle};
@@ -104,7 +104,15 @@ enum Role {
     Keeper {
         /// Dropped first: the connections end before the lock is let go.
         handles: Vec<ConnHandle>,
+        /// The number each connection was started with, which its events carry: a connection of a machine
+        /// that stays when the list changes keeps its number while its place moves, and the number of one that
+        /// was removed names no machine, so what it says late is dropped.
+        ids: Vec<usize>,
+        /// The number the next connection started gets.
+        next_id: usize,
         events: Receiver<ConnEvent>,
+        /// Kept to start the connections of machines added while the app runs.
+        tx: Sender<ConnEvent>,
         _lock: Keeper,
         /// Says this app is still there, so that its lease on this machine counts only while it runs: an app
         /// started after it ends takes the lease at once, and this app's own clean end gives it up
@@ -239,8 +247,11 @@ impl Machines {
             slot.dirty = true;
         }
         self.role = Role::Keeper {
+            ids: (0..handles.len()).collect(),
+            next_id: handles.len(),
             handles,
             events,
+            tx,
             _lock: lock,
             alive: files::take_holder_lock(&self.ctx.paths, &self.ctx.holder),
             beat: Instant::now(),
@@ -286,9 +297,9 @@ impl Machines {
         }
         let mut changed = false;
         let mut received = Vec::new();
-        if let Role::Keeper { events, .. } = &self.role {
+        if let Role::Keeper { events, ids, .. } = &self.role {
             while let Ok(event) = events.try_recv() {
-                received.push(event);
+                received.extend(at_its_place(ids, event));
             }
         }
         for event in received {
@@ -437,6 +448,106 @@ impl Machines {
         changed
     }
 
+    /// The machines are now `machines`: what the app knows of a machine whose entry is the same stays with it,
+    /// and its connection goes on, under the same lock; a machine that is gone has its connection ended and
+    /// nothing kept for it; a machine that is new connects (as a follower does not) and starts from its file.
+    /// A hub with no machines before starts as at start; one with none now ends as an idle hub does, except a keeper,
+    /// which keeps its lock.
+    /// Returns, for each machine of the list as it was, its place in the new one (`None` when it is gone), for
+    /// whoever else keeps anything by a machine's place.
+    pub fn replace(&mut self, machines: Vec<Machine>) -> Vec<Option<usize>> {
+        let now_of: Vec<Option<usize>> = self
+            .machines
+            .iter()
+            .map(|old| machines.iter().position(|m| m == old))
+            .collect();
+        // A keeper whose list becomes empty keeps its lock (with no connection, and nothing written) until the app
+        // ends: letting it go would let a follower whose own look at the config has not settled yet take it
+        // and start ssh to the machines just removed. The lock is cheap to hold, and the next list starts from
+        // it. Every other app, with nothing to keep or follow, ends as an idle hub does.
+        let keeps = matches!(self.role, Role::Keeper { .. });
+        if matches!(self.role, Role::Idle) || (machines.is_empty() && !keeps) {
+            // The old role ends when it is replaced.
+            let ctx = self.ctx.clone();
+            *self = Machines::start(ctx, machines);
+            return now_of;
+        }
+        let was_at = |m: &Machine| self.machines.iter().position(|old| old == m);
+        let now_ms = files::now_ms();
+        let mut old_slots: Vec<Option<Slot>> = std::mem::take(&mut self.slots)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut old_walks: Vec<Option<wire::WalkLine>> = std::mem::take(&mut self.walks);
+        let mut slots = Vec::with_capacity(machines.len());
+        let mut walks = Vec::with_capacity(machines.len());
+        let mut kept = Vec::with_capacity(machines.len());
+        for m in &machines {
+            let old = was_at(m).filter(|at| old_slots.get(*at).is_some_and(Option::is_some));
+            kept.push(old);
+            match old {
+                Some(at) => {
+                    slots.push(old_slots[at].take().expect("checked just above"));
+                    walks.push(old_walks.get_mut(at).and_then(Option::take));
+                }
+                None => {
+                    let mut slot = Slot::from_file(
+                        &m.name,
+                        files::read(&self.ctx.paths, &m.name).as_ref(),
+                        now_ms,
+                    );
+                    slot.dirty = true;
+                    slots.push(slot);
+                    walks.push(None);
+                }
+            }
+        }
+        if let Role::Keeper {
+            handles,
+            ids,
+            next_id,
+            tx,
+            ..
+        } = &mut self.role
+        {
+            let mut old_handles: Vec<Option<ConnHandle>> = handles.drain(..).map(Some).collect();
+            let old_ids = std::mem::take(ids);
+            for ((m, slot), old) in machines.iter().zip(&slots).zip(&kept) {
+                let handle = old.and_then(|at| old_handles.get_mut(at).and_then(Option::take));
+                match (handle, old) {
+                    (Some(handle), Some(at)) => {
+                        handles.push(handle);
+                        ids.push(old_ids[*at]);
+                    }
+                    _ => {
+                        let id = *next_id;
+                        *next_id += 1;
+                        handles.push(conn::spawn_since(
+                            self.ctx.clone(),
+                            id,
+                            m.clone(),
+                            tx.clone(),
+                            slot.view.last_seen.unwrap_or(0),
+                        ));
+                        ids.push(id);
+                    }
+                }
+            }
+            // What is left of the old connections is a removed machine's: each is told to end first, so that they
+            // end together, and then let go (each can take seconds, and this is the UI thread).
+            for handle in old_handles.iter().flatten() {
+                handle.request_stop();
+            }
+            drop(old_handles);
+        }
+        remap_places(&mut self.toasts, &now_of);
+        remap_places(&mut self.lefts, &now_of);
+        self.machines = machines;
+        self.slots = slots;
+        self.walks = walks;
+        now_of
+    }
+
     /// What the list knows of each machine, in the config's order. A machine counts as live only while
     /// it is connected and heard from within the last 15 seconds.
     pub fn views(&self) -> Vec<MachineView> {
@@ -477,6 +588,13 @@ impl Machines {
     /// The attaches that ended on a machine since the last call.
     pub fn lefts(&mut self) -> Vec<(usize, Left)> {
         std::mem::take(&mut self.lefts)
+    }
+
+    /// This Mac's tmux server is the one with `word` from now on. Only what is connected later is told of it
+    /// (a connection that runs keeps the word it started with), so it is for a hub with no machines: the
+    /// ones that a later [`Machines::replace`] brings in compare themselves with it.
+    pub fn know_server(&mut self, word: &str) {
+        self.ctx.local_server = Some(word.to_string()).filter(|word| !word.is_empty());
     }
 
     /// The list was shown: every machine that waits tries now.
@@ -561,6 +679,24 @@ impl Machines {
     fn cannot_keep_was_said(&self) -> bool {
         matches!(&self.role, Role::Follower { cannot_keep, .. } if cannot_keep.warned)
     }
+}
+
+/// An event of a connection, told of the machine's place in the list now: a connection says the number it was
+/// started with (`ids`, one for each place), which is not its place once the list has changed. `None` for an
+/// event of a connection that was removed, whose number names no machine.
+fn at_its_place(ids: &[usize], mut event: ConnEvent) -> Option<ConnEvent> {
+    let at = ids.iter().position(|id| *id == event.machine())?;
+    event.set_machine(at);
+    Some(event)
+}
+
+/// What was announced for machines, moved to the places they have now; what was for a machine that is gone is
+/// dropped.
+fn remap_places<T>(held: &mut Vec<(usize, T)>, now_of: &[Option<usize>]) {
+    *held = std::mem::take(held)
+        .into_iter()
+        .filter_map(|(at, item)| Some((now_of.get(at).copied().flatten()?, item)))
+        .collect();
 }
 
 /// A machine is live to the keeper while it is connected and heard from within [`files::LIVE_WITHIN_MS`].
@@ -739,5 +875,129 @@ mod tests {
         assert!(!cannot.after_a_failed_try(false));
         assert!(!cannot.after_a_failed_try(false));
         assert!(cannot.after_a_failed_try(false));
+    }
+
+    fn entry(name: &str) -> Machine {
+        Machine {
+            name: name.to_string(),
+            ssh: name.to_string(),
+            taw: None,
+        }
+    }
+
+    fn left_of(pane: &str) -> Left {
+        Left {
+            pane: pane.to_string(),
+            ..Left::default()
+        }
+    }
+
+    fn walk_of(you: &str) -> Vec<String> {
+        vec![you.to_string()]
+    }
+
+    #[test]
+    fn a_new_list_moves_what_is_kept_by_place_and_drops_what_is_of_a_machine_that_is_gone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hub = Machines::follow(
+            paths_ctx(tmp.path()),
+            vec![entry("a"), entry("b"), entry("c")],
+        );
+        for (at, you) in ["a", "b", "c"].iter().enumerate() {
+            hub.send_walk(at, you, &walk_of(you));
+        }
+        hub.announce(1, Toast::default(), left_of("%b"));
+        hub.announce(2, Toast::default(), left_of("%c"));
+
+        let now_of = hub.replace(vec![entry("c"), entry("d"), entry("a")]);
+
+        assert_eq!(now_of, [Some(2), None, Some(0)]);
+        let names: Vec<String> = hub.views().into_iter().map(|view| view.name).collect();
+        assert_eq!(names, ["c", "d", "a"]);
+        assert_eq!(hub.walk_said(0).map(|w| w.you.as_str()), Some("c"));
+        assert!(hub.walk_said(1).is_none(), "the new machine has heard none");
+        assert_eq!(hub.walk_said(2).map(|w| w.you.as_str()), Some("a"));
+        assert!(hub.walk_said(3).is_none(), "nothing past the list");
+        assert_eq!(
+            hub.lefts()
+                .iter()
+                .map(|(at, l)| (*at, l.pane.clone()))
+                .collect::<Vec<_>>(),
+            [(0, "%c".to_string())],
+            "b's end is gone, c's is at its new place"
+        );
+        assert_eq!(hub.toasts().len(), 1, "b's toast is gone, c's stays");
+    }
+
+    #[test]
+    fn a_list_that_empties_ends_as_an_idle_hub_and_one_that_fills_starts_as_at_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut hub = Machines::follow(paths_ctx(tmp.path()), vec![entry("a")]);
+        assert!(hub.replace(Vec::new()).iter().eq([None].iter()));
+        assert!(hub.views().is_empty());
+        assert!(matches!(hub.role, Role::Idle));
+        hub.replace(vec![entry("a"), entry("b")]);
+        assert_eq!(hub.views().len(), 2);
+        assert!(!matches!(hub.role, Role::Idle), "started again");
+        // Dropped before the temporary folder goes: a keeper's connections end first.
+        drop(hub);
+    }
+
+    /// The keeper lock stays with the app through a change of the list, and through a change to no machines:
+    /// a follower whose own look at the config has not settled must not take it and start ssh to the machines
+    /// just removed.
+    #[test]
+    fn a_keeper_keeps_its_lock_through_a_new_list_and_an_empty_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = paths_ctx(tmp.path());
+        let mut hub = Machines::start(ctx.clone(), vec![entry("a"), entry("b")]);
+        assert!(matches!(hub.role, Role::Keeper { .. }), "the keeper");
+        assert!(files::take_keeper(&ctx.paths).is_none(), "held at first");
+
+        hub.replace(vec![entry("b"), entry("c")]);
+        assert!(
+            files::take_keeper(&ctx.paths).is_none(),
+            "held after a change"
+        );
+
+        hub.replace(Vec::new());
+        assert!(
+            files::take_keeper(&ctx.paths).is_none(),
+            "held with no machines: nobody else may take it"
+        );
+        match &hub.role {
+            Role::Keeper { handles, ids, .. } => {
+                assert!(handles.is_empty(), "no connection is left");
+                assert!(ids.is_empty());
+            }
+            _ => panic!("the role changed"),
+        }
+        assert!(hub.views().is_empty());
+
+        hub.replace(vec![entry("d")]);
+        assert!(
+            files::take_keeper(&ctx.paths).is_none(),
+            "held when it fills"
+        );
+        assert_eq!(hub.views().len(), 1);
+        drop(hub);
+    }
+
+    /// A connection says the number it was started with, and an event is told the place of its machine now:
+    /// with `a` removed from [a, b, c], b (started as 1) is at 0 and c (started as 2) at 1, and what a removed
+    /// connection says late names none.
+    #[test]
+    fn an_event_lands_at_its_machines_place_now_and_a_removed_ones_is_dropped() {
+        let ids = [1, 2];
+        let from = |machine: usize| ConnEvent::Left {
+            machine,
+            left: left_of("%x"),
+        };
+        assert_eq!(at_its_place(&ids, from(1)).map(|e| e.machine()), Some(0));
+        assert_eq!(at_its_place(&ids, from(2)).map(|e| e.machine()), Some(1));
+        assert!(at_its_place(&ids, from(0)).is_none(), "a is gone");
+        assert!(at_its_place(&ids, from(7)).is_none(), "nothing like it");
+        // Reordered: c, a (started as 2 and 0).
+        assert_eq!(at_its_place(&[2, 0], from(0)).map(|e| e.machine()), Some(1));
     }
 }

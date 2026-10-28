@@ -244,6 +244,82 @@ pub fn load_machines(paths: &Paths) -> Result<Vec<Machine>, MachinesDoubt> {
     }
 }
 
+/// What one look at the config file saw: which file it is (its inode), when it was last changed, how long it is
+/// and when its status last changed, or `None` when it is not there (or cannot be looked at). The inode and the
+/// change time are there because a file renamed into place from a copy that kept its modified time and length
+/// (`cp -p`, `mv config.toml.bak config.toml`) is a change too, and no tool sets a change time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stamp(Option<Seen>);
+
+/// The parts of a look at a file that are not nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Seen {
+    modified: std::time::SystemTime,
+    len: u64,
+    inode: u64,
+    changed: (i64, i64),
+}
+
+/// One look at the config file: a single metadata call, which follows a link.
+pub fn stamp_of(paths: &Paths) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    Stamp(std::fs::metadata(&paths.config_file).ok().and_then(|meta| {
+        Some(Seen {
+            modified: meta.modified().ok()?,
+            len: meta.len(),
+            inode: meta.ino(),
+            changed: (meta.ctime(), meta.ctime_nsec()),
+        })
+    }))
+}
+
+/// Notices that the config file changed, and waits for the change to settle: a file an editor is still writing
+/// is not read until two looks in a row find it the same.
+#[derive(Debug)]
+pub struct ConfigWatch {
+    /// The look at the file the machines now held were read from.
+    read: Stamp,
+    /// What `read` was before the last settled look took its place, for [`ConfigWatch::read_was_of`].
+    before: Stamp,
+    /// The look before this one.
+    last: Stamp,
+}
+
+impl ConfigWatch {
+    /// `first` is the look made before the machines were first read.
+    pub fn new(first: Stamp) -> ConfigWatch {
+        ConfigWatch {
+            read: first,
+            before: first,
+            last: first,
+        }
+    }
+
+    /// Takes in a look. `true` once for each change, when this look finds the file as the one before did: the
+    /// file is to be read now.
+    pub fn settled(&mut self, look: Stamp) -> bool {
+        let settled = look != self.read && look == self.last;
+        if settled {
+            self.before = self.read;
+            self.read = look;
+        }
+        self.last = look;
+        settled
+    }
+
+    /// Whether the file read just now was the settled one: `after` is a look made after the read. When it is not
+    /// (an editor began writing in between, and what was read may be half a file) the read is not to be used, and
+    /// the change counts as not yet read: it is read again once the file has settled again.
+    pub fn read_was_of(&mut self, after: Stamp) -> bool {
+        if after == self.read {
+            return true;
+        }
+        self.read = self.before;
+        self.last = after;
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,5 +668,112 @@ mod tests {
             load_machines(&paths),
             Err(MachinesDoubt::NotLoaded { .. })
         ));
+    }
+
+    #[test]
+    fn a_change_of_the_file_is_read_once_it_has_stayed_the_same_for_a_look() {
+        let at = |secs: u64, len: u64| {
+            Stamp(Some(Seen {
+                modified: std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                len,
+                inode: 7,
+                changed: (secs as i64, 0),
+            }))
+        };
+        let mut watch = ConfigWatch::new(at(1, 10));
+        assert!(!watch.settled(at(1, 10)), "nothing changed");
+        assert!(!watch.settled(at(2, 12)), "a change is not read at once");
+        assert!(
+            !watch.settled(at(3, 15)),
+            "a file still being written waits"
+        );
+        assert!(watch.settled(at(3, 15)), "the same twice in a row is read");
+        assert!(!watch.settled(at(3, 15)), "and only once");
+        assert!(
+            !watch.settled(Stamp(None)),
+            "a file that is gone waits one look"
+        );
+        assert!(watch.settled(Stamp(None)), "and is read as no machines");
+        assert!(
+            !watch.settled(at(1, 10)),
+            "a file back as it was first waits"
+        );
+        assert!(watch.settled(at(1, 10)), "and is read");
+    }
+
+    #[test]
+    fn the_look_at_the_file_sees_a_change_of_its_length_and_its_absence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted_at(tmp.path().join("config"), tmp.path().join("state"));
+        std::fs::create_dir_all(paths.config_file.parent().unwrap()).unwrap();
+        let none = stamp_of(&paths);
+        assert_eq!(none, Stamp(None));
+        std::fs::write(&paths.config_file, "a").unwrap();
+        let one = stamp_of(&paths);
+        assert_ne!(one, none);
+        std::fs::write(&paths.config_file, "ab").unwrap();
+        assert_ne!(stamp_of(&paths), one);
+        std::fs::remove_file(&paths.config_file).unwrap();
+        assert_eq!(stamp_of(&paths), none);
+    }
+
+    #[test]
+    fn a_file_renamed_into_place_with_its_old_time_and_length_is_a_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths = Paths::rooted_at(tmp.path().join("config"), tmp.path().join("state"));
+        std::fs::create_dir_all(paths.config_file.parent().unwrap()).unwrap();
+        std::fs::write(&paths.config_file, "a = 1\n").unwrap();
+        let before = stamp_of(&paths);
+        let modified = std::fs::metadata(&paths.config_file)
+            .unwrap()
+            .modified()
+            .unwrap();
+        // Another file of the same length, given the old modified time, renamed over the config.
+        let copy = tmp.path().join("config.toml.bak");
+        std::fs::write(&copy, "b = 2\n").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&copy)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        std::fs::rename(&copy, &paths.config_file).unwrap();
+        assert_ne!(
+            stamp_of(&paths),
+            before,
+            "a different file with the same modified time and length is noticed"
+        );
+    }
+
+    #[test]
+    fn a_read_made_while_the_file_was_changing_is_not_used_and_the_change_waits_to_settle_again() {
+        let at = |secs: u64, len: u64| {
+            Stamp(Some(Seen {
+                modified: std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+                len,
+                inode: 7,
+                changed: (secs as i64, 0),
+            }))
+        };
+        let mut watch = ConfigWatch::new(at(1, 10));
+        assert!(!watch.settled(at(2, 12)));
+        assert!(watch.settled(at(2, 12)), "settled: the file is read");
+        assert!(
+            !watch.read_was_of(at(2, 3)),
+            "the file changed during the read: it is not used"
+        );
+        assert!(
+            !watch.settled(at(2, 5)),
+            "the file still changing waits: the change counts as not yet read"
+        );
+        assert!(
+            watch.settled(at(2, 5)),
+            "and is read once it stays the same"
+        );
+        assert!(
+            watch.read_was_of(at(2, 5)),
+            "a read the file did not change under is used"
+        );
+        assert!(!watch.settled(at(2, 5)), "and nothing is left to read");
     }
 }

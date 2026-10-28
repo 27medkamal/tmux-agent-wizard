@@ -26,7 +26,7 @@ use super::{
     lend_through, machines, overlays, theme, view, zoxide_dirs,
 };
 use crate::config::Config;
-use crate::machine::config::load_machines;
+use crate::machine::config::{ConfigWatch, load_machines, stamp_of};
 use crate::machine::conn::{self, ConnCtx, Timing};
 use crate::machine::files::{self, AppRecord};
 use crate::machine::machines::Machines;
@@ -289,10 +289,13 @@ pub fn run_app(
         log::warn!("theme: {warning}");
     }
     let settings = overlays::settings_text(cfg, paths, &resolved, taw_bin);
+    let first_look = stamp_of(paths);
     let (machines, doubt) = match load_machines(paths) {
         Ok(machines) => (machines, None),
         Err(doubt) => (Vec::new(), Some(doubt.to_string())),
     };
+    // Said at start, so an edit elsewhere in a file whose `[machines]` is still bad does not say it again.
+    let doubted = doubt.clone();
     // `last` is the session this Mac was in most lately, made for the current directory when there is none: before
     // the machines start, as no machine has to be waited for. A session that cannot be made is the first words.
     let (go, doubt) = match go {
@@ -312,6 +315,8 @@ pub fn run_app(
         git,
         hub,
         machines,
+        config_watch: ConfigWatch::new(first_look),
+        doubted,
         server,
         ssh: Ssh::from_env(),
         local: Local::default(),
@@ -467,6 +472,11 @@ struct Feed<'a> {
     hub: Machines,
     /// The machines the hub holds, kept to start it again.
     machines: Vec<Machine>,
+    /// Looks at the config file, to pick up an edit of `[machines]` while the app runs ([`Feed::follow_the_config`]).
+    config_watch: ConfigWatch,
+    /// The words said of the last `[machines]` that could not be told, so that an edit elsewhere in the file
+    /// does not say them again.
+    doubted: Option<String>,
     /// This Mac's tmux server as the hello says it, or empty while there is none.
     server: String,
     /// The ssh the attaches and the commands on a machine are run through (`TAW_SSH_BIN`), made once.
@@ -532,6 +542,9 @@ pub(super) enum Step {
 /// How many `left` lines of this app the feed keeps: one is expected for each attach, and what is kept is
 /// cleared before the next.
 const KEPT_LEFTS: usize = 16;
+
+/// What the app logs (at `TAW_LOG=info`) when it read the config after an edit and `[machines]` was as it was.
+pub const CONFIG_UNCHANGED_LOG: &str = "the config was read: [machines] is as it was";
 
 /// What a connection needs, with `server` as this Mac's own tmux server (empty when none runs).
 fn conn_ctx(paths: &Paths, server: &str) -> ConnCtx {
@@ -694,7 +707,12 @@ impl Feed<'_> {
         if word.is_empty() {
             return;
         }
-        if !self.machines.is_empty() {
+        if self.machines.is_empty() {
+            // No connection to start again, but the hub that takes a later edit of `[machines]` goes on from
+            // the word it has: it is given the new one (a keeper with no machines keeps its lock), so that a
+            // machine added that is this Mac is known.
+            self.hub.know_server(&word);
+        } else {
             // The old connections end first: the lock that keeps them is theirs until then.
             drop(std::mem::replace(
                 &mut self.hub,
@@ -709,9 +727,52 @@ impl Feed<'_> {
         self.server = word;
     }
 
+    /// An edit of `[machines]` in the config file, picked up while the app runs. The file is looked at once a
+    /// tick, and read when a change has stayed the same for a look. The same list changes nothing. A new list is
+    /// given to the hub ([`Machines::replace`]), which keeps the keeper lock and the connections of the machines
+    /// that stay; what this app keeps by a machine's place moves with them. A list that cannot be told is said as
+    /// the app says it at start, once, and the machines it runs stay.
+    fn follow_the_config(&mut self, app: &mut App) {
+        if !self.config_watch.settled(stamp_of(self.paths)) {
+            return;
+        }
+        let read = load_machines(self.paths);
+        // Looked at again after the read: a file that began to change in between may have been read half
+        // written, and is read once it has settled again.
+        if !self.config_watch.read_was_of(stamp_of(self.paths)) {
+            return;
+        }
+        match read {
+            Err(doubt) => {
+                let words = doubt.to_string();
+                if self.doubted.as_ref() != Some(&words) {
+                    app.toast(words.clone());
+                    self.doubted = Some(words);
+                }
+            }
+            Ok(machines) => {
+                self.doubted = None;
+                if machines == self.machines {
+                    log::info!("{CONFIG_UNCHANGED_LOG}");
+                    return;
+                }
+                let now_of = self.hub.replace(machines.clone());
+                self.lefts = std::mem::take(&mut self.lefts)
+                    .into_iter()
+                    .filter_map(|(at, left)| Some((now_of.get(at).copied().flatten()?, left)))
+                    .collect();
+                self.toasts.machines_changed(&now_of, &machines);
+                self.machines = machines;
+                // The connections that are new have heard no walk, and the places moved: said again.
+                self.walk_said = None;
+            }
+        }
+    }
+
     /// One tick: the connections move on, then the screen is read again.
     fn tick(&mut self, tmux: &Tmux, app: &mut App) {
         self.follow_the_server(tmux);
+        self.follow_the_config(app);
         self.hub.poll(Instant::now());
         self.take_announced();
         self.say_toasts(app);
@@ -1899,6 +1960,8 @@ mod tests {
             git: data::GitWorker::new(GIT_TTL),
             hub: Machines::start(conn_ctx(paths, ""), Vec::new()),
             machines: Vec::new(),
+            config_watch: ConfigWatch::new(stamp_of(paths)),
+            doubted: None,
             server: String::new(),
             ssh: Ssh {
                 bin: "/nonexistent/ssh".into(),
@@ -3205,5 +3268,98 @@ mod tests {
         let before = calls(&log).len();
         feed.keep_walk();
         assert!(calls(&log).len() > before, "with machines it reads");
+    }
+
+    fn machine_entry(name: &str) -> crate::machine::Machine {
+        crate::machine::Machine {
+            name: name.to_string(),
+            ssh: name.to_string(),
+            taw: None,
+        }
+    }
+
+    /// Writes the config file with `text` and looks twice (a change is read once it has stayed the same for a
+    /// look), as two ticks do.
+    fn edit_and_follow(feed: &mut Feed, app: &mut App, text: &str) {
+        let file = &feed.paths.config_file;
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+        feed.follow_the_config(app);
+        feed.follow_the_config(app);
+    }
+
+    /// What the feed keeps by a machine's place moves with the machine when `[machines]` is edited: an end that
+    /// was announced for a machine that stays is at its new place, and one of a machine that is gone is dropped.
+    #[test]
+    fn the_feeds_ends_follow_their_machines_when_the_list_is_edited() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _log) = crate::cli::test_support::stub_tmux(
+            dir.path(),
+            &crate::cli::test_support::Stub::default(),
+        );
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = App::new(
+            &cfg,
+            theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+            String::new(),
+            Snapshot::default(),
+        );
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let before = vec![machine_entry("a"), machine_entry("b"), machine_entry("c")];
+        feed.hub = Machines::follow(conn_ctx(&paths, ""), before.clone());
+        feed.machines = before;
+        let left = |pane: &str| crate::machine::wire::Left {
+            pane: pane.to_string(),
+            ..Default::default()
+        };
+        feed.lefts = vec![(1, left("%b")), (2, left("%c"))];
+
+        edit_and_follow(&mut feed, &mut app, "[machines]\nc = \"c\"\na = \"a\"\n");
+
+        assert_eq!(
+            feed.machines
+                .iter()
+                .map(|m| m.name.as_str())
+                .collect::<Vec<_>>(),
+            ["c", "a"],
+            "the list was taken in"
+        );
+        assert_eq!(
+            feed.lefts
+                .iter()
+                .map(|(at, l)| (*at, l.pane.as_str()))
+                .collect::<Vec<_>>(),
+            [(0, "%c")],
+            "c's end is at c's new place and b's is gone"
+        );
+    }
+
+    /// A `[machines]` that cannot be told is not said again by an edit elsewhere in the file: the words are
+    /// held from the start's, and a fixed file clears them.
+    #[test]
+    fn a_still_bad_machines_is_said_once_and_a_fixed_one_clears_the_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _log) = crate::cli::test_support::stub_tmux(
+            dir.path(),
+            &crate::cli::test_support::Stub::default(),
+        );
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = App::new(
+            &cfg,
+            theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+            String::new(),
+            Snapshot::default(),
+        );
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        edit_and_follow(&mut feed, &mut app, "[machines\n");
+        let said = app.toast.take().map(|(text, _)| text);
+        assert!(said.is_some(), "the doubt is said");
+        assert_eq!(feed.doubted, said, "and held");
+        edit_and_follow(&mut feed, &mut app, "[machines\n# a note\n");
+        assert!(app.toast.is_none(), "not said again: {:?}", app.toast);
+        edit_and_follow(&mut feed, &mut app, "[machines]\n");
+        assert_eq!(feed.doubted, None, "a file that can be told clears it");
     }
 }

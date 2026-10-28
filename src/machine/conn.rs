@@ -226,6 +226,30 @@ pub enum ConnEvent {
     },
 }
 
+impl ConnEvent {
+    /// The number of the connection that said it: the one it was started with.
+    pub fn machine(&self) -> usize {
+        match self {
+            ConnEvent::State { machine, .. }
+            | ConnEvent::Words { machine, .. }
+            | ConnEvent::Toast { machine, .. }
+            | ConnEvent::Left { machine, .. }
+            | ConnEvent::Hello { machine, .. } => *machine,
+        }
+    }
+
+    /// Says the event is of machine number `to` instead.
+    pub fn set_machine(&mut self, to: usize) {
+        match self {
+            ConnEvent::State { machine, .. }
+            | ConnEvent::Words { machine, .. }
+            | ConnEvent::Toast { machine, .. }
+            | ConnEvent::Left { machine, .. }
+            | ConnEvent::Hello { machine, .. } => *machine = to,
+        }
+    }
+}
+
 /// What the reader of a feed's output found.
 enum Item {
     Down(Down),

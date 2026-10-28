@@ -3354,6 +3354,46 @@ fn a_row_past_the_last_number_gets_none() {
 }
 
 #[test]
+fn the_cursor_stays_on_a_machines_row_when_a_machine_before_it_is_removed() {
+    use crate::tui::actions::Action;
+    let cfg = depth_all();
+    let views = |names: &[&str]| -> Vec<MachineView> {
+        names
+            .iter()
+            .map(|name| {
+                let state = if *name == "studio" {
+                    photos_state()
+                } else {
+                    State::default()
+                };
+                view_with(name, Some(state))
+            })
+            .collect()
+    };
+    let mut app = app_over(
+        &cfg,
+        merge(snapshot(), &views(&["studio", "pi", "mini"]), NOW),
+    );
+    app.sel = no_session_row(&app, 1);
+    assert_eq!(app.current(), Some(&Row::NoSession(1)), "pi's row");
+    // studio is removed from the config: pi moves to place 0 and mini to place 1.
+    app.set_snapshot(merge(snapshot(), &views(&["pi", "mini"]), NOW));
+    assert_eq!(
+        app.current(),
+        Some(&Row::NoSession(0)),
+        "the cursor stays on pi's row, not on mini's: {:?}",
+        app.rows.rows
+    );
+    assert_eq!(
+        app.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        Some(Action::Doorway {
+            machine: "pi".into(),
+            id: "new".into()
+        })
+    );
+}
+
+#[test]
 fn the_rows_number_puts_the_cursor_on_it_and_enter_there_still_starts_a_session() {
     use crate::tui::actions::Action;
     let cfg = depth_all();

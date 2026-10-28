@@ -580,6 +580,74 @@ fn a_machine_that_is_this_mac_is_known_once_the_server_that_was_not_there_comes_
     );
 }
 
+/// The app starts with no tmux server and no `[machines]` (its hub is idle), a server comes up while it runs,
+/// and only then does the config gain a machine that is this Mac itself: the hub that takes the edit compares
+/// the machines with the word of the server that is there now, so the machine is said to be this tmux server and
+/// its session is listed once, under this Mac.
+#[test]
+fn a_machine_added_while_running_that_is_this_mac_is_known_after_a_server_came_up_with_none_listed()
+{
+    let _own = Owned::new();
+    let mut far = FarSide::with_session("studio", "garden");
+    end_the_server(&far.server);
+    far.server.write_config("[ui]\ndepth = \"all\"\n");
+    let stand_in = StandIn::new(&[&far]);
+    let bin = stand_in.bin.display().to_string();
+    let term = terminal(120);
+    type_app_env(
+        &term,
+        &far.server,
+        &[("TAW_SSH_BIN", &bin)],
+        "app --child",
+        &far.server.work_dir().join("err"),
+        &far.server.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the app up with no server", |screen| {
+        screen.contains(" taw app")
+    });
+    // The guard holds the app's pids from here (its child ends by the watchdog when the terminal's server goes).
+    let _ = the_app(&far.server);
+    far.server.crash_and_start_at_once(&ServerOptions {
+        session: "garden".to_string(),
+        ..ServerOptions::default()
+    });
+    expect_terminal(&term, "garden listed from the new server", |screen| {
+        screen.contains("garden")
+    });
+    // Let the app's ticks read the server's word (it asks once a tick) before the config changes.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        stand_in.calls().is_empty(),
+        "no machine yet, so no ssh:\n{}",
+        terminal_screen(&term)
+    );
+
+    far.server
+        .write_config("[ui]\ndepth = \"all\"\n\n[machines]\nstudio = \"studio\"\n");
+    assert!(
+        wait_for(|| !stand_in.calls().is_empty(), Duration::from_secs(20)),
+        "the app never reached for studio after the edit:\n{}",
+        terminal_screen(&term)
+    );
+    assert!(
+        wait_for(
+            || studio_is_this_server(&far.server),
+            Duration::from_secs(20)
+        ),
+        "studio never said to be this tmux server after the edit:\n{}",
+        terminal_screen(&term)
+    );
+    expect_terminal(&term, "no header over the one machine", |screen| {
+        !screen.contains("studio") && screen.contains("garden")
+    });
+    let screen = terminal_screen(&term);
+    assert_eq!(
+        screen.matches("garden").count(),
+        1,
+        "garden listed once, under this Mac:\n{screen}"
+    );
+}
+
 /// The same machine that is this Mac, with the server up from the start: when that server ends and a new one starts
 /// while the app runs, the word the machines are compared with is read again (the app has seen none in between), so
 /// the machine is still said to be this tmux server and its session is listed once, not twice.

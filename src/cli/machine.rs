@@ -30,7 +30,7 @@ pub enum Cmd {
     /// The machines in [machines], in the order the config lists them, with whether each is live
     List,
     /// Add a machine to [machines] in the config file, keeping every comment and line of it (a new file
-    /// when there is none). The app shows it the next time it opens
+    /// when there is none). A running app picks it up within a couple of seconds
     Add {
         /// What the app, `--machine` and the headers call the machine: lowercase letters, digits, - and _,
         /// starting with a letter, at most 32 characters
@@ -42,7 +42,7 @@ pub enum Cmd {
         taw: Option<String>,
     },
     /// Remove a machine from [machines] in the config file: its line, or its [machines.<name>] table, and
-    /// nothing else. The app stops showing it the next time it opens
+    /// nothing else. A running app stops showing it within a couple of seconds
     Remove {
         /// The machine to remove, as `taw machine list` names it
         name: String,
@@ -270,8 +270,8 @@ fn terminal_name() -> Option<String> {
     }
 }
 
-/// What `add` and `remove` say of the app: it reads `[machines]` when it starts, and not again.
-const APP_NOTE: &str = "The app shows this the next time it opens.";
+/// What `add` and `remove` say of the app: a running app looks at the config file and picks the edit up.
+const APP_NOTE: &str = "A running app picks this up within a couple of seconds.";
 
 /// The config file as it is now: the file that is written (the target of a link, so that a config kept
 /// elsewhere stays a link), its text ("" for a file that is not there), and its permissions.

@@ -16,6 +16,7 @@ use common::machine::{Failure, FarSide, StandIn};
 use common::owned::{Owned, alive, args_of, own, own_as, record_names, signal, start_time_of};
 use common::{Server, ServerOptions, taw_bin, wait_for};
 use taw::machine::words;
+use taw::tui::CONFIG_UNCHANGED_LOG;
 
 /// Everything a test of going into studio has: the terminal, this Mac, studio and the stand-in.
 struct Rig {
@@ -23,6 +24,8 @@ struct Rig {
     mac: Server,
     far: FarSide,
     stand_in: StandIn,
+    /// The level of `TAW_LOG` the app is started with, when a test reads what it logs.
+    app_log: Option<&'static str>,
 }
 
 /// A terminal as a person has one: a private server of its own whose pane is the terminal. Wide, so that a toast
@@ -38,6 +41,12 @@ fn terminal() -> Server {
 /// This Mac with `studio` in `[machines]`, and studio: a session `garden` with the windows `main` and `tools`,
 /// and the popup key bound on studio's own server as the plugin binds it.
 fn rig() -> Rig {
+    rig_with(&[])
+}
+
+/// [`rig`], with more far sides the stand-in also reaches. They are not in `[machines]` until a test writes them
+/// there.
+fn rig_with(more: &[&FarSide]) -> Rig {
     let mac = Server::start();
     // Every pane is a row (the depth `all`), so that a pane can be gone into.
     mac.write_config("[ui]\ndepth = \"all\"\n\n[machines]\nstudio = \"studio\"\n");
@@ -62,12 +71,15 @@ fn rig() -> Rig {
             taw_bin()
         ),
     ]);
-    let stand_in = StandIn::new(&[&far]);
+    let mut reached = vec![&far];
+    reached.extend(more.iter().copied());
+    let stand_in = StandIn::new(&reached);
     Rig {
         term: terminal(),
         mac,
         far,
         stand_in,
+        app_log: None,
     }
 }
 
@@ -244,6 +256,7 @@ fn type_app_then(rig: &Rig, args: &str, stderr_in_file: bool, after: &str) -> u3
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_str()))
         .chain([("TAW_SSH_BIN", bin.as_str())])
+        .chain(rig.app_log.map(|level| ("TAW_LOG", level)))
         .map(|(name, value)| format!("'{name}={value}' "))
         .collect();
     let line = format!(
@@ -371,6 +384,264 @@ fn kill_recorded(pid: u32, expect: &str) {
     assert!(args.contains(expect), "pid {pid} is {args:?}, not {expect}");
     // SAFETY: a pid the stand-in recorded for its own call, checked above.
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+}
+
+// ---------------------------------------------------------------- an edit of [machines] while the app runs
+
+/// The config with `studio` and, when `pi` is given, `pi`, as a person edits it, under the depth `all`.
+fn machines_config(extra: &str, pi: bool) -> String {
+    format!(
+        "[ui]\ndepth = \"all\"\n\n[machines]\nstudio = \"studio\"\n{}{extra}",
+        if pi { "pi = \"pi\"\n" } else { "" }
+    )
+}
+
+/// The calls of the stand-in made for `destination`, with the pid of each: one connection (or one command) each.
+fn calls_for(rig: &Rig, destination: &str) -> Vec<u32> {
+    let calls = rig.stand_in.calls();
+    let pids = rig.stand_in.pids();
+    calls
+        .iter()
+        .zip(pids)
+        .filter(|(call, _)| call.iter().any(|word| word == destination))
+        .map(|(_, pid)| pid)
+        .collect()
+}
+
+/// A machine added to the config shows its rows without a restart, and studio's connection is not started
+/// again; the machine removed again takes its rows away and its ssh ends.
+#[test]
+fn a_machine_added_to_the_config_shows_while_the_app_runs_and_one_removed_goes() {
+    let _own = Owned::new();
+    let pi = FarSide::with_session("pi", "orchard");
+    let rig = rig_with(&[&pi]);
+    start_app(&rig);
+    let studio = calls_for(&rig, "studio");
+    assert!(!studio.is_empty(), "studio is connected\n{}", seen(&rig));
+    assert!(calls_for(&rig, "pi").is_empty(), "pi is not listed yet");
+
+    rig.mac.write_config(&machines_config("", true));
+    expect_screen(&rig, "pi's session on the list", |screen| {
+        screen.contains("orchard")
+    });
+    assert_eq!(
+        calls_for(&rig, "studio"),
+        studio,
+        "studio's connection was not started again\n{}",
+        seen(&rig)
+    );
+    let started = calls_for(&rig, "pi");
+    assert_eq!(started.len(), 1, "one connection to pi\n{}", seen(&rig));
+    assert!(alive(started[0]), "pi's ssh runs");
+    assert!(
+        terminal_screen(&rig.term).contains("0:main"),
+        "studio's rows stay"
+    );
+
+    rig.mac.write_config(&machines_config("", false));
+    expect_screen(&rig, "pi's rows gone", |screen| {
+        !screen.contains("orchard") && screen.contains("0:main")
+    });
+    expect(&rig, "pi's ssh ended", || !alive(started[0]));
+    assert_eq!(
+        calls_for(&rig, "studio"),
+        studio,
+        "studio's was kept\n{}",
+        seen(&rig)
+    );
+}
+
+/// A `[machines]` that cannot be told is said once, as at start, and studio goes on as it was; the file
+/// fixed is applied.
+#[test]
+fn a_bad_edit_of_machines_is_said_and_changes_nothing_and_the_fixed_file_applies() {
+    let _own = Owned::new();
+    let pi = FarSide::with_session("pi", "orchard");
+    let rig = rig_with(&[&pi]);
+    start_app(&rig);
+    let studio = calls_for(&rig, "studio");
+
+    rig.mac
+        .write_config(&machines_config("pi = \"pi\"\n[broken\n", false));
+    expect_screen(&rig, "the doubt's words", |screen| {
+        screen.contains("could not be read") && screen.contains("config.toml")
+    });
+    assert!(
+        terminal_screen(&rig.term).contains("0:main"),
+        "studio's rows stay"
+    );
+    assert_eq!(
+        calls_for(&rig, "studio"),
+        studio,
+        "not started again\n{}",
+        seen(&rig)
+    );
+    assert!(
+        calls_for(&rig, "pi").is_empty(),
+        "pi was not started\n{}",
+        seen(&rig)
+    );
+
+    rig.mac.write_config(&machines_config("", true));
+    expect_screen(&rig, "pi's session once the file is fixed", |screen| {
+        screen.contains("orchard")
+    });
+    assert_eq!(
+        calls_for(&rig, "studio"),
+        studio,
+        "studio's was kept\n{}",
+        seen(&rig)
+    );
+}
+
+/// An edit of the config outside `[machines]` starts and ends no connection. The app says in its log when it has
+/// read the file and found the machines as they were: that is the positive sign that the edit was seen.
+#[test]
+fn an_edit_outside_machines_touches_no_connection() {
+    let _own = Owned::new();
+    let mut rig = rig();
+    rig.app_log = Some("info");
+    start_app(&rig);
+    let studio = calls_for(&rig, "studio");
+    let before = rig.stand_in.calls().len();
+    let log = || std::fs::read_to_string(rig.mac.work_dir().join("err")).unwrap_or_default();
+    assert!(
+        !log().contains(CONFIG_UNCHANGED_LOG),
+        "not read yet\n{}",
+        seen(&rig)
+    );
+
+    rig.mac
+        .write_config(&machines_config("\n# a note\n", false));
+    expect(&rig, "the app reading the edited file", || {
+        log().contains(CONFIG_UNCHANGED_LOG)
+    });
+
+    assert!(
+        terminal_screen(&rig.term).contains("0:main"),
+        "studio's rows stay"
+    );
+    assert_eq!(
+        rig.stand_in.calls().len(),
+        before,
+        "no call of any kind\n{}",
+        seen(&rig)
+    );
+    assert!(
+        studio.iter().all(|pid| alive(*pid)),
+        "studio's ssh runs\n{}",
+        seen(&rig)
+    );
+}
+
+/// The line of `screen` that is a machine's header: the first whose words include `name`.
+fn header_line(screen: &str, name: &str) -> Option<usize> {
+    screen.lines().position(|line| {
+        line.split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == name)
+    })
+}
+
+/// Whether `session` is listed under the header of `machine` and above the header of `next` (or to the end).
+fn listed_under(screen: &str, machine: &str, session: &str, next: Option<&str>) -> bool {
+    let (Some(header), Some(at)) = (
+        header_line(screen, machine),
+        screen.lines().position(|line| line.contains(session)),
+    ) else {
+        return false;
+    };
+    let end = next
+        .and_then(|name| header_line(screen, name))
+        .unwrap_or(usize::MAX);
+    header < at && at < end
+}
+
+/// Three machines kept by one app, `studio` (as the rig has it), `pi` and `mini`, each with a session of its
+/// own: `garden`, `orchard`, `meadow`.
+fn three_machines() -> (Rig, FarSide, FarSide) {
+    let pi = FarSide::with_session("pi", "orchard");
+    let mini = FarSide::with_session("mini", "meadow");
+    let rig = rig_with(&[&pi, &mini]);
+    rig.mac
+        .write_config(&three_config(&["studio", "pi", "mini"]));
+    (rig, pi, mini)
+}
+
+/// The config with the machines `names` in this order, each reached as its own name.
+fn three_config(names: &[&str]) -> String {
+    let lines: String = names
+        .iter()
+        .map(|name| format!("{name} = \"{name}\"\n"))
+        .collect();
+    format!("[ui]\ndepth = \"all\"\n\n[machines]\n{lines}")
+}
+
+/// A machine before the others removed while the app runs: every machine left keeps its sessions under its own
+/// header, and a session made on the last one afterwards is listed under it (what it says still lands).
+#[test]
+fn removing_the_first_of_three_machines_keeps_the_others_sessions_under_their_own_headers() {
+    let _own = Owned::new();
+    let (rig, _pi, mini) = three_machines();
+    start_app(&rig);
+    expect_screen(&rig, "pi's and mini's sessions", |screen| {
+        listed_under(screen, "pi", "orchard", Some("mini"))
+            && listed_under(screen, "mini", "meadow", None)
+    });
+
+    rig.mac.write_config(&three_config(&["pi", "mini"]));
+    expect_screen(&rig, "studio's rows gone", |screen| {
+        !screen.contains("garden") && screen.contains("orchard") && screen.contains("meadow")
+    });
+    let screen = terminal_screen(&rig.term);
+    assert!(
+        listed_under(&screen, "pi", "orchard", Some("mini"))
+            && listed_under(&screen, "mini", "meadow", None),
+        "each machine's session is under its own header\n{}",
+        seen(&rig)
+    );
+
+    mini.server.tmux_ok(&["new-session", "-d", "-s", "grove"]);
+    expect_screen(&rig, "the session made on mini after the edit", |screen| {
+        listed_under(screen, "mini", "grove", None)
+    });
+    assert!(
+        listed_under(&terminal_screen(&rig.term), "pi", "orchard", Some("mini")),
+        "pi's stays under pi\n{}",
+        seen(&rig)
+    );
+}
+
+/// The order of the machines changed while the app runs: each keeps its sessions under its own header, and a
+/// session made on the machine now last is listed under it.
+#[test]
+fn reordering_three_machines_keeps_each_ones_sessions_under_its_own_header() {
+    let _own = Owned::new();
+    let (rig, _pi, _mini) = three_machines();
+    start_app(&rig);
+    expect_screen(&rig, "pi's and mini's sessions", |screen| {
+        listed_under(screen, "pi", "orchard", Some("mini"))
+            && listed_under(screen, "mini", "meadow", None)
+    });
+
+    rig.mac
+        .write_config(&three_config(&["mini", "pi", "studio"]));
+    expect_screen(&rig, "the new order", |screen| {
+        listed_under(screen, "mini", "meadow", Some("pi"))
+            && listed_under(screen, "pi", "orchard", Some("studio"))
+            && listed_under(screen, "studio", "garden", None)
+    });
+
+    rig.far
+        .server
+        .tmux_ok(&["new-session", "-d", "-s", "terrace"]);
+    expect_screen(&rig, "the session made on studio, now last", |screen| {
+        listed_under(screen, "studio", "terrace", None)
+    });
+    assert!(
+        listed_under(&terminal_screen(&rig.term), "mini", "meadow", Some("pi")),
+        "mini's stays under mini\n{}",
+        seen(&rig)
+    );
 }
 
 // ---------------------------------------------------------------- the tests

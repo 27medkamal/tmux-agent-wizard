@@ -33,7 +33,7 @@ While the cursor is on a row of a connected machine, the popup's hint line says 
     taw machine add pi pi
     ```
 
-    The command writes the machine into `config.toml`, under `[machines]` (a new table at the end of the file when there is none, and a new file when there is no config yet), and keeps every comment and line of the file as it was. It refuses a name that is already listed, and changes nothing when it refuses. `taw machine remove pi` takes that machine out again: its line, or its `[machines.pi]` table, and nothing else. The app shows a change the next time it opens. The file can be edited by hand as well, one line each:
+    The command writes the machine into `config.toml`, under `[machines]` (a new table at the end of the file when there is none, and a new file when there is no config yet), and keeps every comment and line of the file as it was. It refuses a name that is already listed, and changes nothing when it refuses. `taw machine remove pi` takes that machine out again: its line, or its `[machines.pi]` table, and nothing else. A running app picks a change up within a couple of seconds, with no restart: a machine added shows its sessions, one removed loses its rows and its ssh ends, and the machines that stay keep their connections. A change the app cannot read (a broken file, a line taw drops) is said once, and the app goes on with the machines it has until the file is fixed. The file can be edited by hand as well, one line each:
 
     ```toml
     [machines]

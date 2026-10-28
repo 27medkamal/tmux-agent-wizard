@@ -838,7 +838,12 @@ fn a_new_session_inside_the_done_delay_turns_done_back_to_idle_and_drops_its_not
     // session and the `done` the old one left.
     session("after-clear", "clear");
     expect_state(&server, &pane, "idle", SETTLE);
-    assert_eq!(server.pane_opt(&pane, "@agent_seen"), "1");
+    // The watcher writes the seen mark a few tmux commands after the state, so it is waited for.
+    assert!(
+        wait_for(|| server.pane_opt(&pane, "@agent_seen") == "1", IMMEDIATE),
+        "the new session's idle must be seen, got @agent_seen {:?}",
+        server.pane_opt(&pane, "@agent_seen")
+    );
     assert_eq!(server.pane_opt(&pane, "@agent_session_id"), "after-clear");
 
     // --- the next turn, whose notification is sent -------------------------------------

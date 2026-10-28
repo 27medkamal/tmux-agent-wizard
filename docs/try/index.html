@@ -1250,7 +1250,6 @@
   probe.textContent = 'x'.repeat(50);
   document.body.appendChild(probe);
   const advance = () => probe.getBoundingClientRect().width / 5000;
-  // In the homepage the demo is one column, as wide as the popup at its widest, in the middle of the page.
   if (EMBED) document.querySelector('main').style.maxWidth = Math.ceil(150 * advance() * 12.5 + 22) + 'px';
   function fitTerm() {
     let size = Math.min(12.5, (termWrap.clientWidth - 22) / (COLS * advance()));
@@ -1280,8 +1279,6 @@
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   };
   if (EMBED) {
-    // The frame takes the page's light or dark too: a browser paints an opaque backdrop behind a frame whose
-    // light or dark differs from its page's, and the demo's light words would sit on it.
     const frame = window.frameElement, main = document.querySelector('main');
     const paint = () => {
       const dark = themeOf() === 'dark';
@@ -1291,8 +1288,6 @@
     paint();
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
     try { new MutationObserver(paint).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-md-color-scheme'] }); } catch (e) { }
-    // The demo is part of the homepage, not a box that scrolls: the frame takes the demo's height. A copy opened
-    // from disk cannot reach its frame and keeps the frame's own height and scrolling.
     if (frame) {
       document.documentElement.classList.add('fitted');
       const fitFrame = () => { frame.style.height = Math.ceil(main.getBoundingClientRect().bottom + window.scrollY + 4) + 'px'; };

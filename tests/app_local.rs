@@ -973,12 +973,548 @@ fn the_popup_key_returns_to_the_list_on_the_pane_you_were_in() {
             && screen.contains(mark_of(&other))
             && !screen.contains(mark_of(&first))
     });
+    // tmux's exit line (`[detached (from session ...)]`) is not on the shell's screen behind the list: it showed
+    // there until the list's first frame. That screen is read where the typed command is, so an empty read fails.
+    let behind = term
+        .tmux(&["capture-pane", "-a", "-p", "-J", "-t", &term.pane()])
+        .unwrap_or_default();
+    assert!(
+        behind.contains("app --child"),
+        "the shell's screen behind the list was not read:\n{behind}"
+    );
+    assert!(
+        !behind.contains("[detached"),
+        "tmux's exit line is on the shell's screen behind the list:\n{behind}"
+    );
     assert!(
         wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
         "the client was not detached: {:?}",
         clients_of(&mac)
     );
     assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// `taw app` started by a process with no controlling terminal, whose standard input is a terminal opened read only
+/// and whose standard output is a file (`setsid taw app </dev/ttys004 >log`): the app draws on that terminal, so the
+/// output it is given must be one that can be written. It used to be a duplicate of the read only standard input,
+/// which `isatty` accepts and every write to fails, so the screen failed to start three times.
+#[test]
+fn a_terminal_that_is_only_read_on_standard_input_still_gets_the_app_drawn() {
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::process::CommandExt;
+    let _own = Owned::new();
+    let mac = Server::start();
+    let (mut master, mut slave) = (-1, -1);
+    let size = libc::winsize {
+        ws_row: 30,
+        ws_col: 120,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: `openpty` writes the two descriptors; the name and termios are its defaults.
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &size as *const libc::winsize as *mut libc::winsize,
+        )
+    };
+    assert_eq!(opened, 0, "no pseudo terminal");
+    for fd in [master, slave] {
+        // SAFETY: `fcntl` of descriptors made here: kept from the processes other tests start meanwhile.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    // SAFETY: both are open descriptors that only this test owns.
+    let (master, slave) = unsafe {
+        (
+            std::fs::File::from_raw_fd(master),
+            std::fs::File::from_raw_fd(slave),
+        )
+    };
+    // SAFETY: `ttyname` of the slave just made, copied at once.
+    let name = unsafe {
+        std::ffi::CStr::from_ptr(libc::ttyname(slave.as_raw_fd()))
+            .to_string_lossy()
+            .into_owned()
+    };
+    let read_only = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(&name)
+        .expect("the terminal opens read only");
+    drop(slave);
+    let err = mac.work_dir().join("err");
+    let mut command = std::process::Command::new(taw_bin());
+    command
+        .arg("app")
+        .envs(mac.taw_env())
+        .env_remove("TMUX")
+        .env_remove("TMUX_PANE")
+        .env("TERM", "xterm-256color")
+        .stdin(std::process::Stdio::from(read_only))
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create(mac.work_dir().join("out")).unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create(&err).unwrap(),
+        ));
+    // SAFETY: between fork and exec only `setsid`, which is async-signal-safe: no controlling terminal.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut app = command.spawn().expect("taw starts");
+    let app_pid = app.id();
+    own(app_pid);
+    let mut drawn = Vec::new();
+    let read_some = |drawn: &mut Vec<u8>| {
+        let mut fds = libc::pollfd {
+            fd: master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of a descriptor this test holds, then a read of it into a buffer that is alive.
+        unsafe {
+            if libc::poll(&mut fds, 1, 100) > 0 {
+                let mut chunk = [0u8; 4096];
+                let n = libc::read(master.as_raw_fd(), chunk.as_mut_ptr().cast(), chunk.len());
+                if n > 0 {
+                    drawn.extend_from_slice(&chunk[..n as usize]);
+                }
+            }
+        }
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !String::from_utf8_lossy(&drawn).contains("taw app")
+        && app.try_wait().ok().flatten().is_none()
+        && std::time::Instant::now() < deadline
+    {
+        read_some(&mut drawn);
+    }
+    let said = read(&err).unwrap_or_default();
+    assert!(
+        String::from_utf8_lossy(&drawn).contains("taw app"),
+        "the list was never drawn on the terminal; the app said {said:?}, the terminal got {:?}",
+        String::from_utf8_lossy(&drawn)
+    );
+    // `q` ends the app, and the supervisor with it, 0.
+    use std::io::Write;
+    (&master).write_all(b"q").unwrap();
+    let ended = wait_for(
+        || {
+            read_some(&mut drawn);
+            app.try_wait().ok().flatten().is_some()
+        },
+        Duration::from_secs(20),
+    );
+    if !ended {
+        let _ = app.kill();
+    }
+    let status = app.wait().expect("the app's end");
+    assert!(ended, "the app did not end after q");
+    assert_eq!(status.code(), Some(0), "the app said {:?}", read(&err));
+}
+
+/// Writes its file when dropped: a program that waits for the file is let go when a test fails
+/// before it lets the program go itself.
+struct Release(std::path::PathBuf);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.0, "go");
+    }
+}
+
+/// A person's own `detach-client -E '<program>'` binding, pressed in a client the app started, runs the program in
+/// that client's process: its output shows on the terminal while it runs (it went into a pipe the app only reads
+/// when the client has ended, so nothing showed), and more than a pipe's worth of it does not stop the program (it
+/// blocked once the pipe was full). When the program ends the list is back.
+#[test]
+fn a_detach_client_e_binding_in_a_client_the_app_started_shows_its_programs_output_live() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let release = mac.work_dir().join("release");
+    let finished = mac.work_dir().join("finished");
+    let _let_go = Release(release.clone());
+    let program = mac.work_dir().join("program.sh");
+    // The marker first, then a wait for the file (bounded, 30 s), then 200000 bytes in lines of 99, then the
+    // file that says the program got to its end.
+    std::fs::write(
+        &program,
+        format!(
+            "echo LIVE_MARKER\ni=0\nwhile [ ! -e '{}' ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n\
+             head -c 200000 /dev/zero | tr '\\0' 'x' | fold -w 99\necho >'{}'\n",
+            release.display(),
+            finished.display()
+        )
+    )
+    .unwrap();
+    mac.tmux_ok(&[
+        "bind-key",
+        "-n",
+        "F6",
+        "detach-client",
+        "-E",
+        &format!("sh '{}'", program.display()),
+    ]);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    press(&term, &["Enter"]);
+    let (_, _, first) = the_client(&mac, "after Enter");
+    expect_terminal(&term, "the session's status line", |screen| {
+        screen.contains(&format!("[{first}]"))
+    });
+    // The guard holds the app's pids from here.
+    let (child, _) = the_app(&mac);
+
+    press(&term, &["F6"]);
+
+    expect_terminal(&term, "the program's first line", |screen| {
+        screen.contains("LIVE_MARKER")
+    });
+    std::fs::write(&release, "go").unwrap();
+    assert!(
+        wait_for(|| finished.exists(), Duration::from_secs(20)),
+        "the program never got to its end (it blocks once its output has nowhere to go):\n{}",
+        terminal_screen(&term)
+    );
+    expect_terminal(&term, "the list, back", |screen| {
+        screen.contains(" taw app") && screen.contains("2 sessions")
+    });
+    assert!(
+        wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
+        "the client did not end: {:?}",
+        clients_of(&mac)
+    );
+    assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// The `tmux` taw runs may be a version manager's shim (mise, asdf), which is one program when it starts and execs
+/// the real tmux a moment later. That is no `detach-client -E` replacing the client: a plain detach prints tmux's
+/// exit line, which is held back from the terminal as it is without a shim, and not copied to it like a program's
+/// output.
+#[test]
+fn a_tmux_that_is_a_wrapper_at_first_still_shows_no_exit_line_on_a_plain_detach() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let real = Tmux::with_socket_name("unused").bin;
+    let wrapper = mac.work_dir().join("tmux-wrapper");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n/bin/sleep 0.3\nexec '{}' \"$@\"\n",
+            real.display()
+        ),
+    )
+    .unwrap();
+    crate::common::make_executable(&wrapper);
+    type_app_env(
+        &term,
+        &mac,
+        &[("TAW_TMUX_BIN", &wrapper.display().to_string())],
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    press(&term, &["Enter"]);
+    let (_, _, first) = the_client(&mac, "after Enter");
+    expect_terminal(&term, "the session's status line", |screen| {
+        screen.contains(&format!("[{first}]"))
+    });
+    // The guard holds the app's pids from here.
+    let (child, _) = the_app(&mac);
+    // Past a few looks of the app's, so that a program taken for the client's at the spawn has changed.
+    std::thread::sleep(Duration::from_millis(1000));
+
+    mac.tmux_ok(&["detach-client", "-s", &first]);
+
+    // Positive wait first: the list is back, and the client is gone.
+    expect_terminal(&term, "the list, back", |screen| {
+        screen.contains(" taw app") && screen.contains("2 sessions")
+    });
+    assert!(
+        wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
+        "the client did not end: {:?}",
+        clients_of(&mac)
+    );
+    let behind = term
+        .tmux(&["capture-pane", "-a", "-p", "-J", "-t", &term.pane()])
+        .unwrap_or_default();
+    assert!(
+        behind.contains("app --child"),
+        "the shell's screen behind the list was not read:\n{behind}"
+    );
+    assert!(
+        !behind.contains("[detached"),
+        "tmux's exit line was copied to the terminal:\n{behind}"
+    );
+    assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// A client that a `detach-client -E` replaces at once (a `client-attached` hook of the app's own server) is replaced
+/// before the app's first look at it. The program's output still shows on the terminal while it runs, and the list is
+/// back when it ends.
+#[test]
+fn a_program_that_replaces_the_client_before_the_apps_first_look_shows_its_output_live() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let release = mac.work_dir().join("release");
+    let finished = mac.work_dir().join("finished");
+    let _let_go = Release(release.clone());
+    let program = mac.work_dir().join("program.sh");
+    // The marker, then a wait for the file (bounded, 30 s), then the file that says the program got to its end.
+    std::fs::write(
+        &program,
+        format!(
+            "echo HOOK_MARKER\ni=0\nwhile [ ! -e '{}' ] && [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n\
+             echo >'{}'\n",
+            release.display(),
+            finished.display()
+        ),
+    )
+    .unwrap();
+    mac.tmux_ok(&[
+        "set-hook",
+        "-g",
+        "client-attached",
+        &format!("detach-client -E \"sh '{}'\"", program.display()),
+    ]);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    // The guard holds the app's pids from here.
+    let (child, _) = the_app(&mac);
+
+    press(&term, &["Enter"]);
+
+    expect_terminal(&term, "the program's first line", |screen| {
+        screen.contains("HOOK_MARKER")
+    });
+    std::fs::write(&release, "go").unwrap();
+    assert!(
+        wait_for(|| finished.exists(), Duration::from_secs(20)),
+        "the program never got to its end:\n{}",
+        terminal_screen(&term)
+    );
+    expect_terminal(&term, "the list, back", |screen| {
+        screen.contains(" taw app") && screen.contains("2 sessions")
+    });
+    assert!(
+        wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
+        "the client did not end: {:?}",
+        clients_of(&mac)
+    );
+    assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// The terminal's main screen behind the app's own (`capture-pane -a`), joined into lines: where a program's output
+/// lands when the app has its list on the alternate screen.
+fn terminal_behind(term: &Server) -> String {
+    term.tmux(&["capture-pane", "-a", "-p", "-J", "-t", &term.pane()])
+        .unwrap_or_default()
+}
+
+/// What the terminal shows on its screen and on the one behind it.
+fn terminal_everywhere(term: &Server) -> String {
+    format!("{}\n{}", terminal_screen(term), terminal_behind(term))
+}
+
+/// A `lock-command` of the app's own server runs in the client's process, with the pipe for its standard output: what
+/// it prints shows on the terminal while it runs. Once the lock is over a plain detach is tmux's exit line again and
+/// not a program's: it is not shown (the line was copied for good by a rule that counted the client as replaced).
+#[test]
+fn a_lock_commands_output_shows_and_a_plain_detach_after_the_lock_shows_no_exit_line() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let done = mac.work_dir().join("lock-done");
+    mac.tmux_ok(&[
+        "set-option",
+        "-g",
+        "lock-command",
+        &format!("printf LOCK_MARKER; sleep 2; touch '{}'", done.display()),
+    ]);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    press(&term, &["Enter"]);
+    let (_, name, first) = the_client(&mac, "after Enter");
+    expect_terminal(&term, "the session's status line", |screen| {
+        screen.contains(&format!("[{first}]"))
+    });
+    // The guard holds the app's pids from here.
+    let (child, _) = the_app(&mac);
+
+    mac.tmux_ok(&["lock-client", "-t", &name]);
+
+    assert!(
+        wait_for(
+            || terminal_everywhere(&term).contains("LOCK_MARKER"),
+            Duration::from_secs(20)
+        ),
+        "the lock command's output never showed on the terminal:\n{}",
+        terminal_everywhere(&term)
+    );
+    assert!(
+        wait_for(|| done.exists(), Duration::from_secs(20)),
+        "the lock command never ended"
+    );
+    // A little for the client to take the unlock and draw its session again.
+    std::thread::sleep(Duration::from_millis(1000));
+    mac.tmux_ok(&["detach-client", "-t", &name]);
+
+    // Positive wait first: the list is back, and the client is gone.
+    expect_terminal(&term, "the list, back", |screen| {
+        screen.contains(" taw app") && screen.contains("2 sessions")
+    });
+    assert!(
+        wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
+        "the client did not end: {:?}",
+        clients_of(&mac)
+    );
+    let everywhere = terminal_everywhere(&term);
+    assert!(
+        terminal_behind(&term).contains("app --child"),
+        "the shell's screen behind the list was not read:\n{everywhere}"
+    );
+    assert!(
+        !everywhere.contains("[detached"),
+        "tmux's exit line reached the terminal:\n{everywhere}"
+    );
+    assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// A `detach-client -E` program that runs for a while and writes its summary line as it ends (a program writing to a
+/// pipe buffers it until then) has the line on the terminal. The app has its list on the alternate screen, so the line
+/// is on the main screen behind it, which is read with `capture-pane -a`.
+#[test]
+fn a_programs_summary_written_as_it_ends_reaches_the_terminal() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    mac.tmux_ok(&[
+        "bind-key",
+        "-n",
+        "F6",
+        "detach-client",
+        "-E",
+        "sleep 1; exec printf 'SUMMARY_MARKER 3 files\\n'",
+    ]);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    press(&term, &["Enter"]);
+    let (_, _, first) = the_client(&mac, "after Enter");
+    expect_terminal(&term, "the session's status line", |screen| {
+        screen.contains(&format!("[{first}]"))
+    });
+    // The guard holds the app's pids from here.
+    let (child, _) = the_app(&mac);
+
+    press(&term, &["F6"]);
+
+    // Positive waits first: the client has ended and the list is back.
+    expect_terminal(&term, "the list, back", |screen| {
+        screen.contains(" taw app") && screen.contains("2 sessions")
+    });
+    assert!(
+        wait_for(|| clients_of(&mac).is_empty(), Duration::from_secs(20)),
+        "the client did not end: {:?}",
+        clients_of(&mac)
+    );
+    let everywhere = terminal_everywhere(&term);
+    assert!(
+        terminal_behind(&term).contains("app --child"),
+        "the shell's screen behind the list was not read:\n{everywhere}"
+    );
+    assert!(
+        terminal_behind(&term).contains("SUMMARY_MARKER 3 files"),
+        "the program's summary never reached the terminal:\n{everywhere}"
+    );
+    assert_eq!(the_app(&mac).0, child, "the same app, not a new one");
+}
+
+/// A program of a `detach-client -E` that writes without a pause does not keep the app from seeing a signal: the
+/// copy of its output to the terminal is one look's worth at a time, so the app ends the client and itself at once
+/// (and not by its watchdog, two seconds later).
+#[test]
+fn a_program_that_never_stops_writing_does_not_keep_the_app_from_ending_on_a_signal() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let status = mac.work_dir().join("status");
+    mac.tmux_ok(&["bind-key", "-n", "F6", "detach-client", "-E", "exec yes"]);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &status,
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    press(&term, &["Enter"]);
+    let (_, _, first) = the_client(&mac, "after Enter");
+    expect_terminal(&term, "the session's status line", |screen| {
+        screen.contains(&format!("[{first}]"))
+    });
+    let (child, _) = the_app(&mac);
+
+    press(&term, &["F6"]);
+
+    // Positive wait: the program's lines fill the terminal.
+    expect_terminal(&term, "the program's output", |screen| {
+        screen.lines().filter(|line| line.trim() == "y").count() > 10
+    });
+    signal(child, libc::SIGTERM);
+    assert!(
+        wait_for(|| status_of(&status).is_some(), Duration::from_secs(20)),
+        "the app did not end on the signal"
+    );
+    // Its own loop ended it: the watchdog, which ends a loop that is stuck two seconds after the signal, ends the
+    // process with 1. A status, not a time, so a slow machine cannot fail this.
+    assert_ne!(
+        status_of(&status).as_deref(),
+        Some("1\n"),
+        "the watchdog ended the app: its loop was held by the copy of the program's output"
+    );
 }
 
 /// After the last pane of the session you went into exits, the session and its client are gone: the pane you

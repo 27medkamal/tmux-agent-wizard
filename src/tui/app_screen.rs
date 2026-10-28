@@ -13,8 +13,9 @@ mod toasts;
 
 pub use machine::GoTarget;
 
+use std::os::fd::RawFd;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -930,7 +931,12 @@ impl Feed<'_> {
         }
         // What was written before this is not news: the key back writes its line after the attach starts.
         let mut tail = files::EventTail::at_end(self.paths);
-        let command = crate::cli::open::attach_to(self.tmux, &landing.target);
+        let mut command = crate::cli::open::attach_to(self.tmux, &landing.target);
+        // tmux's client prints its exit line (`[detached (from session api)]`) on its standard output, which is the
+        // terminal the list is drawn on again, so the line showed until the list's first frame. The client draws
+        // through its standard input and says what went wrong on its standard error: only the line is held back,
+        // in a pipe ([`ClientOutput`] says when this app reads it).
+        let mut client_output = ClientOutput::on(&mut command);
         let holder = self.record.holder().to_string();
         // The terminal is the client's while it runs. The wait for the line comes after the screen is back
         // (raw, so no key is echoed and none ends or stops the app): the line comes before the client goes,
@@ -939,7 +945,7 @@ impl Feed<'_> {
         let supervisor = self.record.supervisor();
         let (ended, back_in) = lend_through(
             screen,
-            || self.attach(command, ""),
+            || self.attach(command, "", Some(&mut client_output)),
             // The client was ended for a signal or a gone supervisor (`wait_for`): the screen is not taken back.
             ending(supervisor),
             || left_line(&mut tail, &holder, LEFT_WAIT),
@@ -950,6 +956,11 @@ impl Feed<'_> {
             // client ended by itself and the screen was taken back before the signal came, it is still the app's.
             // Either way nothing more is drawn: the loop's first look, before it draws again, sees the flag or
             // the gone supervisor and ends the app, and the end puts away what is still the app's.
+            if signalled() {
+                // The person is not going back to the list but to the shell, and the client's line (`[lost tty]`,
+                // `[terminated]`) is what says why: it goes on the terminal as the client wrote it.
+                client_output.put_on_terminal();
+            }
             return Ok(Step::Done);
         }
         let failure = match ended {
@@ -1085,10 +1096,12 @@ impl Feed<'_> {
 
     /// Runs `command` on the terminal and waits, with the record saying which client it is. The wait keeps
     /// the machines moving ([`Feed::wait_for`]), and ends early when a signal was passed on or the supervisor is gone.
+    /// `output` is the pipe the client's standard output is (see [`Feed::wait_for`] for what is done with it).
     fn attach(
         &mut self,
         mut command: Command,
         inside: &str,
+        output: Option<&mut ClientOutput>,
     ) -> Result<std::process::ExitStatus, String> {
         // An old line is never taken for this attach's: neither one kept before nor one still queued in the hub.
         // The hub is polled first, so that what a connection has already read is in the queue and goes with the
@@ -1110,7 +1123,7 @@ impl Feed<'_> {
         // What was taken just now was for the list: the person is not there. A toast taken in the tick of
         // the person's Enter is therefore not shown anywhere (accepted: it is one tick).
         self.toasts.forget_top();
-        let ended = self.wait_for(child.id(), is_remote(inside));
+        let ended = self.wait_for(child.id(), is_remote(inside), output);
         // The machines are looked at once more while the person is still inside: a machine that went away
         // with the attach is no machine that dropped off after it.
         self.hub.poll(Instant::now());
@@ -1125,20 +1138,51 @@ impl Feed<'_> {
     /// attached. The wait is the one owner of ending the client: a signal passed on ends it, and so does a
     /// supervisor that is gone, and the client is told to end as well ([`end_the_client`]). `remote` says the
     /// client is an ssh: see [`end_and_put_away`].
-    fn wait_for(&mut self, pid: u32, remote: bool) -> Result<std::process::ExitStatus, String> {
+    ///
+    /// `output` is the pipe that is the client's standard output, when it has one. What is in it is copied to the
+    /// terminal as it comes, at every look and once more when the client has ended ([`ClientOutput::look`],
+    /// [`ClientOutput::finish`]): a `detach-client -E` command, or a `lock-command`, which tmux runs in the client's
+    /// own process, writes there while the client runs. The one thing held back is tmux's own exit line, which it
+    /// writes as the client ends ([`ClientOutput`] says how it is told).
+    fn wait_for(
+        &mut self,
+        pid: u32,
+        remote: bool,
+        output: Option<&mut ClientOutput>,
+    ) -> Result<std::process::ExitStatus, String> {
+        self.wait_for_under(pid, remote, output, signalled)
+    }
+
+    /// [`Feed::wait_for`] with the answer to "was the app asked to end" given, so that a test can say it.
+    fn wait_for_under(
+        &mut self,
+        pid: u32,
+        remote: bool,
+        mut output: Option<&mut ClientOutput>,
+        signalled: impl Fn() -> bool,
+    ) -> Result<std::process::ExitStatus, String> {
         use std::os::unix::process::ExitStatusExt;
         let pid = pid as libc::pid_t;
+        let mut ran_at = Instant::now();
         loop {
             let mut status: libc::c_int = 0;
             // SAFETY: `waitpid` of the client this process started and has not reaped, with a status of its
             // own to write to. `Child` is never asked to wait for it again.
             let waited =
                 unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG | libc::WUNTRACED) };
+            if waited == 0 {
+                // The client was seen running now: a held line is let go only by a look that saw it run.
+                ran_at = Instant::now();
+            }
             if waited == pid {
                 if libc::WIFSTOPPED(status) {
                     // SAFETY: `kill` of the client that has just been seen stopped, so not yet reaped.
                     unsafe { libc::kill(pid, libc::SIGCONT) };
                     continue;
+                }
+                if let Some(output) = output.as_mut() {
+                    // A client reaped while the app ends on a signal keeps its held line for the shell's prompt.
+                    output.finish(libc::STDOUT_FILENO, signalled());
                 }
                 return Ok(std::process::ExitStatus::from_raw(status));
             }
@@ -1165,9 +1209,494 @@ impl Feed<'_> {
             // attached to arrives while the client still runs.
             self.take_announced();
             self.keep_walk();
-            std::thread::sleep(WAIT_LOOK);
+            match output.as_mut() {
+                // What the program writes is shown as it comes: the wait is for the pipe, up to one look.
+                Some(output) => output.look(libc::STDOUT_FILENO, WAIT_LOOK, ran_at),
+                None => std::thread::sleep(WAIT_LOOK),
+            }
         }
     }
+}
+
+/// The most of a client's standard output that is kept: its exit line is one short line.
+const CLIENT_OUTPUT_CAP: usize = 4096;
+
+/// What a tmux client of this Mac writes on its standard output while it has the terminal. The client writes into a
+/// pipe instead of the terminal, and this app reads the pipe as it comes (at every look of [`Feed::wait_for`], and
+/// once more when the client is reaped) and copies what it reads to the terminal, because a program is writing there:
+/// the command of a `detach-client -E`, or a `lock-command`. The one thing held back is tmux's own exit line
+/// (`[detached (from session api)]`), which it writes as the client ends: `[`, one of its exit messages, `]` and a
+/// newline. The held part is the end of what was read, from the earliest `[` of the last line on from which that end
+/// is such a line (its newline there or not yet) or the start of one cut short by a read bound (`[deta`), at most
+/// [`EXIT_LINE_BYTES`] long; a `[` right after an ESC byte never starts it. Everything else is written as it comes: a
+/// program's own `[ok]`, an escape sequence such as `\e[0m`, a progress bar, a prompt such as `Enter [1-3]: `. When
+/// more bytes follow, the rule is applied again to the new end. The held part is written once a `waitpid` made at
+/// least a look after it began still found the client running (tmux ends at once after its exit line, so a part that
+/// stays is a program's); time alone never lets it go. When the client ends with it still waiting it is dropped, so it
+/// is not shown while the list is drawn again, and is shown when the app ends on a signal and the shell is next
+/// ([`ClientOutput::put_on_terminal`]). The read end is non-blocking: a process that kept the
+/// write end open (a client replaced by the command of `detach-client -E`, and the children of that command) cannot
+/// hold the app, and a program that writes more than a pipe holds does not stop.
+struct ClientOutput {
+    read: Option<std::io::PipeReader>,
+    /// A write to the terminal failed (it hung up): the pipe is only drained from then on, so that the program does
+    /// not stop, and nothing spins on writes that fail at once.
+    terminal_gone: bool,
+    /// What was read from the pipe and is not yet written to the terminal: at most one read chunk. Nothing more is
+    /// read from the pipe while it is not empty, so that a terminal that takes nothing (output paused) stops the
+    /// program on a full pipe, as it would on the terminal itself, and holds no loop.
+    tail: Vec<u8>,
+    /// The line that waits (see above), and since when. Empty when nothing waits.
+    held: Vec<u8>,
+    held_since: Option<Instant>,
+    /// The last byte queued for the terminal before the line that waits (`None` before the first): a `[` that comes
+    /// first in a read is an escape sequence's when it is an ESC.
+    queued_last: Option<u8>,
+    /// The terminal opened again by its name, for the copy to write through: a description of its own, non-blocking,
+    /// so that the flags of the one the program shares are not touched. Opened at the first write; closed with this.
+    own: Option<std::os::fd::OwnedFd>,
+    own_tried: bool,
+}
+
+/// The longest tmux exit line that is held, its newline included.
+const EXIT_LINE_BYTES: usize = 512;
+
+/// What one write to the terminal takes at most: a terminal that reports it can be written takes this much at the
+/// usual speeds, with room for each newline to become two bytes. A write of more than the terminal takes would block
+/// the loop until it takes the rest.
+const TERMINAL_WRITE_BYTES: usize = 256;
+
+/// What one write to the terminal came to.
+#[derive(Debug, PartialEq, Eq)]
+enum Wrote {
+    /// Some bytes were taken (and are off the tail), or the write was interrupted by a signal: try again.
+    Again,
+    /// The terminal takes nothing now (`EAGAIN`, `EWOULDBLOCK`): the tail is kept and a later look tries again.
+    NotNow,
+    /// The terminal is gone: the tail is dropped, and what is read from now on.
+    Gone,
+}
+
+/// The most one copy of the pipe to the terminal takes while the client runs: one look's worth, so that the loop
+/// sees a signal, a gone supervisor and the keeper's lease while a program writes without a pause.
+const PUT_THROUGH_LOOK_BYTES: usize = 64 * 1024;
+
+/// The most the last copy takes, once the client is reaped: a background child of the program that still writes
+/// holds the write end open, and must not hold the app.
+const PUT_THROUGH_REST: usize = 1024 * 1024;
+
+impl ClientOutput {
+    /// Sets the standard output of `command` to a pipe and keeps its read end. When no pipe can be made the line is
+    /// dropped (standard output to /dev/null) and nothing is kept.
+    fn on(command: &mut Command) -> Self {
+        let Ok((read, write)) = std::io::pipe() else {
+            command.stdout(Stdio::null());
+            return Self::over(None);
+        };
+        // SAFETY: `fcntl` on a descriptor this process owns and has just made.
+        let set = unsafe {
+            use std::os::fd::AsRawFd;
+            let fd = read.as_raw_fd();
+            let flags = libc::fcntl(fd, libc::F_GETFL);
+            flags >= 0 && libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) == 0
+        };
+        command.stdout(Stdio::from(write));
+        // A read end that is not non-blocking could hold the app: it is dropped, and the line with it.
+        Self::over(set.then_some(read))
+    }
+
+    fn over(read: Option<std::io::PipeReader>) -> Self {
+        Self {
+            read,
+            terminal_gone: false,
+            tail: Vec::new(),
+            held: Vec::new(),
+            held_since: None,
+            queued_last: None,
+            own: None,
+            own_tried: false,
+        }
+    }
+
+    /// What was written so far, up to [`CLIENT_OUTPUT_CAP`], read until the pipe is empty or ends. Never waits.
+    fn taken(&mut self) -> Vec<u8> {
+        use std::io::Read;
+        let mut kept = Vec::new();
+        let Some(read) = self.read.as_mut() else {
+            return kept;
+        };
+        let mut chunk = [0u8; 1024];
+        while kept.len() < CLIENT_OUTPUT_CAP {
+            let room = (CLIENT_OUTPUT_CAP - kept.len()).min(chunk.len());
+            match read.read(&mut chunk[..room]) {
+                Ok(0) => break,
+                Ok(n) => kept.extend_from_slice(&chunk[..n]),
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break,
+            }
+        }
+        kept
+    }
+
+    /// Copies what is in the pipe to the terminal `terminal` (the app's standard output) as it is read, whole, with
+    /// nothing kept past the tail: up to `most` bytes and for up to `within`, and less when the pipe is empty or ends
+    /// (it never waits for more than is there). Returns the number of bytes it read from the pipe. The terminal is
+    /// never written to unless it reports it can take a write, and each write is short ([`TERMINAL_WRITE_BYTES`]),
+    /// so a terminal that takes nothing (output paused, an emulator that stopped reading) holds this for no longer
+    /// than `within`: what is not written stays in the tail, which is written first by the next call, and nothing
+    /// more is read before it is. A terminal that is gone is not an error (there is nobody to tell): once a write to
+    /// it fails, what is read is dropped.
+    fn put_through(&mut self, terminal: RawFd, most: usize, within: Duration) -> usize {
+        use std::io::Read;
+        let started = Instant::now();
+        let mut chunk = [0u8; 8192];
+        let mut copied = 0;
+        loop {
+            if !self.write_tail(terminal, started, within) {
+                return copied;
+            }
+            if copied >= most || started.elapsed() >= within {
+                return copied;
+            }
+            let Some(read) = self.read.as_mut() else {
+                return copied;
+            };
+            let room = (most - copied).min(chunk.len());
+            match read.read(&mut chunk[..room]) {
+                Ok(0) => return copied,
+                Ok(n) => {
+                    copied += n;
+                    self.take_in(&chunk[..n]);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => return copied,
+            }
+        }
+    }
+
+    /// What was just read, with the line that waited before it: all of it is queued for the terminal but a trailing
+    /// part that may be tmux's exit line ([`exit_line_start`]), which waits (from now, or from when the part that
+    /// waited before began, when the new one starts with it). Dropped when the terminal is gone.
+    fn take_in(&mut self, chunk: &[u8]) {
+        let mut data = std::mem::take(&mut self.held);
+        let since = self.held_since.take();
+        if self.terminal_gone {
+            return;
+        }
+        data.extend_from_slice(chunk);
+        let start = exit_line_start(self.queued_last, &data);
+        let (queue, wait) = data.split_at(start);
+        self.tail.extend_from_slice(queue);
+        if let Some(&last) = queue.last() {
+            self.queued_last = Some(last);
+        }
+        if !wait.is_empty() {
+            // The old held bytes are its beginning (`start` is 0 and the part that waited was not empty): the clock
+            // runs on, so that a program that writes a `[` and a dot at a time is let go like any other.
+            let continued = start == 0 && data.len() > chunk.len();
+            self.held = wait.to_vec();
+            self.held_since = match since {
+                Some(since) if continued => Some(since),
+                _ => Some(Instant::now()),
+            };
+        }
+    }
+
+    /// The line that waited is queued for the terminal: it was a program's.
+    fn release_held(&mut self) {
+        if !self.held.is_empty() && !self.terminal_gone {
+            self.queued_last = self.held.last().copied();
+            self.tail.append(&mut self.held);
+        }
+        self.held.clear();
+        self.held_since = None;
+    }
+
+    /// The descriptor the copy writes through, and whether it is the one this opened: the terminal opened again by its
+    /// name (`ttyname`) with `O_WRONLY | O_NOCTTY | O_NONBLOCK | O_CLOEXEC`, a description of its own, so `O_NONBLOCK`
+    /// is never on the one the program shares. The given descriptor when the terminal has no name that opens.
+    fn writer(&mut self, given: RawFd) -> (RawFd, bool) {
+        use std::os::fd::AsRawFd;
+        if !self.own_tried {
+            self.own_tried = true;
+            self.own = open_by_name(given);
+        }
+        match self.own.as_ref() {
+            Some(own) => (own.as_raw_fd(), true),
+            None => (given, false),
+        }
+    }
+
+    /// Writes the tail to `terminal`, after each time the terminal reported it can take a write (waited for as long as is
+    /// left of `within`, counted from `started`). Through a description of its own a write is as long as the tail and may
+    /// take part of it; through the given descriptor (which the program shares, and may block on) it is a short piece
+    /// ([`TERMINAL_WRITE_BYTES`]). False when the terminal did not take it all in time.
+    fn write_tail(&mut self, terminal: RawFd, started: Instant, within: Duration) -> bool {
+        while !self.tail.is_empty() {
+            if self.terminal_gone {
+                self.tail.clear();
+                break;
+            }
+            let (fd, own) = self.writer(terminal);
+            if !can_write_to(fd, within.saturating_sub(started.elapsed())) {
+                return false;
+            }
+            let piece = if own {
+                self.tail.len()
+            } else {
+                self.tail.len().min(TERMINAL_WRITE_BYTES)
+            };
+            let written = write_once(fd, &self.tail[..piece]);
+            if self.took(written) == Wrote::NotNow {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Takes what one write to the terminal came to: the bytes it wrote leave the tail; `EINTR` is for trying again;
+    /// `EAGAIN` and `EWOULDBLOCK` mean not now (the program that has the terminal may have set it non-blocking, the
+    /// descriptor being shared with it), so the tail stays and the terminal is not given up; any other error is the
+    /// terminal's end.
+    fn took(&mut self, written: std::io::Result<usize>) -> Wrote {
+        match written {
+            Ok(n) if n > 0 => {
+                self.tail.drain(..n.min(self.tail.len()));
+                Wrote::Again
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => Wrote::Again,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Wrote::NotNow,
+            _ => {
+                self.terminal_gone = true;
+                self.tail.clear();
+                Wrote::Gone
+            }
+        }
+    }
+
+    /// One look while the client runs: the line that waited a look is written, then one look's worth is copied.
+    ///
+    /// `ran_at` is when a `waitpid` last found the client still running. The held line is let go only when that
+    /// was at least `wait` after the line was read: time alone never lets it go, so a slow look (the machines
+    /// read, a busy machine) between the `waitpid` and this look cannot let tmux's exit line out.
+    fn look(&mut self, terminal: RawFd, wait: Duration, ran_at: Instant) {
+        if self
+            .held_since
+            .is_some_and(|since| ran_at.saturating_duration_since(since) >= wait)
+        {
+            self.release_held();
+        }
+        self.put_through_within(terminal, wait);
+    }
+
+    /// The last copy, once the client is reaped: what the pipe holds (bounded), and a line that still waits is
+    /// dropped: it was tmux's exit line. With `keep_held` (the app ends on a signal) it is kept instead, for the
+    /// line the app puts above the shell's prompt ([`ClientOutput::put_on_terminal`]). What was opened for the
+    /// copy is closed.
+    fn finish(&mut self, terminal: RawFd, keep_held: bool) {
+        self.put_through(terminal, PUT_THROUGH_REST, WAIT_LOOK);
+        if !keep_held {
+            self.held.clear();
+            self.held_since = None;
+        }
+        self.own = None;
+    }
+
+    /// [`ClientOutput::put_through`] of one look's worth, after waiting up to `wait` for the pipe to have something (a
+    /// pipe whose writers are all gone is ready at once, with nothing to read, and is then waited for by sleeping).
+    /// While a tail is kept the wait is for the terminal to take it instead: the pipe is not read before.
+    fn put_through_within(&mut self, terminal: RawFd, wait: Duration) {
+        use std::os::fd::AsRawFd;
+        if self.terminal_gone {
+            self.tail.clear();
+        }
+        if !self.tail.is_empty() {
+            let started = Instant::now();
+            self.put_through(terminal, PUT_THROUGH_LOOK_BYTES, wait);
+            if !self.tail.is_empty() {
+                // Not taken: a terminal that says it can be written and then refuses must not spin the loop.
+                std::thread::sleep(wait.saturating_sub(started.elapsed()));
+            }
+            return;
+        }
+        let Some(read) = self.read.as_ref() else {
+            std::thread::sleep(wait);
+            return;
+        };
+        let mut fds = libc::pollfd {
+            fd: read.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of a descriptor this struct owns.
+        let ready = unsafe { libc::poll(&mut fds, 1, wait.as_millis() as libc::c_int) };
+        if ready > 0 && fds.revents & libc::POLLIN != 0 {
+            self.put_through(terminal, PUT_THROUGH_LOOK_BYTES, WAIT_LOOK);
+            if self.terminal_gone {
+                // Only drained: a program that writes without a pause is not let to keep the app spinning.
+                std::thread::sleep(wait);
+            }
+        } else if ready > 0 {
+            // Hung up with nothing in it: every writer is gone, so nothing will come.
+            std::thread::sleep(wait);
+        }
+    }
+
+    /// Writes what the client wrote to the terminal on standard output, in one `write(2)`. A terminal that is gone
+    /// is not an error here: there is nobody to tell.
+    fn put_on_terminal(mut self) {
+        let mut line = std::mem::take(&mut self.tail);
+        line.append(&mut self.held);
+        line.extend(self.taken());
+        if line.is_empty() {
+            return;
+        }
+        // SAFETY: `write` of a buffer that is alive, to descriptor 1; a short or failed write is all there is.
+        unsafe {
+            libc::write(1, line.as_ptr().cast(), line.len());
+        }
+    }
+}
+
+/// Waits up to `within` for `terminal` to report that a write can be made. True too when it reports an error or a hang-up,
+/// so that the write that follows tells which: it is the one that names the terminal gone.
+fn can_write_to(terminal: RawFd, within: Duration) -> bool {
+    // A wait that long is no wait at all (and an `Instant` could not hold it).
+    let until = Instant::now() + within.min(Duration::from_secs(3600));
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        // Rounded up: a wait of less than a millisecond is not none.
+        let millis = left.as_micros().div_ceil(1000).min(i32::MAX as u128) as libc::c_int;
+        let mut fds = libc::pollfd {
+            fd: terminal,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of a descriptor of the caller.
+        let ready = unsafe { libc::poll(&mut fds, 1, millis) };
+        if ready > 0 {
+            return true;
+        }
+        if ready == 0 {
+            return false;
+        }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return true;
+        }
+    }
+}
+
+/// One `write(2)` of `bytes` to `terminal`: how many it took, or the error.
+fn write_once(terminal: RawFd, bytes: &[u8]) -> std::io::Result<usize> {
+    // SAFETY: `write` of a buffer that is alive, to the descriptor of the caller.
+    let written = unsafe { libc::write(terminal, bytes.as_ptr().cast(), bytes.len()) };
+    if written < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(written as usize)
+    }
+}
+
+/// The messages tmux writes in its exit line, between `[` and `]` (checked against the strings of tmux 3.6b and 3.8).
+const EXIT_MESSAGES: [&str; 8] = [
+    "detached",
+    "detached and SIGHUP",
+    "lost tty",
+    "terminated",
+    "server exited unexpectedly",
+    "exited",
+    "server exited",
+    "unknown reason",
+];
+
+/// The messages that name the session, up to where its name begins: `detached (from session NAME)`.
+const EXIT_SESSION_HEADS: [&str; 2] = [
+    "[detached (from session ",
+    "[detached and SIGHUP (from session ",
+];
+
+/// Whether `part`, which starts with a `[`, is tmux's exit line (`[`, one of its messages, `]` and a newline, the
+/// newline not yet there or not) or the start of one cut short. A session's name is anything with no newline, and
+/// tmux cuts the message at 255 bytes, so a session form may end without its `)`.
+fn could_be_exit_line(part: &[u8]) -> bool {
+    if part.len() > EXIT_LINE_BYTES {
+        return false;
+    }
+    for message in EXIT_MESSAGES {
+        if format!("[{message}]\n").as_bytes().starts_with(part) {
+            return true;
+        }
+    }
+    for head in EXIT_SESSION_HEADS {
+        if head.as_bytes().starts_with(part) {
+            return true;
+        }
+        let Some(rest) = part.strip_prefix(head.as_bytes()) else {
+            continue;
+        };
+        // With no newline the name is still being written or the line is finished and waits for its newline; with
+        // one, it is the last byte and follows the `]`.
+        let name = match rest.iter().position(|&b| b == b'\n') {
+            None => return true,
+            Some(at) if at + 1 == rest.len() => &rest[..at],
+            Some(_) => continue,
+        };
+        if name.ends_with(b"]") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Where the part that waits begins in `data`, or `data.len()` when none waits: the earliest `[` in the last line
+/// (the text after the last newline but the final one) from which the end of `data` is tmux's exit line or the start
+/// of one cut short ([`could_be_exit_line`]), at most [`EXIT_LINE_BYTES`] long. A `[` right after an ESC byte
+/// (`before` is the byte before `data`, when one was queued) belongs to an escape sequence and never starts it. What
+/// came before the `[` (a marker with no newline, an earlier line) does not matter.
+fn exit_line_start(before: Option<u8>, data: &[u8]) -> usize {
+    let body = data.strip_suffix(b"\n").unwrap_or(data);
+    let line = body.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
+    let from = line.max(data.len().saturating_sub(EXIT_LINE_BYTES));
+    for at in from..data.len() {
+        if data[at] != b'[' {
+            continue;
+        }
+        let behind = if at == 0 { before } else { Some(data[at - 1]) };
+        if behind != Some(0x1b) && could_be_exit_line(&data[at..]) {
+            return at;
+        }
+    }
+    data.len()
+}
+
+/// The terminal `terminal` opened again by its name, write-only, non-blocking, not as a controlling terminal and
+/// closed on exec; `None` when it has no name, or the name does not open the same device.
+fn open_by_name(terminal: RawFd) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut name = [0 as libc::c_char; 256];
+    // SAFETY: `ttyname_r` writes at most the buffer's length, a name ended by a NUL, into a buffer of ours.
+    if unsafe { libc::ttyname_r(terminal, name.as_mut_ptr(), name.len()) } != 0 {
+        return None;
+    }
+    // SAFETY: `open` of the NUL-ended name just written.
+    let fd = unsafe {
+        libc::open(
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_NOCTTY | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` was just opened and is owned by nothing else.
+    let own = unsafe { OwnedFd::from_raw_fd(fd) };
+    let device = |fd: RawFd| {
+        // SAFETY: `fstat` of a descriptor that is open, into a `stat` of ours.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        (unsafe { libc::fstat(fd, &mut stat) } == 0).then_some(stat.st_rdev)
+    };
+    use std::os::fd::AsRawFd;
+    (device(terminal).is_some() && device(terminal) == device(own.as_raw_fd())).then_some(own)
 }
 
 /// Whether the program that has the terminal is an ssh: an attach that has a machine (`inside`) is, this Mac's
@@ -2723,7 +3252,7 @@ mod tests {
         let pid = child.id();
         // The wait looks every `WAIT_LOOK`, and the client runs much longer than that (long enough for a test
         // thread that a loaded machine did not run for a second): the line is taken, and kept, while it runs.
-        let _ = feed.wait_for(pid, false);
+        let _ = feed.wait_for(pid, false, None);
         let _ = child.try_wait();
         assert_eq!(feed.lefts, vec![(0, line(&mine, "%3"))]);
     }
@@ -2817,7 +3346,7 @@ mod tests {
             .expect("sleep starts");
         let guard = KillOnDrop(child.id() as libc::pid_t);
         let started = Instant::now();
-        let ended = feed.wait_for(child.id(), false);
+        let ended = feed.wait_for(child.id(), false, None);
         let took = started.elapsed();
         assert!(ended.is_err(), "the wait ended with {ended:?}");
         assert!(took < Duration::from_secs(3), "the wait took {took:?}");
@@ -3361,5 +3890,914 @@ mod tests {
         assert!(app.toast.is_none(), "not said again: {:?}", app.toast);
         edit_and_follow(&mut feed, &mut app, "[machines]\n");
         assert_eq!(feed.doubted, None, "a file that can be told clears it");
+    }
+
+    /// Runs `script` as a client whose standard output is a [`ClientOutput`], and reads until `enough` says the pipe
+    /// holds what the script wrote (a positive wait, 20 s), with the script still alive and holding the write end.
+    fn client_output_of(script: &str, enough: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut child = command.spawn().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut seen = Vec::new();
+        while !enough(&seen) && Instant::now() < deadline {
+            seen.extend(output.taken());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        seen
+    }
+
+    #[test]
+    fn a_clients_line_is_read_while_the_write_end_is_still_open_and_never_waited_for() {
+        let seen = client_output_of("printf '[detached]\\n'; exec sleep 30", |seen| {
+            !seen.is_empty()
+        });
+        assert_eq!(String::from_utf8_lossy(&seen), "[detached]\n");
+    }
+
+    #[test]
+    fn a_clients_output_is_kept_up_to_the_cap() {
+        let seen = client_output_of("head -c 10000 /dev/zero; exec sleep 30", |seen| {
+            seen.len() >= CLIENT_OUTPUT_CAP
+        });
+        assert_eq!(seen.len(), CLIENT_OUTPUT_CAP);
+    }
+
+    /// Kills and reaps a test's client by its pid when the test ends, by a failed assert as well.
+    struct Client(std::process::Child);
+
+    impl Drop for Client {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Closes the descriptors a test made when it ends, by a failed assert as well.
+    struct Closing(Vec<libc::c_int>);
+
+    impl Drop for Closing {
+        fn drop(&mut self) {
+            for fd in &self.0 {
+                // SAFETY: a descriptor the test made, closed once.
+                unsafe { libc::close(*fd) };
+            }
+        }
+    }
+
+    /// How many bytes the pipe `fd` holds that nobody has read (FIONREAD).
+    fn in_the_pipe(fd: RawFd) -> usize {
+        let mut held: libc::c_int = 0;
+        // SAFETY: `ioctl` FIONREAD on a descriptor of the test, with an int of ours to write to.
+        let done = unsafe { libc::ioctl(fd, libc::FIONREAD as _, &mut held) };
+        assert_eq!(done, 0, "FIONREAD failed");
+        held as usize
+    }
+
+    /// The copy takes no more from the pipe than `most`, however long `within` is: a client writes 12 KiB and waits,
+    /// and a copy of 4096 reads 4096 and leaves 8192 in the pipe. (The time bound is the pty test below and the stall
+    /// test of the app's own loop.)
+    #[test]
+    fn a_copy_reads_no_more_from_the_pipe_than_its_most() {
+        use std::os::fd::AsRawFd;
+        let mut command = Command::new("sh");
+        command.args(["-c", "head -c 12288 /dev/zero; exec sleep 30"]);
+        let mut output = ClientOutput::on(&mut command);
+        output.terminal_gone = true;
+        let _client = Client(command.spawn().unwrap());
+        let fd = output.read.as_ref().unwrap().as_raw_fd();
+        // Positive wait: the pipe holds all of it (20 s).
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while in_the_pipe(fd) < 12288 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(in_the_pipe(fd), 12288, "the client did not write it all");
+        let copied = output.put_through(libc::STDOUT_FILENO, 4096, Duration::from_secs(60));
+        assert_eq!(copied, 4096, "the copy read more or less than its most");
+        assert_eq!(in_the_pipe(fd), 8192, "the copy took more from the pipe");
+    }
+
+    /// The master and the slave of a pty of the test's own, made raw, with the master non-blocking and both closed
+    /// when the guard goes.
+    fn raw_pty() -> (RawFd, RawFd, Closing) {
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0, "no pseudo terminal");
+        close_on_exec(&[master, slave]);
+        let closing = Closing(vec![master, slave]);
+        // SAFETY: `tcgetattr`, `cfmakeraw` and `tcsetattr` on the slave just made and a `termios` of ours; `fcntl` on
+        // the master just made.
+        unsafe {
+            let mut modes: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(slave, &mut modes), 0, "no modes to read");
+            libc::cfmakeraw(&mut modes);
+            assert_eq!(libc::tcsetattr(slave, libc::TCSANOW, &modes), 0);
+            let flags = libc::fcntl(master, libc::F_GETFL);
+            assert_eq!(
+                libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK),
+                0
+            );
+        }
+        (master, slave, closing)
+    }
+
+    /// Reads everything the master has now (it never waits).
+    fn read_master(master: RawFd, into: &mut Vec<u8>) {
+        loop {
+            let mut buf = [0u8; 4096];
+            // SAFETY: `read` into a buffer that is alive, from the master of the test's pty.
+            let n = unsafe { libc::read(master, buf.as_mut_ptr().cast(), buf.len()) };
+            if n <= 0 {
+                return;
+            }
+            into.extend_from_slice(&buf[..n as usize]);
+        }
+    }
+
+    /// A terminal that takes nothing (its output paused with Ctrl-S, which `tcflow(TCOOFF)` is) holds the copy for no
+    /// longer than its time, keeps what it could not write and reads no more from the pipe; once the terminal
+    /// takes output again, later copies deliver every byte, once and in order.
+    #[test]
+    fn a_terminal_that_takes_nothing_holds_the_copy_for_no_longer_than_its_time() {
+        use std::os::fd::AsRawFd;
+        let (master, slave, _closing) = raw_pty();
+        let known: Vec<u8> = (0..65536u32).map(|i| (i % 251) as u8).collect();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("known");
+        std::fs::write(&file, &known).unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", "cat \"$1\"", "sh"]).arg(&file);
+        let output = ClientOutput::on(&mut command);
+        let _client = Client(command.spawn().unwrap());
+        let pipe = output.read.as_ref().unwrap().as_raw_fd();
+        // Positive wait: the pipe has something in it (20 s).
+        let mut fds = libc::pollfd {
+            fd: pipe,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of a descriptor `output` owns.
+        assert!(
+            unsafe { libc::poll(&mut fds, 1, 20_000) } > 0,
+            "the client wrote nothing"
+        );
+
+        let within = Duration::from_millis(500);
+        // SAFETY: `tcflow` on the slave just made.
+        assert_eq!(unsafe { libc::tcflow(slave, libc::TCOOFF) }, 0);
+        let (done, took) = std::sync::mpsc::channel();
+        let copy = std::thread::spawn(move || {
+            let mut output = output;
+            let started = Instant::now();
+            let copied = output.put_through(slave, usize::MAX, within);
+            let _ = done.send((started.elapsed(), copied));
+            output
+        });
+        let mut delivered = Vec::new();
+        let took = match took.recv_timeout(within + Duration::from_millis(200)) {
+            Ok(took) => took,
+            Err(_) => {
+                // Output is resumed and the master read, so that the thread ends before this fails.
+                // SAFETY: `tcflow` on the slave just made.
+                unsafe { libc::tcflow(slave, libc::TCOON) };
+                let until = Instant::now() + Duration::from_secs(10);
+                while !copy.is_finished() && Instant::now() < until {
+                    read_master(master, &mut delivered);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                panic!(
+                    "the copy was held by a terminal that takes nothing, for more than {within:?} and 200 ms"
+                );
+            }
+        };
+        let mut output = copy.join().unwrap();
+        assert!(
+            took.0 < within + Duration::from_millis(200),
+            "the copy took {:?}",
+            took.0
+        );
+        assert!(
+            !output.tail.is_empty(),
+            "what the terminal did not take was not kept"
+        );
+        assert!(
+            in_the_pipe(pipe) > 0,
+            "the copy read the whole pipe, with a tail unwritten"
+        );
+        assert!(took.1 < known.len(), "the copy read it all");
+
+        // SAFETY: `tcflow` on the slave just made.
+        assert_eq!(unsafe { libc::tcflow(slave, libc::TCOON) }, 0);
+        let until = Instant::now() + Duration::from_secs(30);
+        read_master(master, &mut delivered);
+        while delivered.len() < known.len() && Instant::now() < until {
+            output.put_through(slave, usize::MAX, Duration::from_millis(20));
+            read_master(master, &mut delivered);
+        }
+        assert_eq!(delivered.len(), known.len(), "not every byte was delivered");
+        assert!(
+            delivered == known,
+            "the bytes were not delivered in order, once"
+        );
+        // Nothing more is to come, and nothing is left unwritten.
+        output.put_through(slave, usize::MAX, Duration::from_millis(20));
+        read_master(master, &mut delivered);
+        assert_eq!(
+            delivered.len(),
+            known.len(),
+            "more than was written arrived"
+        );
+        assert!(output.tail.is_empty());
+    }
+
+    /// How a write that failed is taken: `EAGAIN` and `EWOULDBLOCK` are not now (the tail stays and the terminal is
+    /// not given up: the program that shares the descriptor may have made it non-blocking), `EINTR` is for another
+    /// try, `EIO` is a terminal that has gone.
+    #[test]
+    fn a_write_that_would_block_keeps_the_tail_and_one_that_failed_ends_the_terminal() {
+        let output_with_a_tail = || ClientOutput {
+            tail: b"abc".to_vec(),
+            ..ClientOutput::over(None)
+        };
+        for errno in [libc::EAGAIN, libc::EWOULDBLOCK] {
+            let mut output = output_with_a_tail();
+            let wrote = output.took(Err(std::io::Error::from_raw_os_error(errno)));
+            assert_eq!(wrote, Wrote::NotNow, "errno {errno}");
+            assert!(!output.terminal_gone, "errno {errno} ended the terminal");
+            assert_eq!(output.tail, b"abc", "errno {errno} lost the tail");
+        }
+        let mut output = output_with_a_tail();
+        let wrote = output.took(Err(std::io::Error::from_raw_os_error(libc::EINTR)));
+        assert_eq!(wrote, Wrote::Again);
+        assert!(!output.terminal_gone);
+        assert_eq!(output.tail, b"abc");
+        let mut output = output_with_a_tail();
+        assert_eq!(output.took(Ok(2)), Wrote::Again);
+        assert_eq!(output.tail, b"c", "the bytes written were left in the tail");
+        let mut output = output_with_a_tail();
+        let wrote = output.took(Err(std::io::Error::from_raw_os_error(libc::EIO)));
+        assert_eq!(wrote, Wrote::Gone);
+        assert!(output.terminal_gone, "EIO did not end the terminal");
+        assert!(output.tail.is_empty());
+    }
+
+    /// Copies exactly `bytes` from the pipe, one read bounded to what is still missing at a time. Bounded by 20 s: a
+    /// client that writes less panics with what was read (a part may wait in `held`) instead of spinning.
+    fn put_through_exactly(output: &mut ClientOutput, terminal: RawFd, bytes: usize) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut got = 0;
+        while got < bytes {
+            assert!(
+                Instant::now() < deadline,
+                "the client wrote {got} of {bytes} bytes in 20 s (held {:?}, queued {:?})",
+                String::from_utf8_lossy(&output.held),
+                String::from_utf8_lossy(&output.tail)
+            );
+            got += output.put_through(terminal, bytes - got, Duration::from_millis(200));
+        }
+    }
+
+    /// What the copy delivered to a pty's master, and how it went.
+    struct Copied {
+        delivered: Vec<u8>,
+        /// The looks made while the client ran.
+        looks: usize,
+        /// Whether a line waited at the end of some look.
+        held_at_a_look: bool,
+        /// Whether the client ended (and the last copy was made) before the deadline.
+        ended: bool,
+    }
+
+    /// Runs `script` as a client whose standard output is a [`ClientOutput`] copied to a pty of the test's own the way
+    /// the app's wait does: a look while the client runs (`until` says when to stop looking at a client that does not
+    /// end), the last copy once it has ended. Bounded by 20 s.
+    fn copied_through_a_pty(script: &str, until: impl Fn(&[u8]) -> bool) -> Copied {
+        let (master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", script]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut copied = Copied {
+            delivered: Vec::new(),
+            looks: 0,
+            held_at_a_look: false,
+            ended: false,
+        };
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = client.0.try_wait() {
+                output.finish(slave, false);
+                read_master(master, &mut copied.delivered);
+                copied.ended = true;
+                break;
+            }
+            output.look(slave, WAIT_LOOK, Instant::now());
+            copied.looks += 1;
+            copied.held_at_a_look |= !output.held.is_empty();
+            read_master(master, &mut copied.delivered);
+            if until(&copied.delivered) {
+                break;
+            }
+        }
+        copied
+    }
+
+    #[test]
+    fn tmuxs_exit_line_is_not_copied_when_the_client_ends_with_it() {
+        let copied = copied_through_a_pty("printf '[detached (from session x)]\\n'", |_| false);
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "",
+            "the exit line reached the terminal"
+        );
+    }
+
+    #[test]
+    fn a_bracketed_line_with_more_after_it_is_a_programs_and_is_copied() {
+        let copied = copied_through_a_pty("printf '[note]\\nmore\\n'", |_| false);
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(String::from_utf8_lossy(&copied.delivered), "[note]\nmore\n");
+        // The same when the first line is followed, after a pause the client spends running, by the second: the
+        // first is let go at a look during the pause, then the second follows, each once and in order.
+        let let_go = std::cell::Cell::new(false);
+        let copied = copied_through_a_pty(
+            "printf '[exited]\\n'; sleep 1; printf 'more\\n'; exec sleep 30",
+            |seen| {
+                if seen == b"[exited]\n" {
+                    let_go.set(true);
+                }
+                seen == b"[exited]\nmore\n"
+            },
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[exited]\nmore\n"
+        );
+        assert!(
+            let_go.get(),
+            "the first line did not arrive during the pause"
+        );
+    }
+
+    #[test]
+    fn a_bracketed_line_that_stays_while_the_client_runs_arrives_within_two_looks() {
+        let copied = copied_through_a_pty("printf '[exited]\\n'; exec sleep 30", |seen| {
+            seen == b"[exited]\n"
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[exited]\n",
+            "the line never arrived"
+        );
+        assert!(
+            copied.held_at_a_look,
+            "the line was not held at all (it is tmux's until it stays)"
+        );
+        assert!(
+            copied.looks <= 3,
+            "the line took {} looks to arrive",
+            copied.looks
+        );
+    }
+
+    #[test]
+    fn text_before_the_exit_line_arrives_and_the_exit_line_does_not() {
+        let copied = copied_through_a_pty("printf 'text\\n[exited]\\n'", |_| false);
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(String::from_utf8_lossy(&copied.delivered), "text\n");
+        // A marker with no newline before it (a lock command's) does not make the line a part of a longer one.
+        let copied = copied_through_a_pty(
+            "printf MARK; sleep 0.2; printf '[detached (from session x)]\\n'",
+            |_| false,
+        );
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(String::from_utf8_lossy(&copied.delivered), "MARK");
+    }
+
+    #[test]
+    fn a_bracketed_part_with_no_newline_is_never_held() {
+        let copied = copied_through_a_pty("printf '[=====]\\r'; exec sleep 30", |seen| {
+            seen == b"[=====]\r"
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[=====]\r",
+            "the progress bar never arrived"
+        );
+        assert!(!copied.held_at_a_look, "a part with no newline was held");
+    }
+
+    #[test]
+    fn the_exit_line_after_a_marker_in_the_same_read_is_held() {
+        // A marker with no newline and tmux's exit line in one read (a lock command's marker, a paused terminal).
+        let copied = copied_through_a_pty("printf 'MARK[detached (from session x)]\\n'", |_| false);
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "MARK",
+            "the exit line reached the terminal, or the marker did not"
+        );
+    }
+
+    #[test]
+    fn an_exit_line_cut_in_two_by_a_read_bound_is_held() {
+        let (master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '[detached (from session x)]\\n'"]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        client.0.wait().unwrap();
+        // Ten bytes a read: the line comes in four parts.
+        let mut reads = 0;
+        while output.put_through(slave, 10, Duration::from_secs(5)) > 0 {
+            reads += 1;
+        }
+        assert!(reads >= 3, "the line was not cut ({reads} reads)");
+        output.finish(slave, false);
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(
+            String::from_utf8_lossy(&delivered),
+            "",
+            "a part of the exit line reached the terminal"
+        );
+    }
+
+    #[test]
+    fn an_exit_line_cut_between_its_bracket_and_its_newline_is_held() {
+        let (master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "printf '[detached (from session x)]'; sleep 0.3; printf '\\n'",
+        ]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        // One read ends exactly at the `]`; the newline comes in the next.
+        let line = "[detached (from session x)]";
+        put_through_exactly(&mut output, slave, line.len());
+        assert_eq!(
+            output.held,
+            line.as_bytes(),
+            "the line up to its bracket was not held"
+        );
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(
+            String::from_utf8_lossy(&delivered),
+            "",
+            "the line showed before its newline"
+        );
+        client.0.wait().unwrap();
+        while output.put_through(slave, 8192, Duration::from_secs(5)) > 0 {}
+        output.finish(slave, false);
+        read_master(master, &mut delivered);
+        assert_eq!(
+            String::from_utf8_lossy(&delivered),
+            "",
+            "a part of the exit line reached the terminal"
+        );
+    }
+
+    #[test]
+    fn a_prompt_that_ends_in_brackets_is_not_tmuxs_exit_line_and_shows_at_once() {
+        let copied = copied_through_a_pty("printf 'Overwrite? [y/N]'; exec sleep 30", |seen| {
+            seen == b"Overwrite? [y/N]"
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "Overwrite? [y/N]",
+            "the prompt never arrived"
+        );
+        assert!(!copied.held_at_a_look, "the prompt was held");
+        let copied = copied_through_a_pty("printf '[ok]\\n'", |_| false);
+        assert!(copied.ended, "the client never ended");
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[ok]\n",
+            "a program's own [ok] did not arrive"
+        );
+    }
+
+    #[test]
+    fn a_prompt_with_brackets_and_a_progress_bar_show_at_once() {
+        let copied = copied_through_a_pty("printf 'Enter [1-3]: '; exec sleep 30", |seen| {
+            seen == b"Enter [1-3]: "
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "Enter [1-3]: ",
+            "the prompt never arrived"
+        );
+        assert!(!copied.held_at_a_look, "the prompt was held");
+        let copied = copied_through_a_pty("printf '[#####   ]\\r'; exec sleep 30", |seen| {
+            seen == b"[#####   ]\r"
+        });
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[#####   ]\r",
+            "the progress bar never arrived"
+        );
+        assert!(!copied.held_at_a_look, "the progress bar was held");
+    }
+
+    #[test]
+    fn what_is_held_is_the_end_that_is_tmuxs_exit_line_or_its_start() {
+        fn held(data: &[u8]) -> &[u8] {
+            &data[exit_line_start(None, data)..]
+        }
+        let cases: &[(&[u8], &[u8])] = &[
+            (
+                b"[detached (from session x)]\n",
+                b"[detached (from session x)]\n",
+            ),
+            (b"MARK[detached]\n", b"[detached]\n"),
+            (b"text\n[exited]\n", b"[exited]\n"),
+            (b"[detached (from ses", b"[detached (from ses"),
+            (b"text [", b"["),
+            (b"[detached]", b"[detached]"),
+            (b"MARK[exited]", b"[exited]"),
+            (b"[detached and SIGHUP]\n", b"[detached and SIGHUP]\n"),
+            (
+                b"[detached and SIGHUP (from session s)]\n",
+                b"[detached and SIGHUP (from session s)]\n",
+            ),
+            (b"[lost tty]\n", b"[lost tty]\n"),
+            (b"[terminated]", b"[terminated]"),
+            (
+                b"[server exited unexpectedly]\n",
+                b"[server exited unexpectedly]\n",
+            ),
+            (b"[server exited]\n", b"[server exited]\n"),
+            (b"[unknown reason]\n", b"[unknown reason]\n"),
+            (b"[exi", b"[exi"),
+            (b"[exited]\n[exi", b"[exi"),
+            // A session whose name has brackets or the start of the line in it: held whole, from the earliest `[`.
+            (
+                b"[detached (from session a[1])]\n",
+                b"[detached (from session a[1])]\n",
+            ),
+            (
+                b"[detached (from session a[1])]",
+                b"[detached (from session a[1])]",
+            ),
+            (
+                b"[detached (from session a[1",
+                b"[detached (from session a[1",
+            ),
+            (
+                b"[detached (from session x [detached)]\n",
+                b"[detached (from session x [detached)]\n",
+            ),
+            (b"x [detached", b"[detached"),
+            (b"[a[exited]\n", b"[exited]\n"),
+            // A name cut at 255 bytes ends without its `)`.
+            (
+                b"[detached (from session abc]\n",
+                b"[detached (from session abc]\n",
+            ),
+            // Not tmux's: a program's own brackets, escape sequences, bars and prompts.
+            (b"[ok]", b""),
+            (b"[ok]\n", b""),
+            (b"[waiting]\n", b""),
+            (b"[a]\nmore\n", b""),
+            (b"[exited]\nmore", b""),
+            (b"[exited]x\n", b""),
+            (b"[detached (from session a\nb)]\n", b""),
+            (b"[#####   ]\r", b""),
+            (b"[###\r", b""),
+            (b"Enter [1-3]: ", b""),
+            (b"[a] b\n", b""),
+            (b"[a]\r\n", b""),
+            (b"done\x1b[0m", b""),
+            (b"x\x1b[?1l\x1b>", b""),
+            (b"\x1b[exited]\n", b""),
+            (b"no brackets\n", b""),
+            (b"", b""),
+        ];
+        for (data, want) in cases {
+            assert_eq!(
+                String::from_utf8_lossy(held(data)),
+                String::from_utf8_lossy(want),
+                "data {:?}",
+                String::from_utf8_lossy(data)
+            );
+        }
+        // A `[` right after an ESC queued by an earlier read is an escape sequence's too.
+        assert_eq!(exit_line_start(Some(0x1b), b"[0m"), 3);
+        assert_eq!(exit_line_start(Some(b'x'), b"[exi"), 0);
+        // Longer than the cap: not held, finished or not.
+        let long = format!("[{}]\n", "x".repeat(EXIT_LINE_BYTES));
+        assert_eq!(held(long.as_bytes()), b"");
+        let long = format!("[detached (from session {}", "x".repeat(EXIT_LINE_BYTES));
+        assert_eq!(held(long.as_bytes()), b"");
+    }
+
+    #[test]
+    fn a_program_that_ends_on_an_escape_sequence_has_every_byte_arrive() {
+        for (script, want) in [
+            ("printf 'done\\033[0m'", "done\x1b[0m"),
+            ("printf 'x\\033[?1l\\033>'", "x\x1b[?1l\x1b>"),
+            (
+                "printf '\\033[31mfailed\\033[0m\\n'",
+                "\x1b[31mfailed\x1b[0m\n",
+            ),
+            // Escape sequences whose letter starts one of tmux's messages (`d`, `e`, `l`, `s`, `t`, `u`).
+            ("printf 'a\\033[s'", "a\x1b[s"),
+            ("printf 'a\\033[u'", "a\x1b[u"),
+            ("printf 'a\\033[d\\033[e'", "a\x1b[d\x1b[e"),
+        ] {
+            let copied = copied_through_a_pty(script, |_| false);
+            assert!(copied.ended, "the client never ended");
+            assert_eq!(
+                String::from_utf8_lossy(&copied.delivered),
+                want,
+                "script {script}: bytes were lost"
+            );
+        }
+        // ESC and `[` in two reads.
+        let mut output = ClientOutput::over(None);
+        output.take_in(b"x\x1b");
+        output.take_in(b"[0m");
+        assert!(output.held.is_empty(), "the escape sequence was held");
+        assert_eq!(output.tail, b"x\x1b[0m");
+    }
+
+    #[test]
+    fn an_exit_line_of_a_session_with_brackets_in_its_name_is_held_whole() {
+        for name in ["a[1]", "x [detached"] {
+            let script = format!("printf '[detached (from session {name})]\\n'");
+            let copied = copied_through_a_pty(&script, |_| false);
+            assert!(copied.ended, "the client never ended");
+            assert_eq!(
+                String::from_utf8_lossy(&copied.delivered),
+                "",
+                "a part of the exit line of session {name} reached the terminal"
+            );
+        }
+    }
+
+    /// A read bound can cut the line inside a name that has a `[` in it, where a later `[` also starts something that
+    /// could be the line: the part held starts at the earliest.
+    #[test]
+    fn an_exit_line_cut_inside_a_name_with_brackets_is_held_from_its_first_bracket() {
+        for name in ["a[1]", "x [detached", "a [exited]", "a [exi"] {
+            let line = format!("[detached (from session {name})]\n");
+            let cut = line.find(name).unwrap() + name.len();
+            let mut output = ClientOutput::over(None);
+            output.take_in(&line.as_bytes()[..cut]);
+            assert_eq!(output.held, &line.as_bytes()[..cut], "name {name}");
+            assert!(output.tail.is_empty(), "name {name}: a part was queued");
+            output.take_in(&line.as_bytes()[cut..]);
+            assert_eq!(output.held, line.as_bytes(), "name {name}");
+            assert!(output.tail.is_empty(), "name {name}: a part was queued");
+        }
+    }
+
+    #[test]
+    fn a_bare_open_bracket_cut_short_that_stays_arrives_within_two_looks() {
+        let copied = copied_through_a_pty("printf '[exi'; exec sleep 30", |seen| seen == b"[exi");
+        assert_eq!(
+            String::from_utf8_lossy(&copied.delivered),
+            "[exi",
+            "the part never arrived"
+        );
+        assert!(copied.held_at_a_look, "the part was not held at all");
+        assert!(
+            copied.looks <= 3,
+            "the part took {} looks to arrive",
+            copied.looks
+        );
+    }
+
+    #[test]
+    fn an_exit_line_cut_inside_its_message_is_held_and_dropped_with_the_rest() {
+        let (master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf '[exi'; sleep 0.3; printf 'ted]\\n'"]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        put_through_exactly(&mut output, slave, 4);
+        assert_eq!(output.held, b"[exi", "the start of the line was not held");
+        client.0.wait().unwrap();
+        while output.put_through(slave, 8192, Duration::from_secs(5)) > 0 {}
+        output.finish(slave, false);
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(
+            String::from_utf8_lossy(&delivered),
+            "",
+            "a part of the exit line reached the terminal"
+        );
+    }
+
+    /// A part that grows from the one that waited keeps the clock of it: a program that writes a `[` and then a
+    /// letter at a time is let go a look after the first read, not a look after the last.
+    #[test]
+    fn a_held_part_that_grows_keeps_its_clock() {
+        let (master, slave, _closing) = raw_pty();
+        let wait = Duration::from_millis(20);
+        let mut output = ClientOutput::over(None);
+        output.take_in(b"[det");
+        let first = output.held_since.expect("the part was not held");
+        std::thread::sleep(Duration::from_millis(5));
+        output.take_in(b"ach");
+        assert_eq!(output.held, b"[detach");
+        assert_eq!(output.held_since, Some(first), "the clock restarted");
+        output.look(slave, wait, first + wait);
+        assert!(
+            output.held.is_empty(),
+            "a look after the first read kept it"
+        );
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(String::from_utf8_lossy(&delivered), "[detach");
+        // A new part that starts later (the old bytes written, a new `[` after them) has a clock of its own.
+        output.take_in(b"[exi");
+        let again = output.held_since.expect("the part was not held");
+        std::thread::sleep(Duration::from_millis(5));
+        output.take_in(b"x [exi");
+        assert!(
+            output.held_since > Some(again),
+            "the clock of a part that starts later was the old one"
+        );
+    }
+
+    /// A held line is let go only by a look whose last running `waitpid` was at least a look after the line was read:
+    /// the time a look takes (or any other wait) does not count.
+    #[test]
+    fn a_held_line_is_let_go_only_by_a_waitpid_a_look_after_it_was_read() {
+        let (master, slave, _closing) = raw_pty();
+        let wait = Duration::from_millis(20);
+        let mut output = ClientOutput::over(None);
+        output.take_in(b"[detached (from session x)]\n");
+        let read_at = output.held_since.expect("the line was not held");
+        // Two looks and more go by, but the last waitpid that found the client running was 1 ms after the read.
+        for _ in 0..3 {
+            std::thread::sleep(wait);
+            output.look(slave, wait, read_at + Duration::from_millis(1));
+        }
+        assert!(!output.held.is_empty(), "time alone let the line go");
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(String::from_utf8_lossy(&delivered), "");
+        // A running waitpid just short of a look after the read: still held.
+        output.look(slave, wait, read_at + wait - Duration::from_millis(1));
+        assert!(
+            !output.held.is_empty(),
+            "a waitpid short of a look let it go"
+        );
+        // A running waitpid a look after the read lets it go.
+        output.look(slave, wait, read_at + wait);
+        assert!(output.held.is_empty(), "a waitpid a look later kept it");
+        read_master(master, &mut delivered);
+        assert_eq!(
+            String::from_utf8_lossy(&delivered),
+            "[detached (from session x)]\n"
+        );
+    }
+
+    /// A client reaped while the app ends on a signal keeps its held line, which is written with the line above
+    /// the shell's prompt; any other reap drops it.
+    #[test]
+    fn a_reap_on_a_signal_keeps_the_held_line_for_the_prompt() {
+        let (_master, slave, _closing) = raw_pty();
+        for (keep, want) in [(true, "[terminated]\n"), (false, "")] {
+            let mut output = ClientOutput::over(None);
+            output.take_in(b"[terminated]\n");
+            output.finish(slave, keep);
+            assert_eq!(
+                String::from_utf8_lossy(&output.held),
+                want,
+                "keep_held {keep}"
+            );
+        }
+    }
+
+    /// The wait that reaps a client while the app is told to end keeps the client's held line (for the prompt); the
+    /// reap of any other wait drops it. The client has ended and is a zombie when the wait begins, so the first
+    /// `waitpid` reaps it.
+    #[test]
+    fn the_wait_keeps_the_held_line_when_it_reaps_on_a_signal() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        for (signalled, want) in [(true, "[terminated]\n"), (false, "")] {
+            let mut feed = feed_over(&tmux, &cfg, &paths);
+            let mut command = Command::new("sh");
+            command.args(["-c", "printf '[terminated]\\n'"]);
+            let mut output = ClientOutput::on(&mut command);
+            // The wait under test reaps the client; the guard below never signals a reaped pid.
+            #[allow(clippy::zombie_processes)]
+            let child = command.spawn().unwrap();
+            let pid = child.id();
+            // Nothing is signalled or waited for after the wait under test reaps the client.
+            let _client = KillOnDrop(pid as libc::pid_t);
+            // Positive wait: the client has ended, and is not reaped (WNOWAIT).
+            // SAFETY: `waitid` on a child of this test with a siginfo of its own.
+            let waited = unsafe {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            assert_eq!(waited, 0, "the client did not end");
+            let ended = feed.wait_for_under(pid, false, Some(&mut output), || signalled);
+            assert!(ended.is_ok(), "the wait ended with {ended:?}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.held),
+                want,
+                "signalled {signalled}"
+            );
+        }
+    }
+
+    /// A client that wrote its summary and ended between two looks has it copied by the last copy, which is made after
+    /// the client is reaped: no look has read the pipe.
+    #[test]
+    fn what_the_client_wrote_as_it_ended_is_copied_after_the_reap() {
+        let (master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'synced 3 files\\n'"]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        client.0.wait().unwrap();
+        output.finish(slave, false);
+        let mut delivered = Vec::new();
+        read_master(master, &mut delivered);
+        assert_eq!(String::from_utf8_lossy(&delivered), "synced 3 files\n");
+    }
+
+    /// The copy writes through a description of the terminal of its own, non-blocking, and leaves the given
+    /// descriptor's flags alone; a terminal with no name (a pipe) gets the bytes through the given descriptor.
+    #[test]
+    fn the_copy_writes_through_a_description_of_its_own() {
+        use std::os::fd::AsRawFd;
+        let flags_of = |fd: RawFd| {
+            // SAFETY: `fcntl` F_GETFL on a descriptor of the test.
+            unsafe { libc::fcntl(fd, libc::F_GETFL) }
+        };
+        let (master, slave, _closing) = raw_pty();
+        let before = flags_of(slave);
+        assert_eq!(before & libc::O_NONBLOCK, 0, "the slave starts blocking");
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'hello\\n'"]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        client.0.wait().unwrap();
+        output.put_through(slave, usize::MAX, Duration::from_secs(5));
+        let mut delivered = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while delivered.is_empty() && Instant::now() < deadline {
+            read_master(master, &mut delivered);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(delivered, b"hello\n");
+        let own = output
+            .own
+            .as_ref()
+            .expect("the terminal was not opened by its name");
+        assert_ne!(own.as_raw_fd(), slave);
+        assert_ne!(
+            flags_of(own.as_raw_fd()) & libc::O_NONBLOCK,
+            0,
+            "the copy's own description is blocking"
+        );
+        assert_eq!(
+            flags_of(slave),
+            before,
+            "the given descriptor's flags changed"
+        );
+
+        // A pipe has no name: the bytes go through the given descriptor.
+        let (mut read, write) = std::io::pipe().unwrap();
+        let mut command = Command::new("sh");
+        command.args(["-c", "printf 'hello\\n'"]);
+        let mut output = ClientOutput::on(&mut command);
+        let mut client = Client(command.spawn().unwrap());
+        client.0.wait().unwrap();
+        output.put_through(write.as_raw_fd(), usize::MAX, Duration::from_secs(5));
+        assert!(output.own.is_none(), "a pipe was opened by a name");
+        let mut got = [0u8; 6];
+        std::io::Read::read_exact(&mut read, &mut got).unwrap();
+        assert_eq!(&got, b"hello\n");
     }
 }

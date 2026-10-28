@@ -267,7 +267,7 @@ impl Feed<'_> {
         let (ended, back) = crate::tui::lend_through_holding(
             screen,
             self,
-            |feed| feed.attach(command, name),
+            |feed| feed.attach(command, name, None),
             |ended| failure_words(name, ended).map(|failure| words::attach_held(&failure)),
             |feed| {
                 feed.hub.poll(Instant::now());

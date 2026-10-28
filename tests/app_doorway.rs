@@ -542,3 +542,140 @@ fn go_takes_a_machine_and_an_id() {
         );
     }
 }
+
+/// The doorway from a session the app itself went into: the client there is the app's (its standard output is a
+/// pipe the app reads, not the terminal), and `detach-client -E` keeps that standard output for the command it
+/// runs. The popup is the one `taw ui` opens (the key that would send an app's client back to the list opens none
+/// for it; a `taw ui` of a person's own binding does), and Enter on studio's row makes the client the app in studio,
+/// on the terminal, as it does for a client attached by hand.
+#[test]
+fn enter_on_studios_row_in_a_popup_on_the_apps_own_client_makes_it_the_app_in_studio() {
+    let _own = Owned::new();
+    let rig = rig();
+    let first_session = mac_session(&rig);
+    // tmux does not expand `#{client_name}` in a popup's command or in `detach-client -t`, so the key runs a script
+    // that is given the name and opens the popup on that client, as `ui open` does.
+    let socket_path = rig
+        .mac
+        .tmux(&["display-message", "-p", "#{socket_path}"])
+        .unwrap();
+    let script = rig.mac.work_dir().join("popup.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nexec '{}' -S '{}' display-popup -c \"$1\" -E -w 90% -h 90% \"env -u TMUX -u TMUX_PANE {}'{}' ui --client '$1'\"\n",
+            tmux_path(),
+            socket_path.trim(),
+            env_words(&rig.mac.taw_env()),
+            taw_bin()
+        ),
+    )
+    .unwrap();
+    rig.mac.tmux_ok(&[
+        "bind-key",
+        "-n",
+        "F6",
+        "run-shell",
+        &format!("sh '{}' '#{{client_name}}'", script.display()),
+    ]);
+    let mut env = rig.mac.taw_env();
+    env.push(("TAW_SSH_BIN".into(), rig.stand_in.bin.display().to_string()));
+    type_line(
+        &rig.term,
+        &format!(
+            "env -u TMUX -u TMUX_PANE {}'{}' app 2>'{}'; echo $? >'{}'",
+            env_words(&env),
+            taw_bin(),
+            rig.mac.work_dir().join("app-err").display(),
+            rig.mac.work_dir().join("status").display()
+        ),
+    );
+    expect(&rig, "the app's record", || records(&rig.mac).len() == 1);
+    let record = records(&rig.mac)[0].clone();
+    own(record["pid"].as_u64().expect("a pid") as u32);
+    let supervisor = record["supervisor"].as_u64().expect("a supervisor") as u32;
+    own(supervisor);
+    expect(
+        &rig,
+        "this Mac's session and studio's on the app's list",
+        || {
+            let screen = screen_of(&rig.term);
+            screen.contains("Enter go in")
+                && screen.contains(&first_session)
+                && screen.contains("garden")
+        },
+    );
+    // Into this Mac's own session: the app starts a tmux client with a pipe for its standard output.
+    expect(&rig, "the cursor on this Mac's session", || {
+        if selected_row(&rig.term).contains(&first_session) {
+            return true;
+        }
+        rig.term
+            .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "-l", "j"]);
+        std::thread::sleep(Duration::from_millis(300));
+        false
+    });
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "Enter"]);
+    expect(&rig, "the app's client on this Mac's server", || {
+        clients(&rig.mac).len() == 1
+    });
+    let client_pid = clients(&rig.mac)[0];
+    assert_ne!(
+        client_pid, supervisor,
+        "the client is the app's child, not its supervisor"
+    );
+
+    // The popup on that client, studio's row, Enter.
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "F6"]);
+    expect(&rig, "studio's session in the popup", || {
+        screen_of(&rig.term).contains("garden")
+    });
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "2"]);
+    expect(&rig, "the cursor on studio's session", || {
+        selected_row(&rig.term).contains("garden")
+    });
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "Enter"]);
+
+    // The client's process is a supervisor now, attached to studio, on the terminal.
+    expect(&rig, "an app whose supervisor is the former client", || {
+        records(&rig.mac)
+            .iter()
+            .any(|record| record["supervisor"] == client_pid && record["inside"] == "studio")
+    });
+    own(client_pid);
+    expect(&rig, "studio's status line on the terminal", || {
+        screen_of(&rig.term).contains("[garden]")
+    });
+    let _ = &rig.far;
+}
+
+/// `taw app` with its standard input on a terminal and its standard output on a pipe (as a client's command is
+/// run by `detach-client -E`) draws on the terminal it was started from, instead of refusing.
+#[test]
+fn an_app_whose_standard_output_is_a_pipe_draws_on_its_terminal() {
+    let _own = Owned::new();
+    let rig = rig();
+    let mut env = rig.mac.taw_env();
+    env.push(("TAW_SSH_BIN".into(), rig.stand_in.bin.display().to_string()));
+    type_line(
+        &rig.term,
+        &format!(
+            "env -u TMUX -u TMUX_PANE {}'{}' app 2>'{}' | cat >/dev/null; echo $? >'{}'",
+            env_words(&env),
+            taw_bin(),
+            rig.mac.work_dir().join("pipe-err").display(),
+            rig.mac.work_dir().join("status").display()
+        ),
+    );
+    expect(&rig, "the app's record", || records(&rig.mac).len() == 1);
+    let record = records(&rig.mac)[0].clone();
+    own(record["pid"].as_u64().expect("a pid") as u32);
+    own(record["supervisor"].as_u64().expect("a supervisor") as u32);
+    expect(&rig, "the app's list on the terminal", || {
+        screen_of(&rig.term).contains("Enter go in")
+    });
+}

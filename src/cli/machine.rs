@@ -206,6 +206,10 @@ fn attach(ctx: &Ctx, target: Option<&str>, holder: &str) -> anyhow::Result<Outpu
     if let Some(term) = crate::machine::terminfo::replacement_here() {
         command.env("TERM", term);
     }
+    // The client's exit line (`[detached (from session 3)]`) would go through ssh to the app's terminal and show
+    // until the app's list is drawn again. The client draws through its standard input and says what went wrong
+    // on its standard error, so only that line goes.
+    command.stdout(Stdio::null());
     let err = command.exec();
     if recorded.is_ok() {
         files::remove_attached(&ctx.paths, &tty);

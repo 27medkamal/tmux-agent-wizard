@@ -777,6 +777,20 @@ fn studios_popup_key_returns_to_the_list_with_the_cursor_on_the_pane_you_were_in
         selected_row(&rig.term).contains("1:tools")
     });
     assert_eq!(far_clients(&rig), 0, "studio's client is gone");
+    // Studio's tmux client said its exit line (`[detached (from session garden)]`) through ssh onto the shell's
+    // screen behind the list. That screen is read where the typed command is, so an empty read fails.
+    let behind = rig
+        .term
+        .tmux(&["capture-pane", "-a", "-p", "-J", "-t", &rig.term.pane()])
+        .unwrap_or_default();
+    assert!(
+        behind.contains("app --child"),
+        "the shell's screen behind the list was not read:\n{behind}"
+    );
+    assert!(
+        !behind.contains("[detached"),
+        "studio's exit line is on the shell's screen behind the list:\n{behind}"
+    );
 }
 
 /// The lease on studio's side, as studio's taw keeps it: its holder and when it was last refreshed.

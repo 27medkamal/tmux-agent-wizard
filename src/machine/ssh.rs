@@ -116,7 +116,9 @@ fn command_in(
     match mode {
         Mode::Feed => cmd.arg("-T"),
         Mode::Command | Mode::Fresh => cmd.args(["-T", "-n"]),
-        Mode::Attach => cmd.arg("-t"),
+        // An attach that ends has ssh say `Shared connection to studio closed.` (at INFO), which would show until
+        // the app's list is drawn again. What goes wrong (`Connection refused`) is an ERROR and still shows.
+        Mode::Attach => cmd.args(["-t", "-o", "LogLevel=ERROR"]),
     };
     cmd.arg("-C");
     for option in [
@@ -527,7 +529,15 @@ mod tests {
         );
         let line = remote_line(&m, &["machine", "attach", "%16"]);
         let control = control_options(&control_path(&paths, "studio"));
-        assert_eq!(argv(&got), expected("/fake/ssh", &["-t"], &control, &line));
+        assert_eq!(
+            argv(&got),
+            expected(
+                "/fake/ssh",
+                &["-t", "-o", "LogLevel=ERROR"],
+                &control,
+                &line
+            )
+        );
     }
 
     #[test]

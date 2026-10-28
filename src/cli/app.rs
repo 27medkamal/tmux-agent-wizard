@@ -86,6 +86,7 @@ pub(super) fn run(
     }
     // The terminal's program starts the screen on this terminal: with none (a script, `ssh` with no
     // `-t`) it says so at once, as the screen itself would, not after three failed starts.
+    put_terminal_on_stdout();
     // SAFETY: `isatty` takes a descriptor number and touches no memory.
     if unsafe { libc::isatty(0) == 0 || libc::isatty(1) == 0 } {
         eprintln!("{NO_TERMINAL}");
@@ -93,6 +94,39 @@ pub(super) fn run(
     }
     // The terminal's program: it ends the process with its own status, which is the terminal's.
     std::process::exit(supervise(ctx, go, back));
+}
+
+/// Puts the terminal this process was started from on its standard output when its standard input is one and its
+/// standard output is not. `detach-client -E` runs its command in the tmux client's own process, which keeps the
+/// client's standard output: for a client the app started that is the pipe the app copies the command's output
+/// from (or /dev/null on the far side), and the app draws on a terminal, so it takes the controlling terminal
+/// (`/dev/tty`) as its output, or, with none, the terminal standard input is, opened again to be written (a
+/// duplicate of standard input would be the same open file, which may be read only). It runs before the
+/// terminal check and before the supervisor starts its child, which then has the terminal too. A process with no
+/// terminal on standard input, or one that cannot be written, is left as it is and is refused.
+fn put_terminal_on_stdout() {
+    // SAFETY: `isatty`, `ttyname`, `open`, `dup2` and `close` take descriptor numbers and NUL-ended paths, and touch
+    // no memory of this process; `ttyname` returns a pointer into static storage, read at once.
+    unsafe {
+        if libc::isatty(0) != 1 || libc::isatty(1) == 1 {
+            return;
+        }
+        let mut tty = libc::open(c"/dev/tty".as_ptr(), libc::O_WRONLY | libc::O_NOCTTY);
+        if tty < 0 {
+            let name = libc::ttyname(0);
+            if !name.is_null() {
+                tty = libc::open(name, libc::O_WRONLY | libc::O_NOCTTY);
+            }
+        }
+        if tty < 0 {
+            return;
+        }
+        // With standard output closed the open took its number, and there is nothing to move.
+        if tty != 1 {
+            libc::dup2(tty, 1);
+            libc::close(tty);
+        }
+    }
 }
 
 /// Inside tmux: the line that says so, then the popup on the client. A refusal comes with the words

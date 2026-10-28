@@ -553,8 +553,10 @@ fn the_page_lists_no_keys_and_draws_one_arrow_at_the_help_hint() {
 /// The contract with the homepage (`docs/index.md` holds an iframe on `try/index.html?embed=1`,
 /// a file name, so that a copy of the site opened from disk loads it too): in embed mode the
 /// page draws no header, footer or link of its own but the top words, the popup, the
-/// arrow and the options, fitted to 720 px of height (the popup has fewer rows and a smaller
-/// font), on a transparent background in the docs theme's light or dark; under 700 px it says
+/// arrow and the options, in one column in the middle, with no scrolling of its own (it sets
+/// the frame's height; the popup has fewer rows), on a transparent background in the docs
+/// theme's light or dark, which it gives the frame too (else a browser paints a backdrop
+/// behind the frame); under 700 px it says
 /// the demo needs a keyboard and links to the full page, which has a short header with the
 /// project's name, the repository and the docs.
 #[test]
@@ -566,7 +568,10 @@ fn the_page_can_be_embedded_in_the_homepage() {
         "const ROWS = EMBED ? 38 : 40;",
         "html.embed { background: transparent; }",
         "html.embed .full { display: none; }",
-        "window.innerHeight - top - ZONE",
+        "frame.style.height = Math.ceil(main.getBoundingClientRect().bottom",
+        "new ResizeObserver(fitFrame).observe(main)",
+        "if (frame) frame.style.colorScheme = dark ? 'dark' : 'light';",
+        "html.embed .term { width: max-content; max-width: 100%; margin: 0 auto; }",
         "data-md-color-scheme",
         "@media (max-width: 699px)",
         "html.embed .demo, html.embed h1.start, html.embed p.lead { display: none; }",

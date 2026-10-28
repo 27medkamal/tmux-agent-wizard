@@ -296,11 +296,12 @@
 .taw-highlights p { margin: 0; font-size: 0.76rem; line-height: 1.5; }
 .taw-highlights p.taw-hl-head { margin: 0 0 0.45rem; font-size: 0.86rem; font-weight: 700; color: var(--taw-accent); }
 
-/* The try demo, embedded */
-.taw-try { border-radius: var(--taw-radius); overflow: hidden; border: 1px solid var(--taw-line-strong); box-shadow: var(--taw-shadow); }
-.taw-try iframe { display: block; }
+/* The try demo, embedded: part of the page, with no box of its own. The demo sets the frame's height (nothing
+   scrolls inside it) and its light or dark; the frame starts light, as the demo's page does, so the browser
+   never paints a backdrop behind it. */
+.taw-try iframe { display: block; color-scheme: light; }
 /* In the hero, in place of a screenshot: the live popup, as wide as the page. */
-.taw-hero-try { margin: 1.6rem 0 0; text-align: left; background: var(--md-default-bg-color); }
+.taw-hero-try { margin: 1.6rem 0 0; text-align: left; }
 .taw-try-narrow { display: none; width: 100%; height: auto; }
 /* Under 700 px the live popup is hidden and the recording shows in its place. */
 @media (max-width: 699.98px) {

@@ -117,7 +117,9 @@
   :root { --arrow: #d9480f; }
   html.embed { background: transparent; }
   html.embed body { background: transparent; }
-  html.embed main { max-width: none; padding: 2px 10px 0; }
+  html.embed.fitted, html.embed.fitted body { overflow: hidden; }
+  html.embed main { max-width: none; margin: 0 auto; padding: 2px 10px 0; }
+  html.embed .term { width: max-content; max-width: 100%; margin: 0 auto; }
   html.embed .full { display: none; }
   html.embed h1.start { font: 700 21px/1.2 var(--serif); margin: 0 0 4px; }
   html.embed .cta-arrow { width: 60px; height: 34px; margin: 0 0 -18px 8px; }
@@ -135,8 +137,8 @@
   html.embed .controls div { gap: 4px; }
   html.embed .controls button, html.embed .controls label { font-size: 12.5px; padding: 1px 7px; background: rgba(127, 127, 140, .16); border-color: rgba(127, 127, 140, .5); color: var(--ink); }
   html.embed .controls label.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-  html.embed.dark { --ink: #e8eaf2; --paper: #14161e; --muted: #a9afc2; --rule: #4a5063; --link: #8fb1ff; --arrow: #ffa94d; }
-  html.embed:not(.dark) { --ink: #1c2130; --paper: #f4f6fa; --muted: #4d566a; }
+  html.embed.dark { --ink: #e8eaf2; --paper: #14161e; --muted: #a9afc2; --rule: #4a5063; --link: #8fb1ff; --arrow: #ffa94d; color-scheme: dark; }
+  html.embed:not(.dark) { --ink: #1c2130; --paper: #f4f6fa; --muted: #4d566a; color-scheme: light; }
   @media (max-width: 699px) {
     html.embed .demo, html.embed h1.start, html.embed p.lead { display: none; }
     html.embed p.phone { display: block; font-size: 17px; margin: 10px 0; }
@@ -1242,12 +1244,10 @@
   probe.textContent = 'x'.repeat(50);
   document.body.appendChild(probe);
   const advance = () => probe.getBoundingClientRect().width / 5000;
+  // In the homepage the demo is one column, as wide as the popup at its widest, in the middle of the page.
+  if (EMBED) document.querySelector('main').style.maxWidth = Math.ceil(150 * advance() * 12.5 + 22) + 'px';
   function fitTerm() {
     let size = Math.min(12.5, (termWrap.clientWidth - 22) / (COLS * advance()));
-    if (EMBED) {
-      const top = termWrap.getBoundingClientRect().top + window.scrollY, controls = document.querySelector('.controls');
-      size = Math.min(size, (window.innerHeight - top - ZONE - controls.offsetHeight - 10 - 16) / (ROWS * 1.35));
-    }
     size = Math.max(6, Math.floor(size * 10) / 10);
     term.style.fontSize = size + 'px';
     term.style.setProperty('--lh', Math.floor(size * 1.35) + 'px');
@@ -1274,10 +1274,24 @@
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   };
   if (EMBED) {
-    const paint = () => document.documentElement.classList.toggle('dark', themeOf() === 'dark');
+    // The frame takes the page's light or dark too: a browser paints an opaque backdrop behind a frame whose
+    // light or dark differs from its page's, and the demo's light words would sit on it.
+    const frame = window.frameElement, main = document.querySelector('main');
+    const paint = () => {
+      const dark = themeOf() === 'dark';
+      document.documentElement.classList.toggle('dark', dark);
+      if (frame) frame.style.colorScheme = dark ? 'dark' : 'light';
+    };
     paint();
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
     try { new MutationObserver(paint).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-md-color-scheme'] }); } catch (e) { }
+    // The demo is part of the homepage, not a box that scrolls: the frame takes the demo's height. A copy opened
+    // from disk cannot reach its frame and keeps the frame's own height and scrolling.
+    if (frame) {
+      document.documentElement.classList.add('fitted');
+      const fitFrame = () => { frame.style.height = Math.ceil(main.getBoundingClientRect().bottom + window.scrollY + 4) + 'px'; };
+      new ResizeObserver(fitFrame).observe(main);
+    }
   }
   refit();
 })();

@@ -140,7 +140,7 @@ loadPage('standalone', {}, 160);
 loadPage('phone', { phone: true }, 60);
 loadPage('embedded without a frame', { embed: true }, 160);
 
-// 2. Each width with the preview on and off, then the views the owner meets.
+// 2. Each width with the preview on and off, then the views the user meets.
 const views = {
   'the first view': () => {},
   'the flat list': p => p.radio('layout', 'flat'),

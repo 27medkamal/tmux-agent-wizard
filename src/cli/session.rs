@@ -7,6 +7,7 @@
 //! `list`, `restore`, `delete`, plus `autosave` for the tmux hooks to call.
 
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use clap::Subcommand;
@@ -112,27 +113,38 @@ pub(crate) fn run(ctx: &Ctx, cmd: Cmd) -> (Sub, anyhow::Result<Value>) {
 fn candidates(ctx: &Ctx) -> anyhow::Result<Value> {
     let home = dirs::home_dir().context("resolving the home directory")?;
     let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
-    let offered = offered_here(ctx, &home, &zoxide)?;
+    let here = offered_here(ctx, &home, &zoxide)?;
     let mut result =
-        json!({ "candidates": offered.rows.iter().map(candidate_json).collect::<Vec<_>>() });
-    if offered.truncated {
+        json!({ "candidates": here.list.rows.iter().map(candidate_json).collect::<Vec<_>>() });
+    if here.list.truncated {
         result["truncated"] = json!(true);
+    }
+    if let Some(error) = here.sessions_error {
+        result["sessions_error"] = json!(error);
     }
     Ok(result)
 }
 
 /// The picker's rows for this machine's own sessions.
-pub(crate) fn offered_here(
-    ctx: &Ctx,
-    home: &Path,
-    zoxide: &[String],
-) -> anyhow::Result<picker::OfferedList> {
-    // A tmux that does not answer (no server, or a socket that is not there) has no sessions: the
-    // folders are still this machine's, so this is not an error.
-    let sessions = ctx.tmux.list_sessions().unwrap_or_else(|e| {
-        log::debug!("session candidates: no sessions listed: {e:#}");
-        Vec::new()
-    });
+pub(crate) fn offered_here(ctx: &Ctx, home: &Path, zoxide: &[String]) -> anyhow::Result<Here> {
+    // No server, or a socket that is not there, means no sessions. Any other failure of tmux, or a tmux
+    // that does not answer within the bound, is told in `sessions_error`: the folders are still this
+    // machine's and are listed, none of them as `session`.
+    let deadline = Instant::now() + SESSIONS_BOUND;
+    let mut sessions_error = None;
+    let sessions = ctx
+        .tmux
+        .list_sessions_by(Some(deadline))
+        .unwrap_or_else(|e| {
+            if !no_sessions(&e) {
+                log::warn!("session candidates: tmux did not list the sessions: {e:#}");
+                sessions_error = Some(match e.downcast_ref::<crate::tmux::CommandFailed>() {
+                    Some(failed) => failed.reason(),
+                    None => format!("{e:#}"),
+                });
+            }
+            Vec::new()
+        });
     let spaces = sessions
         .into_iter()
         .map(|session| SpaceRow {
@@ -146,13 +158,27 @@ pub(crate) fn offered_here(
         spaces,
         ..Snapshot::default()
     };
-    Ok(picker::offered(
-        &snap,
-        &ctx.cfg,
-        home,
-        zoxide,
-        picker::OFFERED_CAPS,
-    ))
+    Ok(Here {
+        list: picker::offered(&snap, &ctx.cfg, home, zoxide, picker::OFFERED_CAPS),
+        sessions_error,
+    })
+}
+
+/// How long `taw session candidates` waits for tmux, over all its calls.
+const SESSIONS_BOUND: Duration = Duration::from_secs(3);
+
+/// What [`offered_here`] found: the folders, and why tmux's sessions are missing when it failed.
+pub(crate) struct Here {
+    pub list: picker::OfferedList,
+    pub sessions_error: Option<String>,
+}
+
+/// Whether tmux's failure means this machine has no sessions: a server that is not running, or a
+/// socket that is not there. Nothing else does.
+fn no_sessions(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}");
+    text.contains("no server running")
+        || (text.contains("error connecting to") && text.contains("(No such file or directory)"))
 }
 
 fn candidate_json(row: &picker::Offered) -> Value {
@@ -172,7 +198,7 @@ fn candidate_json(row: &picker::Offered) -> Value {
 pub(crate) fn candidates_plain(ctx: &Ctx) -> anyhow::Result<String> {
     let home = dirs::home_dir().context("resolving the home directory")?;
     let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
-    let offered = offered_here(ctx, &home, &zoxide)?;
+    let offered = offered_here(ctx, &home, &zoxide)?.list;
     Ok(offered
         .rows
         .iter()

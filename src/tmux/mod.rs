@@ -8,6 +8,7 @@ pub mod version;
 use anyhow::Context;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// How to reach a tmux server: by socket name (`-L`) or by socket path (`-S`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,12 +86,28 @@ impl Tmux {
     /// It is not in [`Tmux::command`], which the attach of a terminal is built from: that
     /// terminal is not ours to declare UTF-8.
     pub fn run(&self, args: &[&str]) -> anyhow::Result<String> {
+        self.run_by(args, None)
+    }
+
+    /// [`Tmux::run`] that gives up at `deadline`: a tmux that has not ended by then is killed and
+    /// reaped (it is this call's own child), and the answer is an error saying so.
+    pub fn run_by(&self, args: &[&str], deadline: Option<Instant>) -> anyhow::Result<String> {
         let mut cmd = self.command();
         cmd.arg("-u");
         cmd.args(args);
-        let output = cmd.output().with_context(|| {
-            format!("failed to run `{} {}`", self.bin.display(), args.join(" "))
-        })?;
+        let ran = || format!("failed to run `{} {}`", self.bin.display(), args.join(" "));
+        let output = match deadline {
+            None => cmd.output().with_context(ran)?,
+            Some(deadline) => output_by(&mut cmd, deadline)
+                .with_context(ran)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "tmux did not answer in time: `{} {}`",
+                        self.bin.display(),
+                        args.join(" ")
+                    )
+                })?,
+        };
         if !output.status.success() {
             return Err(CommandFailed {
                 command: format!("{} {}", self.bin.display(), args.join(" ")),
@@ -179,7 +196,12 @@ impl Tmux {
     /// Lists every session. `active_window_id` is derived from `list_windows` — tmux has
     /// no `#{active_window_id}` format variable.
     pub fn list_sessions(&self) -> anyhow::Result<Vec<SessionInfo>> {
-        let windows = self.list_windows()?;
+        self.list_sessions_by(None)
+    }
+
+    /// [`Tmux::list_sessions`] whose tmux calls are all given up at `deadline`.
+    pub fn list_sessions_by(&self, deadline: Option<Instant>) -> anyhow::Result<Vec<SessionInfo>> {
+        let windows = self.list_windows_by(deadline)?;
         let mut active_window: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for w in &windows {
@@ -201,7 +223,7 @@ impl Tmux {
         ]
         .map(fold_controls)
         .join("\t");
-        let out = self.run(&["list-sessions", "-F", &format])?;
+        let out = self.run_by(&["list-sessions", "-F", &format], deadline)?;
         out.lines()
             .map(|line| {
                 let f: Vec<&str> = line.split('\t').collect();
@@ -237,6 +259,11 @@ impl Tmux {
 
     /// Lists every window on the server (`list-windows -a`).
     pub fn list_windows(&self) -> anyhow::Result<Vec<WindowInfo>> {
+        self.list_windows_by(None)
+    }
+
+    /// [`Tmux::list_windows`] given up at `deadline`.
+    pub fn list_windows_by(&self, deadline: Option<Instant>) -> anyhow::Result<Vec<WindowInfo>> {
         // `window_name` is free text (`rename-window`, and tmux's own automatic rename
         // from the running command). Folded for the same reason as `list_panes`.
         let format = [
@@ -250,7 +277,7 @@ impl Tmux {
         ]
         .map(fold_controls)
         .join("\t");
-        let out = self.run(&["list-windows", "-a", "-F", &format])?;
+        let out = self.run_by(&["list-windows", "-a", "-F", &format], deadline)?;
         out.lines()
             .map(|line| {
                 let f: Vec<&str> = line.split('\t').collect();
@@ -464,6 +491,61 @@ pub fn session_name(name: &str) -> String {
 /// with a `\` before it ([`crate::store::word`]).
 pub fn session_target(name: &str) -> String {
     crate::store::word(&format!("={name}"))
+}
+
+/// What `cmd` writes, when it ends by `deadline`: `None` when it did not, and then it has been killed and
+/// reaped. Its pipes are read on threads, and waited for no longer than the deadline, so a child that
+/// leaves a descendant holding them cannot hold this call.
+fn output_by(
+    cmd: &mut Command,
+    deadline: Instant,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<Vec<u8>> {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            let _ = sender.send(bytes);
+        });
+        receiver
+    }
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let status = loop {
+        match child.try_wait()? {
+            Some(status) => break Some(status),
+            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let Some(status) = status else {
+        return Ok(None);
+    };
+    let left = deadline
+        .saturating_duration_since(Instant::now())
+        .max(Duration::from_millis(100));
+    match (stdout.recv_timeout(left), stderr.recv_timeout(left)) {
+        (Ok(stdout), Ok(stderr)) => Ok(Some(std::process::Output {
+            status,
+            stdout,
+            stderr,
+        })),
+        _ => Ok(None),
+    }
 }
 
 /// Whether `err` is tmux saying there is no server to talk to: `no server running on

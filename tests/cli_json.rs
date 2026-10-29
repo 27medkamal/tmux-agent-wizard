@@ -8295,6 +8295,17 @@ impl Candidates {
     /// `taw <args>` with the scratch `$HOME`, the fake zoxide first on `PATH` (the real tmux after
     /// it), and `socket` as the tmux server to ask.
     fn run(&self, f: &Fixture, socket: &str, args: &[&str]) -> (i32, String, String) {
+        self.run_env(f, socket, &[], args)
+    }
+
+    /// [`Candidates::run`] with more environment, such as `TAW_TMUX_BIN` for a stand-in tmux.
+    fn run_env(
+        &self,
+        f: &Fixture,
+        socket: &str,
+        env: &[(&str, &str)],
+        args: &[&str],
+    ) -> (i32, String, String) {
         let path = format!(
             "{}:{}",
             self.bin.path().display(),
@@ -8310,6 +8321,7 @@ impl Candidates {
             .env("_ZO_DATA_DIR", f.zoxide.path())
             .env_remove("TMUX")
             .env_remove("TMUX_PANE");
+        cmd.envs(env.iter().copied());
         let out = cmd.output().unwrap();
         (
             out.status.code().unwrap_or(-1),
@@ -8480,6 +8492,94 @@ fn session_candidates_without_a_server_lists_the_folders() {
         ["zoxide", "zoxide", "zoxide", "project", "project"],
         "{env}"
     );
+}
+
+/// A tmux that fails for any reason but "no server" still lists the folders, none as `session`, and
+/// says why in `sessions_error`; "no server running" and a missing socket say nothing.
+#[test]
+fn session_candidates_says_when_tmux_fails() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let args = ["session", "candidates", "--json"];
+    let answers = |stderr: &str| {
+        let tmux = c.bin.path().join("tmux-stand-in");
+        write_hook(&tmux, &format!("echo '{stderr}' >&2\nexit 1"));
+        let tmux = tmux.display().to_string();
+        let (code, stdout, err) = c.run_env(&f, &f.socket, &[("TAW_TMUX_BIN", &tmux)], &args);
+        assert_eq!(code, 0, "{err}");
+        parse_envelope(&args, &stdout, &err)
+    };
+
+    let env = answers("protocol version mismatch (client 8, server 7)");
+    assert_eq!(
+        env["result"]["sessions_error"], "protocol version mismatch (client 8, server 7)",
+        "{env}"
+    );
+    let kinds: Vec<&str> = env["result"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["zoxide", "zoxide", "zoxide", "project", "project"],
+        "{env}"
+    );
+
+    for said in [
+        "no server running on /tmp/tmux-501/x",
+        "error connecting to /tmp/tmux-501/x (No such file or directory)",
+    ] {
+        let env = answers(said);
+        assert!(
+            env["result"].get("sessions_error").is_none(),
+            "{said}: {env}"
+        );
+    }
+}
+
+/// A tmux that does not answer within the bound is cut off and reaped: the verb answers with the
+/// folders and a `sessions_error`, and no tmux is left running.
+#[test]
+fn session_candidates_does_not_wait_for_a_tmux_that_hangs() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let tmux = c.bin.path().join("tmux-hangs");
+    let pid_file = c.bin.path().join("tmux.pid");
+    write_hook(
+        &tmux,
+        &format!("echo $$ > '{}'\nexec sleep 60", pid_file.display()),
+    );
+    let tmux = tmux.display().to_string();
+    let args = ["session", "candidates", "--json"];
+    let started = std::time::Instant::now();
+    let (code, stdout, stderr) = c.run_env(&f, &f.socket, &[("TAW_TMUX_BIN", &tmux)], &args);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "waited for the hang"
+    );
+    let env = parse_envelope(&args, &stdout, &stderr);
+    let error = env["result"]["sessions_error"].as_str().unwrap_or_default();
+    assert!(error.contains("did not answer"), "{env}");
+    assert_eq!(
+        env["result"]["candidates"].as_array().unwrap().len(),
+        5,
+        "{env}"
+    );
+
+    // The stand-in is gone: it was killed and reaped, not left behind.
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let alive = Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .unwrap();
+    assert!(!alive.success(), "tmux {pid} is still running");
 }
 
 /// Without `--json` it is a line for each folder, its kind and name, and no envelope.

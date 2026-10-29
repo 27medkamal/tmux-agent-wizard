@@ -352,12 +352,16 @@ impl RowToken {
     /// `bold` and `dim` with the first matching rule's laid over them, or `None` when that
     /// rule hides it. The value is the token's whole text, before it is cut to fit.
     pub fn style_for(&self, value: &str) -> Option<TokenStyle> {
-        let own = TokenStyle {
+        rules::matching_style(&self.rules, self.own_style(), value)
+    }
+
+    /// The style the token itself is written with, before any rule.
+    pub fn own_style(&self) -> TokenStyle {
+        TokenStyle {
             fg: self.fg.clone(),
             bold: self.bold,
             dim: self.dim,
-        };
-        rules::matching_style(&self.rules, own, value)
+        }
     }
 }
 

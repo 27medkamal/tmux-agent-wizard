@@ -163,6 +163,8 @@ keys stay on screen. When an agent's template draws more than one line, the tree
 lines of every row but the last. The template draws what follows. With `[ui] labels = false` the rows are the
 template's alone.
 
+An agent row that needs you is drawn in its state's colour, bold while it is blocked, as the popup's own rows are: every token with no `fg` of its own that none of its `rules` restyled.
+
 A token can be styled inline, `{ token = "workspace", fg = "#89b4fa", bold = true }`
 (`fg` is `#rrggbb`, `#rgb` or a colour name), and can carry up to 16 `rules`, conditions
 on its text that restyle it or hide it (herdr v0.9.1); the example's `$load` and `$machine`

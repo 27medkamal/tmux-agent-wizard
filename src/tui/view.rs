@@ -1171,7 +1171,7 @@ fn session_lines(
         } else {
             Vec::new()
         };
-        return prefixed(prefix, None, template_lines(template, space, ctx));
+        return prefixed(prefix, None, template_lines(template, space, ctx, None));
     }
     let theme = &app.theme;
     let indicators = app.cfg.ui.status_indicators;
@@ -1251,7 +1251,8 @@ fn session_flag_style(app: &App, space: &SpaceRow) -> (&'static str, Style) {
 ///
 /// An agent row says what state it is in and for how long, and carries the agent's own
 /// pane title; when it needs you ([`attention::hot`]) every one of those spans is drawn in
-/// the state's colour instead of the quiet ones, bold while it is blocked. Otherwise, a
+/// the state's colour instead of the quiet ones, bold while it is blocked, and so is a row drawn
+/// from a template, in each token with no `fg` of its own that no rule restyled. Otherwise, a
 /// row of the window its session has open is lit whole: every column that is dim on other
 /// rows is white on it — what is in it and its place bold, its state, elapsed time and
 /// title, a flat row's session name, a plain pane's glyph;
@@ -1300,7 +1301,15 @@ fn pane_lines(
                 ]
             })
         };
-        return prefixed(prefix, rest, template_lines(template, agent, ctx));
+        // A row that needs you is drawn in the state's colour end to end, as a built-in row is.
+        let hot = attention::hot(agent.state, agent.seen).then(|| {
+            let mut style = Style::default().fg(app.theme.state_color(agent.state));
+            if agent.state == Some(AgentState::Blocked) {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            style
+        });
+        return prefixed(prefix, rest, template_lines(template, agent, ctx, hot));
     }
     let theme = &app.theme;
     let dim = Style::default().fg(theme.dim);
@@ -1780,16 +1789,18 @@ fn prefixed(
         .collect()
 }
 
-/// One entry's configured rows, herdr's way. A row whose every token is empty (a session
+/// One entry's configured rows, herdr's way; `hot` is the style of an agent that needs you
+/// ([`rows::render_row_with`]). A row whose every token is empty (a session
 /// with no repository, say) is dropped rather than drawn as a blank line.
 fn template_lines(
     template: &[Vec<RowToken>],
     src: &dyn rows::TokenSource,
     ctx: &rows::Ctx,
+    hot: Option<Style>,
 ) -> Vec<Line<'static>> {
     template
         .iter()
-        .map(|row| rows::render_row(row, src, ctx))
+        .map(|row| rows::render_row_with(row, src, ctx, hot))
         .filter(|line| !line.spans.is_empty())
         .collect()
 }

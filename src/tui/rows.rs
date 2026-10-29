@@ -38,18 +38,33 @@ pub trait TokenSource {
 /// one its text meets lays its style over the token's own, or hides the token, and its
 /// separator goes with it (a row with none left is an empty line, which callers drop).
 pub fn render_row(tokens: &[RowToken], src: &dyn TokenSource, ctx: &Ctx) -> Line<'static> {
+    render_row_with(tokens, src, ctx, None)
+}
+
+/// [`render_row`] for a row that needs you: `hot` is the state's style (its colour, bold while
+/// blocked), which every token takes that has no `fg` of its own and that none of its `rules`
+/// restyled. A token with its own `fg`, or one a rule restyled, keeps what it was given.
+pub fn render_row_with(
+    tokens: &[RowToken],
+    src: &dyn TokenSource,
+    ctx: &Ctx,
+    hot: Option<Style>,
+) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for part in parts(tokens, src, ctx.indicators) {
         if !spans.is_empty() {
             spans.push(Span::raw(" "));
         }
-        let fg = part
-            .style
-            .fg
-            .as_deref()
-            .and_then(theme::parse_color)
-            .unwrap_or_else(|| src.token_color(&part.token.token, ctx.theme));
-        let mut style = Style::default().fg(fg);
+        let own = part.token.own_style();
+        let mut style = match hot {
+            Some(hot) if own.fg.is_none() && part.style == own => hot,
+            _ => Style::default().fg(part
+                .style
+                .fg
+                .as_deref()
+                .and_then(theme::parse_color)
+                .unwrap_or_else(|| src.token_color(&part.token.token, ctx.theme))),
+        };
         if part.style.bold == Some(true) {
             style = style.add_modifier(Modifier::BOLD);
         }

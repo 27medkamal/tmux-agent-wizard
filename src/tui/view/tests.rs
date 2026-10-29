@@ -1609,6 +1609,110 @@ fn a_wide_grapheme_in_a_title_does_not_hide_the_cut_from_a_match_after_it() {
     assert!(hidden > 0 && shown > 0, "{hidden} hidden, {shown} shown");
 }
 
+/// A template agent row that needs you is drawn as the popup's own rows are: every token with
+/// no `fg` of its own, and that no rule restyled, in the state's colour, bold while blocked.
+/// The template here has `first` for its first line (the glyph, the agent and the place) and the
+/// title on its second.
+fn templated(first: &str) -> Config {
+    config(&format!(
+        "[ui.sidebar.agents]\nrows = [[{first}], [\"terminal_title_stripped\"]]\n"
+    ))
+}
+
+/// The style of each of a template row's tokens, `(glyph, agent, place, title)`: the row's title
+/// is on the line under the glyph.
+fn template_row_styles(
+    app: &mut App,
+    title: &str,
+    glyph: &str,
+    place: &str,
+    agent: &str,
+) -> [(Color, bool); 4] {
+    let buffer = frame(app, W, H);
+    let lines = lines_of(&buffer);
+    let (y, _) = find(&lines, title);
+    [
+        style_of(&buffer, &lines, y - 1, glyph),
+        style_of(&buffer, &lines, y - 1, agent),
+        style_of(&buffer, &lines, y - 1, place),
+        style_of(&buffer, &lines, y, title),
+    ]
+}
+
+#[test]
+fn a_blocked_template_row_is_drawn_whole_in_the_attention_colour_and_bold() {
+    let cfg = templated("\"state_icon\", \"agent\", \"tab\"");
+    let mut app = app(&cfg);
+    let blocked = app.theme.state_color(Some(AgentState::Blocked));
+    let styles = template_row_styles(
+        &mut app,
+        "Error report review and fixes",
+        "\u{23f8}",
+        "4:zsh",
+        "claude",
+    );
+    assert_eq!(styles, [(blocked, true); 4], "glyph, agent, place, title");
+}
+
+#[test]
+fn a_done_unseen_template_row_has_the_colour_and_no_bold_as_the_popups_rows_do() {
+    let cfg = templated("\"state_icon\", \"agent\", \"tab\"");
+    let mut app = app(&cfg);
+    let done = app.theme.state_color(Some(AgentState::Done));
+    let styles = template_row_styles(&mut app, "fix flaky tests", "\u{2713}", "3:tests", "codex");
+    assert_eq!(styles, [(done, false); 4]);
+}
+
+#[test]
+fn a_working_template_row_keeps_its_own_token_colours() {
+    let cfg = templated("\"state_icon\", \"agent\", \"tab\"");
+    let mut app = app(&cfg);
+    let theme = app.theme;
+    let styles = template_row_styles(
+        &mut app,
+        "Invoice parser: credit notes",
+        "\u{23f5}",
+        "2:zsh.1",
+        "claude",
+    );
+    assert_eq!(
+        styles,
+        [
+            (theme.state_color(Some(AgentState::Working)), false),
+            (theme.accent, false),
+            (theme.dim, false),
+            (theme.dim, false),
+        ]
+    );
+}
+
+/// A token with an `fg` of its own keeps it, and so does one a rule restyled; the others on the
+/// row take the state's colour.
+#[test]
+fn a_template_token_with_its_own_colour_or_a_rule_keeps_it_on_a_hot_row() {
+    let cfg = templated(
+        r##""state_icon", { token = "agent", fg = "#00ff00" }, { token = "tab", rules = [{ contains = "zsh", fg = "#ff00ff" }] }"##,
+    );
+    let mut app = app(&cfg);
+    let blocked = app.theme.state_color(Some(AgentState::Blocked));
+    let styles = template_row_styles(
+        &mut app,
+        "Error report review and fixes",
+        "\u{23f8}",
+        "4:zsh",
+        "claude",
+    );
+    assert_eq!(
+        styles,
+        [
+            (blocked, true),
+            (Color::Rgb(0, 255, 0), false),
+            (Color::Rgb(255, 0, 255), false),
+            (blocked, true),
+        ]
+    );
+}
+
 /// A row a configured template draws lights nothing, and its cut is not lit either: the positions
 /// the matcher gives for the template's text are not the title's, though the template ends in the
 /// title. Here the match is in a long token the template draws before the title, which the cut

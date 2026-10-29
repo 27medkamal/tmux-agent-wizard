@@ -63,6 +63,10 @@ pub fn status_rows(status: Option<&str>) -> usize {
 /// The bar's numbers.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BarCounts {
+    /// Every machine the list holds, this one included: the config's `[machines]` besides this
+    /// machine's own tmux server, connected or not. The bar counts them only from two up; the
+    /// launcher's first bar, made before the popup has a snapshot, leaves it at 0.
+    pub machines: usize,
     /// Every session on the server.
     pub sessions: usize,
     /// Every pane with an agent in it ([`attention::is_agent`]).
@@ -77,6 +81,7 @@ pub struct BarCounts {
 /// numbers, before the popup has a snapshot of its own (`App::bar_counts` is the popup's).
 pub fn counts(panes: &[PaneInfo], sessions: usize) -> BarCounts {
     BarCounts {
+        machines: 0,
         sessions,
         agents: panes.iter().filter(|p| attention::is_agent(p)).count(),
         away: Vec::new(),
@@ -110,12 +115,18 @@ pub fn tmux_colour(c: Color) -> String {
     }
 }
 
+/// The machine count a bar or the app's top line leads with, `3 machines`, or `None` while there
+/// is this machine alone (a count of one says nothing). Both screens say it through here.
+pub fn machines_words(machines: usize) -> Option<String> {
+    (machines >= 2).then(|| format!("{machines} machines"))
+}
+
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
 }
 
-/// The bar as a `status-format` value: ` taw ` in the accent colour, bold; the session
-/// and agent counts; then, right-aligned, the clock. What needs you is not here: the list's
+/// The bar as a `status-format` value: ` taw ` in the accent colour, bold; the machine count
+/// ([`machines_words`], with two machines or more), the session and agent counts; then, right-aligned, the clock. What needs you is not here: the list's
 /// border says it, and the rows and machine headers show the states. Only the machines that are
 /// away and that no header names ([`BarCounts::away`]) are named, before the clock.
 pub fn bar_format(theme: &Theme, counts: &BarCounts) -> String {
@@ -129,8 +140,11 @@ pub fn bar_format(theme: &Theme, counts: &BarCounts) -> String {
             words::away_names(&counts.away).replace('#', "##"),
         )
     };
+    let machines = machines_words(counts.machines)
+        .map(|words| format!("{words}  \u{b7}  "))
+        .unwrap_or_default();
     format!(
-        "#[fg={},bold] taw #[default]#[fg={}]  {} session{}  \u{b7}  {} agent{}#[default]#[align=right]{away}%H:%M ",
+        "#[fg={},bold] taw #[default]#[fg={}]  {machines}{} session{}  \u{b7}  {} agent{}#[default]#[align=right]{away}%H:%M ",
         tmux_colour(theme.accent),
         tmux_colour(theme.fg),
         counts.sessions,
@@ -317,6 +331,7 @@ mod tests {
         let bar = bar_format(
             &t,
             &BarCounts {
+                machines: 0,
                 sessions: 7,
                 agents: 9,
                 away: Vec::new(),
@@ -331,12 +346,52 @@ mod tests {
         let one = bar_format(
             &t,
             &BarCounts {
+                machines: 0,
                 sessions: 1,
                 agents: 1,
                 away: Vec::new(),
             },
         );
         assert!(one.contains("1 session  \u{b7}  1 agent#"), "{one}");
+    }
+
+    /// With this machine alone the bar counts no machines; with two or more, the count leads the
+    /// session count, in the words the app's top line uses.
+    #[test]
+    fn the_bar_counts_the_machines_from_two_up_before_the_sessions() {
+        let t = theme::resolve("catppuccin", &Default::default()).theme;
+        for machines in [0, 1] {
+            let bar = bar_format(
+                &t,
+                &BarCounts {
+                    machines,
+                    sessions: 7,
+                    agents: 9,
+                    away: Vec::new(),
+                },
+            );
+            assert!(!bar.contains("machine"), "{machines}: {bar}");
+            assert!(bar.contains("  7 sessions  \u{b7}  9 agents"), "{bar}");
+        }
+        let bar = bar_format(
+            &t,
+            &BarCounts {
+                machines: 3,
+                sessions: 7,
+                agents: 9,
+                away: Vec::new(),
+            },
+        );
+        assert!(
+            bar.contains("  3 machines  \u{b7}  7 sessions  \u{b7}  9 agents#"),
+            "{bar}"
+        );
+        assert!(
+            bar.starts_with("#[fg=#89b4fa,bold] taw #[default]"),
+            "{bar}"
+        );
+        assert_eq!(machines_words(2).as_deref(), Some("2 machines"));
+        assert_eq!(machines_words(1), None);
     }
 
     /// What needs you is on the list's border, so the bar says none of it: no need words, no group
@@ -348,6 +403,7 @@ mod tests {
             let bar = bar_format(
                 &t,
                 &BarCounts {
+                    machines: 0,
                     sessions,
                     agents,
                     away: Vec::new(),
@@ -368,6 +424,7 @@ mod tests {
         let plain = bar_format(&t, &BarCounts::default());
         assert!(!plain.contains("not connected"), "{plain}");
         let counts = BarCounts {
+            machines: 0,
             sessions: 2,
             agents: 3,
             away: vec!["studio".to_string(), "pi".to_string()],
@@ -411,6 +468,7 @@ mod tests {
         assert_eq!(
             c,
             BarCounts {
+                machines: 0,
                 sessions: 4,
                 agents: 2,
                 away: Vec::new(),
@@ -704,6 +762,7 @@ mod tests {
             .unwrap();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
         let counts = BarCounts {
+            machines: 0,
             sessions: 1,
             agents: 2,
             away: Vec::new(),
@@ -899,6 +958,7 @@ mod tests {
         let s = Server::start();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
         let counts = BarCounts {
+            machines: 0,
             sessions: 1,
             agents: 2,
             away: Vec::new(),
@@ -953,6 +1013,7 @@ mod tests {
         let s = Server::start();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
         let counts = BarCounts {
+            machines: 0,
             sessions: 1,
             agents: 2,
             away: Vec::new(),

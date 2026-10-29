@@ -942,6 +942,7 @@ fn taws_bar_uses_none_of_them() {
     let theme = theme::resolve("catppuccin", &BTreeMap::new()).theme;
     for (sessions, agents) in [(0, 0), (1, 1), (3, 5)] {
         let counts = BarCounts {
+            machines: 0,
             sessions,
             agents,
             away: Vec::new(),

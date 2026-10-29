@@ -966,10 +966,13 @@ impl<'a> App<'a> {
         self.hot_by_state().iter().map(|&(_, count)| count).sum()
     }
 
-    /// The bar's numbers: sessions on the server and agents, and the away machines that no header of
+    /// The bar's numbers: the machines listed, sessions on the server and agents, and the away machines that no header of
     /// the drawn list names.
     pub fn bar_counts(&self) -> crate::cli::status_bar::BarCounts {
         crate::cli::status_bar::BarCounts {
+            // This machine and the config's others, connected or not: a table of this
+            // server alone is one machine.
+            machines: 1 + self.snap.machines.iter().filter(|m| !m.this_server).count(),
             sessions: self
                 .snap
                 .spaces

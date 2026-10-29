@@ -1,10 +1,12 @@
 //! The app's top line: what it is and how many sessions and agents it lists on the left, the clock on
 //! the right. A toast takes the left's place. What needs you is on the list's border, and each machine
 //! that is away says so on its own header; only an away machine no header names (a flat list, a
-//! filter or a view that hides it) is named here, before the clock; on a narrow line the clock goes
-//! first, then the left's counts are cut, and the away words stay.
+//! filter or a view that hides it) is named here, before the clock; with two machines or more the
+//! left leads with their count; on a narrow line the clock goes first, then the machine count, then the
+//! other counts are cut, and the away words stay.
 
 use super::*;
+use crate::cli::status_bar::{BarCounts, machines_words};
 
 /// `HH:MM` of `unix_ms` in the zone `offset_s` seconds from UTC.
 pub(crate) fn clock_text(unix_ms: u64, offset_s: i64) -> String {
@@ -26,12 +28,34 @@ fn counted(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
+/// The left's spans: the name and the counts, the machine count first when `with_machines`.
+fn left_spans(app: &App, counts: &BarCounts, with_machines: bool) -> Vec<Span<'static>> {
+    let theme = &app.theme;
+    let fg = Style::default().fg(theme.fg);
+    let dim = Style::default().fg(theme.dim);
+    let mut spans = vec![Span::styled(
+        NAME,
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    )];
+    let mut part = |text: String| {
+        spans.push(Span::styled(SEPARATOR, dim));
+        spans.push(Span::styled(text, fg));
+    };
+    if with_machines && let Some(words) = machines_words(counts.machines) {
+        part(words);
+    }
+    part(counted(counts.sessions, "session"));
+    part(counted(counts.agents, "agent"));
+    spans
+}
+
 /// The line itself, `width` columns. The right is the clock after any away machine words, and the
 /// clock goes first when the line is narrow (the right's priorities are below); the left is cut with
 /// an ellipsis to what is left.
 pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
     let theme = &app.theme;
-    let fg = Style::default().fg(theme.fg);
     let dim = Style::default().fg(theme.dim);
     let counts = app.bar_counts();
     let toast = app.live_toast();
@@ -43,19 +67,14 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
             Style::default().fg(theme.yellow),
         ))
     } else {
-        let mut spans = vec![Span::styled(
-            NAME,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        )];
-        let mut part = |text: String| {
-            spans.push(Span::styled(SEPARATOR, dim));
-            spans.push(Span::styled(text, fg));
-        };
-        part(counted(counts.sessions, "session"));
-        part(counted(counts.agents, "agent"));
-        Line::from(spans)
+        Line::from(left_spans(app, &counts, false))
+    };
+    // With two machines or more the left leads with their count; it is the first count to go, after
+    // the clock and before any other is cut.
+    let wide = if toast.is_none() && machines_words(counts.machines).is_some() {
+        Some(Line::from(left_spans(app, &counts, true)))
+    } else {
+        None
     };
 
     // The right, by priority: the away machines that no header of the list names (none in the plain
@@ -86,7 +105,8 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
             clock_span,
         ]);
         // The left, a gap of one and the right, and the trailing space, within the width.
-        let left_whole = line_width(&left) + 1 + line_width(&both) < width;
+        let whole = wide.as_ref().unwrap_or(&left);
+        let left_whole = line_width(whole) + 1 + line_width(&both) < width;
         if line_width(&both) + 2 <= half && left_whole {
             (both, true)
         } else if line_width(&words_only) + 2 <= half {
@@ -107,6 +127,11 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
         width.saturating_sub(right_width + 1 + beside)
     } else {
         width
+    };
+    // The machine count stays while the whole left fits; else it goes and the rest is cut as before.
+    let left = match wide {
+        Some(wide) if line_width(&wide) <= room => wide,
+        _ => left,
     };
     let mut spans = truncate_line(left, room, theme.dim).spans;
     if show_right {
@@ -187,37 +212,115 @@ mod tests {
         }
     }
 
-    /// With machines listed the line still says nothing of them: their count, who is away and their
-    /// states are on the list's own headers.
+    /// The sample world with these machines besides this one, connected or not: `(name, live, this_server)`.
+    fn with_machines(a: &mut App, listed: &[(&str, bool, bool)]) {
+        let mut snap = a.snap.clone();
+        snap.machines = listed
+            .iter()
+            .map(|&(name, live, this_server)| MachineHeader {
+                name: name.into(),
+                live,
+                this_server,
+                ..MachineHeader::default()
+            })
+            .collect();
+        a.set_snapshot(snap);
+    }
+
+    /// With this machine alone, or a table that lists only this server, the line says nothing of
+    /// machines: a count of one says nothing.
     #[test]
-    fn machines_add_nothing_to_the_line() {
+    fn one_machine_adds_no_count_to_the_line() {
         let cfg = cfg();
         let mut a = app(&cfg);
         let before = text(&app_top_line(&a, 150));
-        let mut snap = a.snap.clone();
-        snap.machines = vec![
-            MachineHeader {
-                name: "studio".into(),
-                live: true,
-                ..MachineHeader::default()
-            },
-            MachineHeader {
-                name: "pi".into(),
-                live: false,
-                ..MachineHeader::default()
-            },
-            MachineHeader {
-                name: "far".into(),
-                no_keeper: true,
-                ..MachineHeader::default()
-            },
-        ];
-        a.set_snapshot(snap);
+        assert!(before.contains(" sessions"), "{before:?}");
+        with_machines(&mut a, &[("home", true, true)]);
+        assert_eq!(a.bar_counts().machines, 1);
         let line = text(&app_top_line(&a, 150));
-        assert_eq!(line, before, "the same line with and without machines");
+        assert_eq!(line, before, "the same line with this server alone listed");
+        assert!(!line.contains("machine"), "{line:?}");
+    }
+
+    /// With two machines or more listed, this one and the config's, connected or not, the count leads
+    /// the left, in the words the popup's bar uses; the bar and the line agree.
+    #[test]
+    fn three_machines_lead_the_left_with_their_count_and_the_bar_agrees() {
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        with_machines(&mut a, &[("studio", true, false), ("pi", false, false)]);
+        let counts = a.bar_counts();
+        assert_eq!(counts.machines, 3, "this machine and the two listed");
+        let left = format!(
+            "3 machines  \u{b7}  {} sessions  \u{b7}  {} agents",
+            counts.sessions, counts.agents
+        );
+        let line = text(&app_top_line(&a, 150));
         assert!(
-            !line.contains("machine") && !line.contains("offline") && !line.contains("pi"),
+            line.starts_with(&format!(" taw app  \u{b7}  {left}")),
             "{line:?}"
+        );
+        let bar = crate::cli::status_bar::bar_format(&a.theme, &counts);
+        assert!(bar.contains(&format!("  {left}#[default]")), "{bar}");
+        // This server listed among the machines is this machine, and counts once.
+        with_machines(
+            &mut a,
+            &[
+                ("home", true, true),
+                ("studio", true, false),
+                ("pi", false, false),
+            ],
+        );
+        assert_eq!(a.bar_counts().machines, 3);
+    }
+
+    /// On a narrow line the clock goes first, then the machine count, then the other counts are cut:
+    /// scanning the widths, the clock never stays once the count has gone, and a cut count never has the
+    /// machine count beside it. Each stage is met by some width.
+    #[test]
+    fn a_narrow_line_drops_the_clock_then_the_machine_count_then_cuts_the_others() {
+        let mut cfg = cfg();
+        let mut snap = away_world(false);
+        snap.machines.push(MachineHeader {
+            name: "far".into(),
+            live: true,
+            ..MachineHeader::default()
+        });
+        let a = flat_app(&mut cfg, snap);
+        let clock = clock_of(&a);
+        let counts = a.bar_counts();
+        assert_eq!(counts.machines, 4);
+        let whole = format!("{} sessions", counts.sessions);
+        let mut stages = [false; 4];
+        for width in 20..=150u16 {
+            let line = text(&app_top_line(&a, width));
+            assert_eq!(line.chars().count(), width as usize, "{line:?}");
+            let (has_clock, has_count, cut) = (
+                line.contains(&clock),
+                line.contains("4 machines"),
+                line.contains('\u{2026}'),
+            );
+            assert!(
+                !has_clock || has_count,
+                "{width}: the clock outlived the count: {line:?}"
+            );
+            assert!(
+                !(cut && has_count),
+                "{width}: a count was cut beside the machine count: {line:?}"
+            );
+            if has_clock {
+                stages[0] = true;
+            } else if has_count {
+                stages[1] = true;
+            } else if !cut && line.contains(&whole) {
+                stages[2] = true;
+            } else if cut {
+                stages[3] = true;
+            }
+        }
+        assert_eq!(
+            stages, [true; 4],
+            "the clock, the count, the others went in turn"
         );
     }
 
@@ -387,18 +490,18 @@ mod tests {
         )
     }
 
-    /// A narrow flat line still names the machine that never answered, once: at 70 columns beside the
+    /// A narrow flat line still names the machine that never answered, once: at 90 columns beside the
     /// clock, at 40 the clock has gone and the words stay.
     #[test]
     fn a_narrow_line_drops_the_clock_before_the_away_machines_name() {
         let mut cfg = cfg();
         let a = flat_app(&mut cfg, away_world(false));
         let clock = clock_of(&a);
-        let seventy = text(&app_top_line(&a, 70));
-        assert_eq!(named(&seventy), 1, "{seventy:?}");
-        assert_eq!(seventy.chars().count(), 70, "{seventy:?}");
-        assert!(seventy.trim_end().ends_with(&clock), "{seventy:?}");
-        assert!(seventy.contains(" taw app"), "{seventy:?}");
+        let wide = text(&app_top_line(&a, 90));
+        assert_eq!(named(&wide), 1, "{wide:?}");
+        assert_eq!(wide.chars().count(), 90, "{wide:?}");
+        assert!(wide.trim_end().ends_with(&clock), "{wide:?}");
+        assert!(wide.contains(" taw app"), "{wide:?}");
         let forty = text(&app_top_line(&a, 40));
         assert_eq!(named(&forty), 1, "{forty:?}");
         assert_eq!(forty.chars().count(), 40, "{forty:?}");
@@ -406,9 +509,10 @@ mod tests {
         assert!(forty.contains(" taw app"), "{forty:?}");
     }
 
-    /// The clock goes before any count is cut: from 60 to 63 columns the clock and the name do not both
-    /// fit beside the whole left, so the counts stay whole, the machine is named and the clock is gone.
-    /// At 64 the left, a gap, the words and the clock all fit.
+    /// The clock goes before any count is cut: from 60 to 78 columns the clock and the name do not both
+    /// fit beside the whole left (which leads with the machine count, three machines here), so the
+    /// counts stay whole, the machine is named and the clock is gone. At 79 the left, a gap, the words
+    /// and the clock all fit.
     #[test]
     fn the_clock_goes_before_a_count_is_cut() {
         let mut cfg = cfg();
@@ -417,7 +521,7 @@ mod tests {
         let counts = a.bar_counts();
         let sessions = format!("{} sessions", counts.sessions);
         let agents = format!("{} agents", counts.agents);
-        for width in 60..=63u16 {
+        for width in 60..=78u16 {
             let line = text(&app_top_line(&a, width));
             assert_eq!(line.chars().count(), width as usize, "{line:?}");
             assert!(
@@ -431,9 +535,12 @@ mod tests {
                 "{width} columns, no clock: {line:?}"
             );
         }
-        let line = text(&app_top_line(&a, 64));
+        let line = text(&app_top_line(&a, 79));
         assert!(
-            line.contains(&agents) && line.contains(&clock) && named(&line) == 1,
+            line.contains("3 machines")
+                && line.contains(&agents)
+                && line.contains(&clock)
+                && named(&line) == 1,
             "{line:?}"
         );
     }

@@ -56,7 +56,7 @@ Width and height are caps rather than sizes because `taw ui open` computes the
 geometry itself: it reads the client's size and `status`/`status-position` and places
 a full-width popup against the status line, as many rows short of the client as the
 line has (one, or up to five with `status 2` … `status 5`). While the popup is open
-that line shows taw's bar (`taw · 7 sessions · 9 agents`, then the clock at the
+that line shows taw's bar (`taw · 7 sessions · 9 agents`, with `3 machines` first when you list two machines or more, then the clock at the
 right, on its first row, with any other rows blank; what needs you is on the
 list's border, so the bar does not repeat it, and neither does it show the status
 rail) and gets its own text back

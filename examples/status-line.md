@@ -18,7 +18,7 @@ set -ag status-right ' #{@agent_wizard_status}'
 ```
 
 While the popup is open, taw swaps your status line for its own bar (the counts of
-sessions and agents, and the clock). The bar does not show this token, so the token
+sessions and agents, the machines when you list two or more, and the clock). The bar does not show this token, so the token
 is for your own line the rest of the time.
 
 Use `-ag` (append) rather than `-g` so you don't clobber whatever else is already

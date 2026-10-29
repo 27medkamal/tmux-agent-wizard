@@ -929,6 +929,7 @@ mod tests {
         status_bar::bar_format(
             &theme,
             &status_bar::BarCounts {
+                machines: 0,
                 sessions: 1,
                 agents: 0,
                 away: Vec::new(),

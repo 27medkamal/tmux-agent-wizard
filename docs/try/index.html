@@ -922,18 +922,20 @@
     if (!(S.flat && S.depth !== 'sessions')) { if (!query().trim()) return []; ROWS_CACHE.forEach(r => { if (r.s) shown.add(r.s.machine || ''); }); }
     return MACHINES.map(m => m.name).filter(m => !machineLive(m) && !shown.has(m));
   };
-  function appTopLine(W) {
+  function appTopLine(W, notice) {
     const parts = countParts(), withMachines = machineCount() >= 2;
     const leftOf = list => span(' taw app', 'c-acc bold') + list.map(c => span('  \u00b7  ', 'c-dim') + span(c, 'c-fg')).join('');
-    const left = leftOf(withMachines ? parts.slice(1) : parts), wide = withMachines ? leftOf(parts) : null;
+    // A notice takes the left, as a toast does in taw; the right keeps the away words and the clock by the same rules.
+    const left = notice ? span(' ' + notice, 'c-yel') : leftOf(withMachines ? parts.slice(1) : parts), wide = withMachines && !notice ? leftOf(parts) : null;
     const half = Math.floor(W / 2), away = awayUnheaded(), clock = '17:58';
     const clockAlone = clock.length + 2 <= half ? span(clock, 'c-dim') : '';
     const whole = wide || left; let right, shown = false;
-    if (!away.length) right = vis(whole).length + 1 + vis(clockAlone).length < W ? clockAlone : '';
+    if (!away.length) right = notice || vis(whole).length + 1 + vis(clockAlone).length < W ? clockAlone : '';
     else {
       const words = span(awayNames(away), 'c-yel'), both = words + span('  \u2502  ', 'c-dim') + span(clock, 'c-dim');
       if (vis(both).length + 2 <= half && vis(whole).length + 1 + vis(both).length < W) { right = both; shown = true; }
       else if (vis(words).length + 2 <= half) { right = words; shown = true; }
+      else if (notice) right = clockAlone;
       else { const most = W - (' taw app'.length + 3); right = vis(words).length <= most ? words : most <= 0 ? '' : clipHtml(words, most - 1) + span('\u2026', 'c-dim'); shown = true; }
     }
     const rw = vis(right).length, room = rw ? W - (rw + 1 + (shown ? 1 : 0)) : W;
@@ -942,8 +944,8 @@
     if (!rw) return l;
     return l + ' '.repeat(Math.max(0, W - vis(l).length - rw - 1)) + right + ' ';
   }
-  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const W = inner + 2; let line;
-    if (appMode()) line = appTopLine(W); else if (ours) { const away = awayUnheaded(); const left = span(' taw ', 'c-acc bold') + span(barCounts(), 'c-fg'); const right = (away.length ? span(awayNames(away) + '  \u2502  ', 'c-dim') : '') + span('17:58 ', 'c-dim'); line = left + ' '.repeat(Math.max(1, W - vis(left).length - vis(right).length)) + right; }
+  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice && !appMode()) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const W = inner + 2; let line;
+    if (appMode()) line = appTopLine(W, S.notice); else if (ours) { const away = awayUnheaded(); const left = span(' taw ', 'c-acc bold') + span(barCounts(), 'c-fg'); const right = (away.length ? span(awayNames(away) + '  \u2502  ', 'c-dim') : '') + span('17:58 ', 'c-dim'); line = left + ' '.repeat(Math.max(1, W - vis(left).length - vis(right).length)) + right; }
     else { const left = span(` [${cur.name}] `, 'c-acc bold') + wins; const right = rail + span('  │  17:58 ', 'c-dim'); line = left + ' '.repeat(Math.max(1, W - vis(left).length - vis(right).length)) + right; }
     return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
 

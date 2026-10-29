@@ -293,6 +293,22 @@ for (const cols of [160, 100, 60]) {
     step(p, 160, here, () => { p.key('Escape'); p.type('/zzzzq'); });
     if (!top(p).includes(WORDS)) note(here, `a filter that matches nothing leaves pi without a header and without a name: ${top(p).trim()}`);
   }
+  // A notice takes the left of the app's top line, as a toast does in taw; the right still names the away machine, with
+  // the clock while the notice, a gap and the words and the clock fit, the words alone when they do not.
+  for (const cols of [160, 60]) {
+    const here = `the app's top line under a notice at ${cols} columns`;
+    const p = loadPage(here, { embed: true, frame: true }, 160);
+    if (!p) continue;
+    step(p, cols, here, () => { p.radio('layout', 'flat'); p.radio('width', String(cols)); });
+    step(p, cols, here, () => p.scenario('finish'));
+    const line = top(p);
+    if (!/^ \u2713 done claude/.test(line)) { note(here, `the notice is not on the left of the top line: ${line.trim()}`); continue; }
+    if (!line.includes(WORDS) && cols >= 100) note(here, `the notice hides the away machine: ${line.trim()}`);
+    if (cols === 160 && !/pi not connected {2}\u2502 {2}\d\d:\d\d $/.test(line)) note(here, `the right does not end with the away words and the clock: ${line.trim()}`);
+    if (cols === 60 && (!/pi not connected $/.test(line) || /\d\d:\d\d/.test(line))) note(here, `the words do not stand alone beside a notice that leaves no room for the clock: ${line.trim()}`);
+    p.flush();
+    if (/^ \u2713/.test(top(p))) note(here, 'the top line keeps the notice after its timer ran');
+  }
   // A narrow line keeps the away words; the clock goes first, then the machine count.
   const p = loadPage('the narrow top line', { embed: true, frame: true }, 160);
   if (p) {

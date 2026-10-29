@@ -374,7 +374,10 @@ when the pane closes or the pipe is removed.
    hooks) later turns `done` into `idle`, and so does the next read that finds the pane in
    the foreground. Those focus hooks are `after-select-pane`,
    `after-select-window`, `client-session-changed` and `pane-focus-in`, plus
-   `client-focus-in` on tmux 3.6+. A note on `pane-focus-in` and tmux 3.6b: it still
+   `client-focus-in` on tmux 3.6+. Each runs `taw seen --if-looked-at <pane>`, which marks the pane only
+   if a client shows it when the job runs (its session attached, the pane active in the active window):
+   a client that is attached to one session and switched to another in one command line, as `taw app`
+   does to go in with a last session, passes through the first, and nobody looked at that one. A note on `pane-focus-in` and tmux 3.6b: it still
    *fires* there (verified: a terminal regaining focus or a pane being selected runs
    the `seen` hook), it is merely no longer enumerated by bare `show-hooks -g` (a
    cosmetic 3.6 change); queried by name, or driven by an event, it is present and

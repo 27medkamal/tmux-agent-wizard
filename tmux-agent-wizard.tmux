@@ -390,8 +390,11 @@ install_agent_wizard_hooks() {
     done
   fi
 
+  # A client that is attached to one session and switched to another in one command line (taw app going in
+  # through the session you came from) passes through the first, and tmux fires client-session-changed,
+  # client-focus-in and pane-focus-in for it: the job marks a pane only if a client shows it when the job runs.
   for hook in "${seen[@]}"; do
-    tmux set-hook -ga "$hook" "run-shell -b '$bin_q seen \"#{?hook_pane,#{hook_pane},#{pane_id}}\" >/dev/null 2>&1 || true'"
+    tmux set-hook -ga "$hook" "run-shell -b '$bin_q seen --if-looked-at \"#{?hook_pane,#{hook_pane},#{pane_id}}\" >/dev/null 2>&1 || true'"
   done
 
   for hook in "${autosave_open_hooks[@]}"; do

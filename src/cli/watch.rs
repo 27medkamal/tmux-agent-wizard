@@ -148,12 +148,31 @@ fn status(ctx: &Ctx) -> anyhow::Result<Value> {
     }))
 }
 
+/// What tmux says of a pane that is 1 when a client shows it: its session is attached, and the pane is the
+/// active pane of the session's active window.
+const LOOKED_AT: &str = "#{&&:#{session_attached},#{&&:#{window_active},#{pane_active}}}";
+
 /// `taw seen <pane>` — records that a pane has been looked at, which is what
 /// distinguishes `done` (finished but unseen) from `idle`. Bound to
 /// `after-select-pane`/`after-select-window`/`pane-focus-in` by the plugin script.
-pub(crate) fn seen(ctx: &Ctx, pane: &str) -> anyhow::Result<Value> {
+///
+/// `--if-looked-at` is the form every seen hook of the plugin runs. A client that is attached to one session and
+/// switched to another in one command line (`taw app` going in through the session you came from) passes
+/// through the first, and tmux fires the hooks for it (`client-session-changed`, `client-focus-in`,
+/// `pane-focus-in`): a pane nobody looks at is not marked. The job reads the pane when it runs, after the
+/// switch, and a session a client is on is marked as before. Without the flag the pane is marked as asked.
+pub(crate) fn seen(ctx: &Ctx, pane: &str, if_looked_at: bool) -> anyhow::Result<Value> {
     let pane_id = common::resolve_pane(&ctx.tmux, pane)
         .map_err(|_| CliError::not_found(format!("pane '{pane}' not found")))?;
+    if if_looked_at && !looked_at(&ctx.tmux, &pane_id) {
+        return Ok(json!({ "terminal_id": pane_id, "marked": false }));
+    }
     watch::mark_seen(&ctx.tmux, &ctx.cfg, &ctx.paths, &pane_id)?;
     Ok(json!({ "terminal_id": pane_id }))
+}
+
+/// Whether a client shows `pane` now. A pane that cannot be asked about is not looked at.
+fn looked_at(tmux: &crate::tmux::Tmux, pane: &str) -> bool {
+    tmux.run(&["display-message", "-t", pane, "-p", LOOKED_AT])
+        .is_ok_and(|out| out.trim() == "1")
 }

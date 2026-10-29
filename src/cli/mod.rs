@@ -239,6 +239,9 @@ enum Group {
     Seen {
         #[arg(value_name = "PANE")]
         pane: String,
+        /// Mark it only if someone is looking at it as this runs (an attached session, its active window and pane)
+        #[arg(long)]
+        if_looked_at: bool,
     },
     /// Show the status rail, or refresh `@agent_wizard_status`
     Status {
@@ -848,7 +851,7 @@ fn dispatch_envelope(ctx: &Ctx, command: Group) -> (&'static str, Sub, anyhow::R
             let (sub, result) = watch::run(ctx, cmd);
             ("watch", sub, result)
         }
-        Group::Seen { pane } => ("seen", "", watch::seen(ctx, &pane)),
+        Group::Seen { pane, if_looked_at } => ("seen", "", watch::seen(ctx, &pane, if_looked_at)),
         Group::Status { cmd } => {
             let (sub, result) = misc::status(ctx, cmd);
             ("status", sub, result)

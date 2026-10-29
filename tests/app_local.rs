@@ -3522,3 +3522,100 @@ fn the_second_session_the_app_goes_into_has_the_first_as_its_last_session() {
     let now = mac.tmux_ok(&["display-message", "-p", "-c", &name, "#{session_name}"]);
     assert_eq!(now.trim(), first, "switch-client -l goes back to the first");
 }
+
+/// What the plugin's seen hook is told to do on a session change, with the plugin's own script: it keeps the startup
+/// one-shots off the network and the host's notifier.
+const PLUGIN_CONFIG: &str = "\
+[update]
+manifest_check = false
+
+[ui.toast]
+delivery = \"off\"
+
+[ui.sound]
+enabled = false
+";
+
+/// A `done` agent on the active pane of `session`, unseen, as the watcher leaves one that finished out of sight.
+fn leave_done_agent(mac: &Server, session: &str) {
+    let target = format!("={session}:");
+    for (name, value) in [
+        ("@agent_kind", "claude"),
+        ("@agent_state", "done"),
+        ("@agent_seen", "0"),
+    ] {
+        mac.tmux_ok(&["set-option", "-p", "-t", &target, name, value]);
+    }
+}
+
+/// What a pane of `session` says its agent's state is.
+fn agent_state_of(mac: &Server, session: &str) -> String {
+    let target = format!("={session}:");
+    mac.tmux_ok(&["display-message", "-p", "-t", &target, "#{@agent_state}"])
+        .trim()
+        .to_string()
+}
+
+/// The attach that goes in through the session the person came from passes through it: tmux fires
+/// `client-session-changed` for the came-from session, which ran `taw seen` on its active pane and turned the
+/// `done` of a finish nobody saw into `idle`. Only a pane someone is looking at is marked seen: the client that
+/// lands on the target marks the target's, and a switch onto a session still marks it.
+#[test]
+fn going_in_through_the_session_you_came_from_does_not_mark_its_agent_seen() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    mac.write_config(PLUGIN_CONFIG);
+    mac.tmux_ok(&["set-option", "-g", "@agent-wizard-watch", "off"]);
+    two_sessions(&mac);
+    mac.source_plugin();
+    let term = terminal(120);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    press(&term, &["Enter"]);
+    let (pid, name, first, _) = new_client_sessions(&mac, 0);
+    mac.tmux_ok(&["detach-client", "-t", &name]);
+    expect_terminal(&term, "the list again", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    let second = if first == "one" { "beta" } else { "one" };
+    // An agent finished in each while the person was on the list.
+    leave_done_agent(&mac, &first);
+    leave_done_agent(&mac, second);
+    press(&term, &[if first == "one" { "k" } else { "j" }, "Enter"]);
+    let (_, name, landed, last) = new_client_sessions(&mac, pid);
+    assert_eq!((landed.as_str(), last.as_str()), (second, first.as_str()));
+    // The landing is looked at: its mark is the proof that the hooks ran.
+    assert!(
+        wait_for(
+            || agent_state_of(&mac, second) == "idle",
+            Duration::from_secs(20)
+        ),
+        "the session the client landed on was not marked seen: {:?}",
+        agent_state_of(&mac, second)
+    );
+    // The pass-through's hook was queued before that one: let any job of it finish before the negative check.
+    std::thread::sleep(Duration::from_millis(1500));
+    assert_eq!(
+        agent_state_of(&mac, &first),
+        "done",
+        "the session passed through was marked seen, and nobody looked at it"
+    );
+    // A plain switch onto a session with a `done` agent still marks it seen.
+    mac.tmux_ok(&["switch-client", "-c", &name, "-t", &format!("={first}:")]);
+    assert!(
+        wait_for(
+            || agent_state_of(&mac, &first) == "idle",
+            Duration::from_secs(20)
+        ),
+        "a switch onto the session did not mark its agent seen: {:?}",
+        agent_state_of(&mac, &first)
+    );
+}

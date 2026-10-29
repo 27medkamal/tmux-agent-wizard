@@ -3619,3 +3619,75 @@ fn going_in_through_the_session_you_came_from_does_not_mark_its_agent_seen() {
         agent_state_of(&mac, &first)
     );
 }
+
+/// A tmux client on `session` of "this Mac" `mac`, in a pane of a terminal of its own, and the terminal that keeps
+/// it. Waits until the client is on the server.
+fn attach_client(mac: &Server, session: &str) -> Server {
+    let term = terminal(120);
+    let before = clients_of(mac).len();
+    let env: String = mac
+        .taw_env()
+        .iter()
+        .map(|(name, value)| format!("'{name}={value}' "))
+        .collect();
+    let line = format!(
+        "env -u TMUX -u TMUX_PANE {env}'{}' -L '{}' attach-session -t '={session}'",
+        Tmux::with_socket_name("unused").bin.display(),
+        mac.socket()
+    );
+    term.wait_for_prompt(&term.pane());
+    term.tmux_ok(&["send-keys", "-t", &term.pane(), "-l", &line]);
+    term.tmux_ok(&["send-keys", "-t", &term.pane(), "Enter"]);
+    assert!(
+        wait_for(|| clients_of(mac).len() > before, Duration::from_secs(20)),
+        "no client came up on {session}"
+    );
+    term
+}
+
+/// A pane counts as looked at when any client shows it. A session grouped with another (`new-session -t`) shares its
+/// windows, and `display-message -t <pane>` answers for the session of the group attached most lately, which can
+/// be one nobody is on: the person on the other session was looking at the pane and its `done` stayed.
+#[test]
+fn a_pane_a_client_on_a_grouped_session_shows_is_marked_seen() {
+    let mac = Server::start();
+    mac.write_config(PLUGIN_CONFIG);
+    mac.tmux_ok(&["set-option", "-g", "@agent-wizard-watch", "off"]);
+    mac.tmux_ok(&["new-session", "-d", "-s", "twin", "-t", "one"]);
+    mac.source_plugin();
+    // The client that stays is on `twin`; a second client was on `one` after it and went, so `one` is the session of
+    // the group attached most lately, with no client on it.
+    let _stays = attach_client(&mac, "twin");
+    let goes = attach_client(&mac, "one");
+    let name = clients_of(&mac)
+        .into_iter()
+        .find(|(_, _, session)| session == "one")
+        .expect("the second client is on `one`")
+        .1;
+    mac.tmux_ok(&["detach-client", "-t", &name]);
+    drop(goes);
+    assert!(
+        wait_for(|| clients_of(&mac).len() == 1, Duration::from_secs(20)),
+        "the second client did not go"
+    );
+    // The hooks of the attaches and the detach have run before the negative start: let their jobs finish.
+    std::thread::sleep(Duration::from_millis(1500));
+    let pane = mac.pane_of("one");
+    for (name, value) in [
+        ("@agent_kind", "claude"),
+        ("@agent_state", "done"),
+        ("@agent_seen", "0"),
+    ] {
+        mac.tmux_ok(&["set-option", "-p", "-t", &pane, name, value]);
+    }
+    // Selecting the window the client is on again fires the hooks, with the pane that is the active one.
+    mac.tmux_ok(&["select-window", "-t", "=twin:0"]);
+    assert!(
+        wait_for(
+            || agent_state_of(&mac, "one") == "idle",
+            Duration::from_secs(20)
+        ),
+        "a pane the client on the grouped session shows was not marked seen: {:?}",
+        agent_state_of(&mac, "one")
+    );
+}

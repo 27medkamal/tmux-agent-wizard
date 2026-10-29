@@ -148,10 +148,6 @@ fn status(ctx: &Ctx) -> anyhow::Result<Value> {
     }))
 }
 
-/// What tmux says of a pane that is 1 when a client shows it: its session is attached, and the pane is the
-/// active pane of the session's active window.
-const LOOKED_AT: &str = "#{&&:#{session_attached},#{&&:#{window_active},#{pane_active}}}";
-
 /// `taw seen <pane>` — records that a pane has been looked at, which is what
 /// distinguishes `done` (finished but unseen) from `idle`. Bound to
 /// `after-select-pane`/`after-select-window`/`pane-focus-in` by the plugin script.
@@ -171,8 +167,12 @@ pub(crate) fn seen(ctx: &Ctx, pane: &str, if_looked_at: bool) -> anyhow::Result<
     Ok(json!({ "terminal_id": pane_id }))
 }
 
-/// Whether a client shows `pane` now. A pane that cannot be asked about is not looked at.
+/// Whether a client shows `pane` now: it is the active pane of the active window of the session some client is on.
+/// The clients are asked, each for its own session, window and pane: a pane is also the pane of every session that
+/// holds its window (sessions grouped with `new-session -t`, a window linked into two sessions), and asking the pane
+/// answers for the one of them attached most lately, which can be one nobody is on. A pane that cannot be asked
+/// about is not looked at.
 fn looked_at(tmux: &crate::tmux::Tmux, pane: &str) -> bool {
-    tmux.run(&["display-message", "-t", pane, "-p", LOOKED_AT])
-        .is_ok_and(|out| out.trim() == "1")
+    tmux.run(&["list-clients", "-F", "#{pane_id}"])
+        .is_ok_and(|out| out.lines().any(|shown| shown.trim() == pane))
 }

@@ -683,7 +683,7 @@
   const nameOf = m => m || thisName();
   const machineOrder = () => ['', ...MACHINES.map(m => m.name)];
   const offlineMachines = () => MACHINES.map(m => m.name).filter(m => !machineLive(m));
-  const MACHINE_WORDS = { dropped: 'offline, last seen 2m ago', connecting: 'connecting', notaw: 'no taw there: install it as you did here', oldtaw: 'runs taw 0.1.0, which has no machines: update it there' };
+  const MACHINE_WORDS = { dropped: 'not answering, last seen 2m ago', connecting: 'connecting', notaw: 'no taw there: install it as you did here', oldtaw: 'runs taw 0.1.0, which has no machines: update it there' };
   const MH_DOT = { live: ['●', 'mh-ok'], connecting: ['●', 'mh-wait'], dropped: ['●', 'mh-off'], notaw: ['●', 'mh-off'], oldtaw: ['●', 'mh-off'], none: ['○', 'mh-none'] };
   function machineHeaderHtml(m, width, withCounts = false) {
     const st = machineState(m); const live = st === 'live';
@@ -707,14 +707,16 @@
   const machinesOptions = () => [' [machines]', ' studio = "studio.local"         # connected, taw 0.4.0', ' build-box = "build-box.local"   # connected, taw 0.4.0', ` pi = "pi"                       # ${PI_OPTION[S.rmPi]}`];
   const pickerTitle = () => (S.remote ? ` new session on ${thisName()} ` : ' new session ');
   const enterHelp = () => (!S.remote ? 'go to the row under the cursor' : appMode() ? 'go into that tmux, in this terminal; the popup key comes back here' : 'go to the row under the cursor; on another machine, through the app');
-  const barCounts = () => { if (!S.remote) return `  ${S.sessions.length} sessions  ·  ${S.agents.length} agents`; return `  ${S.sessions.filter(s => !s.machine || machineLive(s.machine)).length} sessions  ·  ${S.agents.filter(liveAgent).length} agents`; };
+  const machineCount = () => (S.remote ? 1 + MACHINES.length : 1);
+  const countParts = () => { const live = S.remote ? S.sessions.filter(s => !s.machine || machineLive(s.machine)).length : S.sessions.length, agents = S.remote ? S.agents.filter(liveAgent).length : S.agents.length; return [...(machineCount() >= 2 ? [`${machineCount()} machines`] : []), `${live} sessions`, `${agents} agents`]; };
+  const barCounts = () => '  ' + countParts().join('  \u00b7  ');
   const remotePreview = r => (!r.s || !r.s.machine ? null : !machineLive(r.s.machine) ? [`no preview: ${r.s.machine} is not connected`] : null);
   const machineAt = (r, at) => (r && r.s && r.s.machine ? `${r.s.machine}:${at}` : at);
   const RMT = new Set();
   const rtoast = msg => { toast(msg); S.rmToast = msg; RMT.add(msg); };
   const rpage = msg => { S.pageNote = msg; S.pageNoteRemote = S.remote; clearTimeout(S.pageNoteT); S.pageNoteT = setTimeout(() => { S.pageNote = null; draw(); }, 8000); };
   const rnotice = msg => { notice(msg); S.rmToast = msg; RMT.add(msg); };
-  const notConnected = m => `${m} is not connected (last seen 2 min ago)`;
+  const notConnected = m => `${m} is not connected (last seen 2m ago)`;
   const placeAt = (s, win, pidx) => `${s.name}:${win}` + (winOf(s.id, win).cmds.length > 1 ? `.${pidx}` : '');
   const placeLabel = id => !id ? '' : id.kind === 'agent' ? placeAt(id.s, id.a.win, id.a.pidx) : id.kind === 'pane' ? placeAt(id.s, id.win, id.pidx) : id.kind === 'session' ? id.s.name : `${id.s.name} ${id.wt.branch}`;
   const machineOf = id => (id && id.s && id.s.machine) || '';
@@ -882,7 +884,7 @@
   function wrapPreview(lines, r, width) { if (!S.wrap || fullScreenRow(r) || width < 8) return lines; const out = []; for (const l of lines) { let rest = l; while (rest.length > width) { out.push(rest.slice(0, width)); rest = rest.slice(width); } out.push(rest); } return out; }
   const previewTitle = r => { const at = machineAt(r, r ? (r.kind === 'project' ? r.path : r.kind === 'worktree' ? `~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, r.wt.branch)}` : r.s.path) : ''); const box = r && r.kind === 'agent' ? boxOf(r.a) : null; return box ? `${at} · ${BOX} in a sandbox: ${boxWords(box)}` : at; };
 
-  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const left = ours ? span(appMode() ? ' taw app ' : ' taw ', 'c-acc bold') + span(barCounts(), 'c-fg') : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = ours ? span(' 17:58 ', 'c-dim') : rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
+  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const left = ours ? (appMode() ? span(' taw app', 'c-acc bold') + countParts().map(c => span('  \u00b7  ', 'c-dim') + span(c, 'c-fg')).join('') : span(' taw ', 'c-acc bold') + span(barCounts(), 'c-fg')) : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = ours ? span(' 17:58 ', 'c-dim') : rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
 
   function draw() {
     const term = document.getElementById('term'); const inner = COLS; const lines = []; const popupRows = ROWS - 1;

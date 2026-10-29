@@ -622,7 +622,9 @@ fn a_machine_header_is_one_full_width_rule_with_a_dot_the_name_and_the_counts() 
         "none: ['\u{25cb}', 'mh-none']",
         "span('\u{2501}\u{2501} ', 'mh-rule')",
         "'\u{2501}'.repeat(",
-        "dropped: 'offline, last seen 2m ago'",
+        "dropped: 'not answering, last seen 2m ago'",
+        "const machineCount = () => (S.remote ? 1 + MACHINES.length : 1);",
+        "span(' taw app', 'c-acc bold') + countParts().map(c => span('  \\u00b7  ', 'c-dim') + span(c, 'c-fg'))",
         "machineHeaderHtml(it.m, sideW - 2, it.counts)",
     ] {
         assert!(page.contains(part), "{PAGE} lacks {part:?}");
@@ -633,6 +635,7 @@ fn a_machine_header_is_one_full_width_rule_with_a_dot_the_name_and_the_counts() 
             "a header rule with a background: {rule}"
         );
     }
+    assert!(!page.contains("offline, last seen"), "the old away words are still there");
     assert!(
         !page.contains("trying again in 30s"),
         "the old header words are still there"

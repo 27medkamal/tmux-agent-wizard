@@ -472,6 +472,10 @@ impl Rows {
             let machine = done.machine.as_str();
             let sent = self.pending.remove(machine);
             let current = sent.as_ref().filter(|sent| sent.token == done.token);
+            let session_term = sent.as_ref().and_then(|sent| match &sent.action {
+                Action::NewRemoteSession { term, .. } => Some(term.as_str()),
+                _ => None,
+            });
             let here = current
                 .is_some_and(|sent| sent.row == app.row_identity() && !app.overlay.is_open());
             match (done.reply, current) {
@@ -500,13 +504,15 @@ impl Rows {
                 {
                     app.toast(words::update_taw_to_make_sessions(machine));
                 }
-                // `open` says `not_found` for a folder or a term that is nowhere: the far words, not "row gone".
-                (Reply::Gone, Some(sent))
-                    if matches!(sent.action, Action::NewRemoteSession { .. }) =>
-                {
-                    let said =
-                        crate::machine::actions::error_message(&done.stdout).unwrap_or_default();
-                    app.toast(words::refused(machine, &said));
+                // `open` says `not_found` for a folder or a term that is nowhere: the far words, or the folder's
+                // own when it said none, and never "row gone", whether or not the token is the one sent.
+                (Reply::Gone, _) if session_term.is_some() => {
+                    let said = crate::machine::actions::error_message(&done.stdout)
+                        .filter(|said| !said.trim().is_empty());
+                    app.toast(match said {
+                        Some(said) => words::refused(machine, &said),
+                        None => words::no_folder(machine, session_term.unwrap_or_default()),
+                    });
                 }
                 (Reply::Usage, _) => app.toast(crate::machine::actions::usage_words(machine)),
                 (Reply::Done, Some(sent)) if here => {
@@ -2356,6 +2362,58 @@ mod rows_tests {
         assert!(
             matches!(&routes[0], Route::Attach { target, .. } if Some(target.as_str()) == second.strip_prefix("studio:")),
             "{routes:?}"
+        );
+    }
+
+    /// A folder that is nowhere, from a far taw that said nothing more, names the term; and the same answer under
+    /// a token that is not the one sent still never says the row is gone.
+    /// Mutation: the `Reply::Gone` arm of `NewRemoteSession` needs `current` again (a stale token reads "gone").
+    #[test]
+    fn a_far_folder_that_is_nowhere_keeps_its_own_words_even_when_the_token_is_stale() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let action = Action::NewRemoteSession {
+            machine: "studio".into(),
+            term: "nothing-like-it".into(),
+        };
+        let silent = r#"{"id":"cli:open","error":{"code":"not_found","message":""}}"#;
+        let words = "studio: no directory matches nothing-like-it";
+        for (said, stale) in [(silent, false), (silent, true), (NO_DIR, true)] {
+            let _fake = rig.fake(said, 1, false);
+            send(&mut feed, &mut app, &action);
+            if stale {
+                feed.remote.pending.get_mut("studio").unwrap().token += 7;
+            }
+            assert!(answered(&mut feed, &mut app).is_empty());
+            assert_eq!(toast_of(&app).as_deref(), Some(words), "{said} {stale}");
+        }
+    }
+
+    /// A far error that carries no message is a sentence, not `studio: `.
+    /// Mutation: `words::refused` formats an empty message as it did.
+    #[test]
+    fn a_far_error_with_no_message_is_a_sentence() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = rig.fake(
+            r#"{"id":"cli:open","error":{"code":"internal","message":""}}"#,
+            1,
+            false,
+        );
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "x".into(),
+            },
+        );
+        assert!(answered(&mut feed, &mut app).is_empty());
+        assert_eq!(
+            toast_of(&app).as_deref(),
+            Some("studio answered with an error and no message")
         );
     }
 

@@ -409,7 +409,16 @@ pub fn no_answer(name: &str) -> String {
 
 /// What it says of an error the machine's taw reported for an action: its own words, with the machine named.
 pub fn refused(machine: &str, message: &str) -> String {
+    if message.trim().is_empty() {
+        return format!("{machine} answered with an error and no message");
+    }
     format!("{machine}: {message}")
+}
+
+/// `open` found no folder for `term` over there and said nothing more: the words the far taw uses when it does
+/// say, as the app's `n` shows them.
+pub fn no_folder(machine: &str, term: &str) -> String {
+    format!("{machine}: no directory matches {term}")
 }
 
 /// `label` is the hook's own name (`pre-close hook` or `pre-worktree-remove hook`).

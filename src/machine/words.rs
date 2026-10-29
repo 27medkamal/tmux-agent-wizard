@@ -156,16 +156,6 @@ pub fn capture_age(secs: u64) -> String {
     format!("({} ago)", header_age(secs))
 }
 
-/// What the bar says of the machines: how many there are, this machine counted, and by name those
-/// that are not live: `3 machines, pi offline`, or `2 machines` with every one live.
-pub fn machines(total: usize, offline: &[&str]) -> String {
-    if offline.is_empty() {
-        format!("{total} machines")
-    } else {
-        format!("{total} machines, {} offline", offline.join(", "))
-    }
-}
-
 pub fn dropped_toast(name: &str) -> String {
     format!("{name} dropped off (last seen just now)")
 }
@@ -525,12 +515,6 @@ mod tests {
         );
         assert_eq!(dropped_toast("pi"), "pi dropped off (last seen just now)");
         assert_eq!(no_preview("pi"), "no preview: pi is not connected");
-        assert_eq!(machines(3, &["pi"]), "3 machines, pi offline");
-        assert_eq!(
-            machines(4, &["studio", "pi"]),
-            "4 machines, studio, pi offline"
-        );
-        assert_eq!(machines(2, &[]), "2 machines");
         assert_eq!(capture_age(5), "(5s ago)");
         assert_eq!(capture_age(125), "(2m ago)");
         assert_eq!(

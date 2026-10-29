@@ -47,7 +47,7 @@ pub struct MachineView {
     /// The machine is this machine's own tmux server.
     pub this_server: bool,
     /// No app keeps the connections, so nothing is known of the machine but its name: its header says how to
-    /// connect it ([`words::NO_KEEPER`]), and the bar neither counts it nor names it offline.
+    /// connect it ([`words::NO_KEEPER`]).
     pub no_keeper: bool,
 }
 

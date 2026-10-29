@@ -519,11 +519,7 @@ fn put_up_bar(ctx: &Ctx, rows: usize) -> Option<(String, status_bar::Saved)> {
     let theme = theme::resolve(&ctx.cfg.theme.name, &ctx.cfg.theme.custom).theme;
     let sessions = ctx.tmux.list_sessions().map(|s| s.len()).unwrap_or(0);
     let panes = ctx.tmux.list_panes().unwrap_or_default();
-    let bar = status_bar::bar_format(
-        &theme,
-        ctx.cfg.ui.status_indicators,
-        &status_bar::counts(&panes, sessions),
-    );
+    let bar = status_bar::bar_format(&theme, &status_bar::counts(&panes, sessions));
     match status_bar::swap(&ctx.tmux, &session, rows, &bar) {
         Ok(saved) => Some((session, saved)),
         Err(err) => {
@@ -932,11 +928,9 @@ mod tests {
         let theme = theme::resolve("catppuccin", &Default::default()).theme;
         status_bar::bar_format(
             &theme,
-            crate::config::StatusIndicators::Symbols,
             &status_bar::BarCounts {
                 sessions: 1,
                 agents: 0,
-                needs: Vec::new(),
             },
         )
     }

@@ -106,28 +106,6 @@ pub(crate) fn now_ms() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-/// What the bar says of the machines: `3 machines, pi offline`, this machine counted, the names of
-/// those that are not live after it ([`words::machines`]). The view of this machine's own tmux server
-/// is not another machine: it is not counted and never named, and neither is a machine of the table that no
-/// app keeps ([`MachineHeader::no_keeper`]): nobody is looking at it, so it is not offline. Empty when no other
-/// machine is listed, so a bar over one machine says nothing of machines.
-pub fn machines_part(snap: &Snapshot) -> String {
-    let others: Vec<&MachineHeader> = snap
-        .machines
-        .iter()
-        .filter(|m| !m.this_server && !m.no_keeper)
-        .collect();
-    if others.is_empty() {
-        return String::new();
-    }
-    let offline: Vec<&str> = others
-        .iter()
-        .filter(|machine| !machine.live)
-        .map(|machine| machine.name.as_str())
-        .collect();
-    words::machines(others.len() + 1, &offline)
-}
-
 /// What a machine's header line calls it: this machine's own is [`this_machine_word`].
 pub fn header_name(snap: &Snapshot, machine: Option<usize>) -> String {
     match machine {

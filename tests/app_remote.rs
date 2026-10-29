@@ -1153,9 +1153,20 @@ fn studio_made_unreachable_while_attached_brings_the_list_back() {
     );
     press(&rig.term, &["Enter"]);
     expect_screen(&rig, "the list", |screen| screen.contains(" taw app"));
-    expect_screen(&rig, "studio offline", |screen| {
-        screen.contains(&words::machines(2, &["studio"]))
-    });
+    expect_screen(
+        &rig,
+        "studio's header says it is away",
+        studio_header_is_away,
+    );
+}
+
+/// Whether the list's header of studio says it is away: its dot and name with the words of a machine
+/// that is not live (the top line names no machine).
+fn studio_header_is_away(screen: &str) -> bool {
+    screen.lines().any(|line| {
+        line.contains("\u{25cf} studio")
+            && (line.contains("not answering") || line.contains("connecting"))
+    })
 }
 
 /// (g) A machine shown away (its feed stopped, so the connection stays and its rows stay, but nothing was heard
@@ -1177,7 +1188,7 @@ fn enter_on_a_machine_that_is_away_says_so_and_attaches_nothing() {
     // Nothing is heard for 15 s, so the header says studio is offline, and the row is still there.
     assert!(
         wait_for(
-            &mut || terminal_screen(&rig.term).contains(&words::machines(2, &["studio"])),
+            &mut || studio_header_is_away(&terminal_screen(&rig.term)),
             Duration::from_secs(40)
         ),
         "studio never went offline\n{}",

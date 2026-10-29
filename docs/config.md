@@ -56,9 +56,10 @@ Width and height are caps rather than sizes because `taw ui open` computes the
 geometry itself: it reads the client's size and `status`/`status-position` and places
 a full-width popup against the status line, as many rows short of the client as the
 line has (one, or up to five with `status 2` … `status 5`). While the popup is open
-that line shows taw's bar (`taw · 7 sessions · 9 agents · ⏸1 ✓2 need you`, the
-states that need you each in their own glyph and colour, then the status rail and
-the clock, on its first row, with any other rows blank) and gets its own text back
+that line shows taw's bar (`taw · 7 sessions · 9 agents`, then the clock at the
+right, on its first row, with any other rows blank; what needs you is on the
+list's border, so the bar does not repeat it, and neither does it show the status
+rail) and gets its own text back
 when the popup closes; a `display-message` notification lands in it as
 always. A full-size popup on tmux ≥ 3.3 draws no frame or title of its own
 (`display-popup -B`), so `@agent-wizard-popup-title` and `-border` have nothing to
@@ -123,7 +124,7 @@ The keys taw adds to herdr's, or reads with another default or meaning, with the
 | `[ui] depth` | `"agents"` | how far the tree is expanded when it opens: `sessions`, `agents`, `all`; shells are one `l` away |
 | `[ui] labels` | `true` | number the sessions (`1-9`) and letter their rows (`a-e`); `false` hides both, their keys do nothing, and the filter does not match them |
 | `[ui] titles` | `true` | show each agent's own pane title on its row, when it has set one |
-| `[theme.custom] attention` | peach `#fab387` (dark), `#fe640b` (light) | the colour for a blocked agent: its row, and its count on the border and in taw's bar |
+| `[theme.custom] attention` | peach `#fab387` (dark), `#fe640b` (light) | the colour for a blocked agent: its row, and its count on the list's border |
 | `[ui] layout` | `"tree"` | `tree` or `flat` when it opens; `f` toggles |
 | `[ui] preview` | `true` | the preview pane, beside the tree while the popup is 100 columns or wider; narrower, the tree has the whole width and no preview is drawn. `false` keeps it off at any width |
 | `[ui] show_git` | `true` | branch and git flags on session headers |

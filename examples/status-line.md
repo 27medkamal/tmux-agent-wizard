@@ -17,6 +17,10 @@ because they're zero). Colour and glyph style (`dots` vs `symbols`) follow
 set -ag status-right ' #{@agent_wizard_status}'
 ```
 
+While the popup is open, taw swaps your status line for its own bar (the counts of
+sessions and agents, and the clock). The bar does not show this token, so the token
+is for your own line the rest of the time.
+
 Use `-ag` (append) rather than `-g` so you don't clobber whatever else is already
 in `status-right`. Put it in `status-left` instead if that's where you'd rather see
 it. It's a plain tmux global option, so `taw` doesn't care which side you put it on.

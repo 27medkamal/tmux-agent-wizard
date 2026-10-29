@@ -2074,96 +2074,12 @@ fn a_row_of_a_machine_that_is_away_has_no_capture_age_in_its_title() {
     assert!(!preview_title(&buf).contains("ago"));
 }
 
-// ----------------------------------------------------------------- the bar's machines part
-
-/// A world of this machine and one machine called `name` per entry, live or not.
-fn world_of(machines: &[(&str, bool)]) -> Snapshot {
-    let views: Vec<MachineView> = machines
-        .iter()
-        .map(|(name, live)| {
-            let mut view = view_with(name, Some(small_state()));
-            view.live = *live;
-            view
-        })
-        .collect();
-    merge(snapshot(), &views, NOW)
-}
-
-#[test]
-fn the_bar_counts_this_machine_among_the_machines_and_names_those_that_are_offline() {
-    // The bar: this Mac, studio and pi, which dropped.
-    assert_eq!(
-        machines_part(&world_of(&[("studio", true), ("pi", false)])),
-        "3 machines, pi offline"
-    );
-    assert_eq!(machines_part(&spec_world()), "3 machines, pi offline");
-}
-
-#[test]
-fn the_bar_says_only_how_many_machines_when_none_is_offline() {
-    assert_eq!(
-        machines_part(&world_of(&[("studio", true), ("pi", true)])),
-        "3 machines"
-    );
-    assert_eq!(machines_part(&world_of(&[("studio", true)])), "2 machines");
-}
-
-#[test]
-fn the_bar_joins_the_names_of_machines_that_are_offline_in_the_configs_order() {
-    assert_eq!(
-        machines_part(&world_of(&[
-            ("studio", false),
-            ("nas", true),
-            ("pi", false)
-        ])),
-        "4 machines, studio, pi offline"
-    );
-}
-
-#[test]
-fn a_machine_that_has_not_answered_yet_is_offline_too() {
-    let mut view = view_with("studio", None);
-    view.live = false;
-    assert_eq!(
-        machines_part(&merge(snapshot(), &[view], NOW)),
-        "2 machines, studio offline"
-    );
-}
-
 /// This Mac's own tmux server, listed among the machines as a view that is `this_server`, `live` or not.
 fn itself(live: bool) -> MachineView {
     let mut view = view_with("this-mac", None);
     view.this_server = true;
     view.live = live;
     view
-}
-
-#[test]
-fn the_bar_does_not_count_the_view_that_is_this_machines_own_server_nor_name_it_offline() {
-    let studio = view_with("studio", Some(small_state()));
-    let mut pi = view_with("pi", Some(small_state()));
-    pi.live = false;
-    // This Mac, studio and the view of this Mac's own server: two machines.
-    assert_eq!(
-        machines_part(&merge(snapshot(), &[studio.clone(), itself(true)], NOW)),
-        "2 machines"
-    );
-    // Not live, it is still no machine and is never named: pi is the one offline.
-    assert_eq!(
-        machines_part(&merge(snapshot(), &[studio, itself(false), pi], NOW)),
-        "3 machines, pi offline"
-    );
-}
-
-#[test]
-fn a_bar_over_this_machine_and_the_view_of_its_own_server_says_nothing_of_machines() {
-    assert_eq!(machines_part(&merge(snapshot(), &[itself(false)], NOW)), "");
-}
-
-#[test]
-fn the_bar_says_nothing_of_machines_when_no_machine_is_listed() {
-    assert_eq!(machines_part(&snapshot()), "");
-    assert_eq!(machines_part(&merge(snapshot(), &[], NOW)), "");
 }
 
 // ----------------------------------------------------------------- a machine's closed worktrees
@@ -2490,7 +2406,7 @@ fn a_closed_worktree_of_a_machine_that_is_away_is_dim_and_counted_nowhere() {
     let (counts, bare) = (app.bar_counts(), without.bar_counts());
     assert_eq!(counts.sessions, bare.sessions);
     assert_eq!(counts.agents, bare.agents);
-    assert_eq!(counts.needs, bare.needs);
+    assert_eq!(app.hot_by_state(), without.hot_by_state());
     assert!(!app.next_up_rows().contains(&at));
     // Positive half: the walk does reach this machine's agents.
     assert!(!app.next_up_rows().is_empty());
@@ -2834,7 +2750,7 @@ fn with_no_machines_no_header_no_dot_and_the_numbers_a_hand_count_gives() {
                         let bar = app.bar_counts();
                         assert_eq!(bar.sessions, world.sessions, "{at}");
                         assert_eq!(bar.agents, world.agents, "{at}");
-                        assert_eq!(bar.needs, world.needs, "{at}");
+                        assert_eq!(app.hot_by_state(), world.needs, "{at}");
                         if query.is_none() {
                             let flat = layout == Layout::Flat && depth != Depth::Sessions;
                             let mut numbered = 0;

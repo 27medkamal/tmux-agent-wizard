@@ -179,8 +179,6 @@ fn every_string_of_the_header_and_row_words_is_in_the_section_with_the_sample_va
         words::NO_KEEPER.to_string(),
         words::enter_goes_to("studio", "Q"),
         words::enter_on_machine_help("Q"),
-        words::machines(3, &[]),
-        words::machines(3, &["pi"]),
         words::not_connected("pi", ago),
         words::no_preview("pi"),
         words::capture_age(ago),
@@ -272,7 +270,7 @@ fn the_section_says_none_of_the_words_to_avoid_and_offline_only_in_the_table() {
             "README's remote section says {words:?}"
         );
     }
-    // Every backticked run is what taw prints (the count string quotes "offline" once), so it is left out;
+    // Every backticked run is what taw prints, so it is left out;
     // the rest, a table's Means column included, is the README's own prose.
     let prose: String = text
         .split('`')
@@ -287,8 +285,6 @@ fn the_section_says_none_of_the_words_to_avoid_and_offline_only_in_the_table() {
             "README's remote section says {word:?} outside what taw prints"
         );
     }
-    // The words table does hold the count string, so the strip above is not hiding nothing.
-    assert!(has_phrase(&text, "3 machines, pi offline"));
 }
 
 #[test]

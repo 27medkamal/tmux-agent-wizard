@@ -245,14 +245,7 @@ fn refresh_bar(
     last: &mut Option<String>,
 ) {
     if bar && let Some(session) = session {
-        crate::cli::status_bar::refresh_live(
-            tmux,
-            session,
-            &app.theme,
-            app.cfg.ui.status_indicators,
-            &app.bar_counts(),
-            last,
-        );
+        crate::cli::status_bar::refresh_live(tmux, session, &app.theme, &app.bar_counts(), last);
     }
 }
 
@@ -1580,7 +1573,6 @@ mod tests {
             "no remote row: the stale file of studio was not read"
         );
         assert!(snap.spaces.iter().all(|s| s.machine.is_none()));
-        assert_eq!(machines::machines_part(&snap), "", "the bar says nothing");
         let shown = text_of(&popup_frame(snap, Vec::new()));
         for name in ["studio", "pi"] {
             let line = shown
@@ -1612,7 +1604,6 @@ mod tests {
         assert_eq!(snap.machines.len(), 1);
         assert!(snap.machines[0].this_server, "the file says so");
         assert!(!snap.has_other_machines());
-        assert_eq!(machines::machines_part(&snap), "");
         assert!(snap.spaces.iter().all(|s| s.machine.is_none()));
         let drawn = text_of(&popup_frame(snap, records));
         let want = text_of(&popup_frame(

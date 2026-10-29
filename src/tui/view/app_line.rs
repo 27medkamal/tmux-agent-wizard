@@ -1,5 +1,6 @@
-//! The app's top line: what it is, what it is listing and what needs you on the left, the counts,
-//! the machines that are away and the clock on the right. A toast takes the left's place.
+//! The app's top line: what it is and how many sessions and agents it lists on the left, the clock on
+//! the right. A toast takes the left's place. What needs you is on the list's border, and each machine
+//! that is away says so on its own header.
 
 use super::*;
 
@@ -20,69 +21,16 @@ fn counted(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
-/// The names of the machines that are not live, as the right of the line says them: `pi offline`.
-fn offline_words(app: &App) -> String {
-    let names: Vec<&str> = app
-        .snap
-        .machines
-        .iter()
-        .filter(|m| !m.this_server && !m.no_keeper && !m.live)
-        .map(|m| m.name.as_str())
-        .collect();
-    if names.is_empty() {
-        String::new()
-    } else {
-        format!("{} offline", names.join(", "))
-    }
-}
-
 /// The line itself, `width` columns. The right is dropped when it would leave the left under half
 /// the line, and the left is cut with an ellipsis to what is left.
 pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
     let theme = &app.theme;
     let fg = Style::default().fg(theme.fg);
     let dim = Style::default().fg(theme.dim);
-    let indicators = app.cfg.ui.status_indicators;
     let counts = app.bar_counts();
-    let glyph = |state: AgentState| data::state_icon(Some(state), indicators);
-    let colour = |state: AgentState| {
-        Style::default()
-            .fg(theme.state_color(Some(state)))
-            .add_modifier(Modifier::BOLD)
-    };
 
-    // The right: every state that has an agent in it, who is away, the clock.
-    let mut states: Vec<(AgentState, usize)> = Vec::new();
-    for state in COUNTS {
-        let n = app
-            .snap
-            .agents
-            .iter()
-            .filter(|a| !app.snap.greyed(a.machine) && a.state == Some(state))
-            .count();
-        if n > 0 {
-            states.push((state, n));
-        }
-    }
-    let mut right: Vec<Span<'static>> = Vec::new();
-    for (state, n) in &states {
-        right.push(Span::styled(
-            format!("{}{n}", glyph(*state)),
-            colour(*state),
-        ));
-        right.push(Span::styled(" ", dim));
-    }
-    let offline = offline_words(app);
-    if !offline.is_empty() {
-        right.push(Span::styled(offline, fg));
-    } else {
-        right.pop();
-    }
-    if !right.is_empty() {
-        right.push(Span::styled("  \u{2502}  ", dim));
-    }
-    right.push(Span::styled(clock(app), dim));
-    let right = Line::from(right);
+    // The right: the clock alone.
+    let right = Line::from(Span::styled(clock(app), dim));
     let right_width = line_width(&right);
 
     // The left: a toast, or the name and the counts.
@@ -102,27 +50,8 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
             spans.push(Span::styled(SEPARATOR, dim));
             spans.push(Span::styled(text, fg));
         };
-        let machines = machines::machines_part(&app.snap);
-        if !machines.is_empty() {
-            part(machines);
-        }
         part(counted(counts.sessions, "session"));
         part(counted(counts.agents, "agent"));
-        let need: usize = counts.needs.iter().map(|&(_, n)| n).sum();
-        if need > 0 {
-            spans.push(Span::styled(SEPARATOR, dim));
-            for (at, (state, n)) in counts.needs.iter().enumerate() {
-                if at > 0 {
-                    spans.push(Span::styled(" ", dim));
-                }
-                spans.push(Span::styled(
-                    format!("{}{n}", glyph(*state)),
-                    colour(*state),
-                ));
-            }
-            let words = if need == 1 { "needs you" } else { "need you" };
-            spans.push(Span::styled(format!(" {words}"), fg));
-        }
         Line::from(spans)
     };
 
@@ -184,33 +113,40 @@ mod tests {
     }
 
     #[test]
-    fn the_line_says_what_it_lists_and_what_needs_you_with_the_counts_and_the_clock_beside() {
+    fn the_line_says_how_many_sessions_and_agents_it_lists_with_only_the_clock_beside() {
         let cfg = cfg();
         let mut a = app(&cfg);
         a.clock_ms = Some(1_792_432_710_000);
         let line = text(&app_top_line(&a, 150));
         let sessions = a.bar_counts().sessions;
         let agents = a.bar_counts().agents;
+        let ms = a.wall_ms();
+        let clock = clock_text(ms, crate::session::restore::local_offset(ms / 1000));
         assert!(line.starts_with(" taw app  \u{b7}  "), "{line:?}");
         assert!(line.contains(&format!("{sessions} sessions")), "{line:?}");
         assert!(line.contains(&format!("{agents} agents")), "{line:?}");
-        // Two agents of the sample world need you.
-        assert!(line.contains("need you"), "{line:?}");
-        // No machines: no machines part and nobody offline.
-        assert!(!line.contains("machine"), "{line:?}");
-        assert!(!line.contains("offline"), "{line:?}");
         assert_eq!(line.chars().count(), 150, "{line:?}");
-        // The clock ends it, in this machine's zone, after the counts of each state that is there.
-        let ms = a.wall_ms();
-        let clock = clock_text(ms, crate::session::restore::local_offset(ms / 1000));
-        assert!(line.ends_with(&format!("\u{2502}  {clock} ")), "{line:?}");
-        assert!(line.contains("\u{23f5}3"), "three agents work: {line:?}");
+        // The left holds the name and the two counts and nothing else: nothing that needs you, no
+        // machines, no state counts.
+        let left_end =
+            line.find(&format!("{agents} agents")).unwrap() + format!("{agents} agents").len();
+        assert!(line[left_end..].trim().ends_with(&clock), "{line:?}");
+        // The right is the clock alone.
+        assert_eq!(line[left_end..].trim(), clock, "{line:?}");
+        for word in [
+            "need", "machine", "offline", "\u{2502}", "\u{23f5}", "\u{2713}", "\u{23f8}",
+        ] {
+            assert!(!line.contains(word), "{word:?} in {line:?}");
+        }
     }
 
+    /// With machines listed the line still says nothing of them: their count, who is away and their
+    /// states are on the list's own headers.
     #[test]
-    fn the_machines_part_and_the_offline_names_come_with_machines() {
+    fn machines_add_nothing_to_the_line() {
         let cfg = cfg();
         let mut a = app(&cfg);
+        let before = text(&app_top_line(&a, 150));
         let mut snap = a.snap.clone();
         snap.machines = vec![
             MachineHeader {
@@ -223,41 +159,17 @@ mod tests {
                 live: false,
                 ..MachineHeader::default()
             },
-        ];
-        a.set_snapshot(snap);
-        let line = text(&app_top_line(&a, 150));
-        assert!(line.contains("3 machines, pi offline"), "{line:?}");
-        // And once more on the right, with the counts: the names of who is away.
-        assert_eq!(line.matches("pi offline").count(), 2, "{line:?}");
-    }
-
-    #[test]
-    fn a_machine_no_app_keeps_is_neither_counted_nor_named_offline() {
-        let cfg = cfg();
-        let mut a = app(&cfg);
-        let mut snap = a.snap.clone();
-        snap.machines = vec![
             MachineHeader {
-                name: "studio".into(),
-                live: true,
-                ..MachineHeader::default()
-            },
-            MachineHeader {
-                name: "pi".into(),
+                name: "far".into(),
                 no_keeper: true,
                 ..MachineHeader::default()
             },
         ];
         a.set_snapshot(snap);
         let line = text(&app_top_line(&a, 150));
-        assert!(line.contains("2 machines"), "the positive half: {line:?}");
-        assert!(!line.contains("offline"), "{line:?}");
-        let mut snap = a.snap.clone();
-        snap.machines.remove(0);
-        a.set_snapshot(snap);
-        let line = text(&app_top_line(&a, 150));
+        assert_eq!(line, before, "the same line with and without machines");
         assert!(
-            !line.contains("machine") && !line.contains("offline"),
+            !line.contains("machine") && !line.contains("offline") && !line.contains("pi"),
             "{line:?}"
         );
     }
@@ -339,7 +251,13 @@ mod tests {
         a.toast("pi is not connected");
         let lines = screen(&mut a, 150, 30);
         assert!(lines[0].contains("pi is not connected"), "{:?}", lines[0]);
-        assert!(lines[0].contains('\u{2502}'), "{:?}", lines[0]);
+        // The clock is still on the right, beside the toast.
+        let clock = lines[0].trim_end().rsplit(' ').next().unwrap();
+        assert!(
+            clock.len() == 5 && clock.as_bytes()[2] == b':',
+            "{:?}",
+            lines[0]
+        );
         let last = lines.last().unwrap();
         assert!(!last.contains("not connected"), "{last:?}");
         assert!(

@@ -243,9 +243,9 @@ e2e_status_position top
 e2e_ui_open; e2e_wait_popup_open
 row0=$(screen | sed -n '1p'); row1=$(screen | sed -n '2p')
 echo "$row0" | grep -q '^ taw ' && ok "top: row 0 is taw's bar" || bad "top: row 0 is taw's bar" "$row0"
-echo "$row0" | grep -qE '[0-9]+ sessions?  ·  [0-9]+ agents?  ·  ' && ok "top: the bar counts the sessions and the agents" || bad "top: the bar counts the sessions and the agents" "$row0"
-echo "$row0" | grep -qE '((⏸|✓|●)[0-9]+ )+needs? you|nothing needs you' && ok "top: the bar says what needs you, by kind" || bad "top: the bar says what needs you, by kind" "$row0"
-echo "$row0" | grep -qE '│  [0-9]{2}:[0-9]{2} *$' && ok "top: the clock closes the bar on the right" || bad "top: the clock closes the bar on the right" "$row0"
+echo "$row0" | grep -qE '[0-9]+ sessions?  ·  [0-9]+ agents?' && ok "top: the bar counts the sessions and the agents" || bad "top: the bar counts the sessions and the agents" "$row0"
+echo "$row0" | grep -qE 'need|nothing|[⏸✓●▶⏵]|│' && bad "top: the bar holds no need words, no glyph and no rail (the border says what needs you)" "$row0" || ok "top: the bar holds no need words, no glyph and no rail (the border says what needs you)"
+echo "$row0" | grep -qE '[0-9]+ agents? +[0-9]{2}:[0-9]{2} *$' && ok "top: the clock closes the bar on the right" || bad "top: the clock closes the bar on the right" "$row0"
 echo "$row0" | grep -q 'main' && bad "top: the bar no longer names the session you came from" "$row0" || ok "top: the bar no longer names the session you came from"
 echo "$row1" | grep -q '^╭ sessions' && ok "top: row 1 is the tree panel's border, no frame" || bad "top: row 1 is the tree panel's border, no frame" "$row1"
 check "top: the hint line is the last row" "1" "$(screen | sed -n '40p' | grep -c '^ 1-9 session')"

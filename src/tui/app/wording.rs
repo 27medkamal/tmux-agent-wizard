@@ -940,29 +940,14 @@ fn taws_bar_uses_none_of_them() {
     use crate::cli::status_bar::{BarCounts, bar_format};
     let mut said = Said::default();
     let theme = theme::resolve("catppuccin", &BTreeMap::new()).theme;
-    for (indicators, name) in [
-        (StatusIndicators::Symbols, "symbols"),
-        (StatusIndicators::Dots, "dots"),
-    ] {
-        for needs in [
-            Vec::new(),
-            vec![(AgentState::Blocked, 1)],
-            vec![(AgentState::Done, 1)],
-            vec![(AgentState::Blocked, 2), (AgentState::Done, 3)],
-        ] {
-            let counts = BarCounts {
-                sessions: 3,
-                agents: 5,
-                needs,
-            };
-            said.add(
-                format!("the bar, {name}, {:?}", counts.needs),
-                bar_format(&theme, indicators, &counts),
-            );
-        }
+    for (sessions, agents) in [(0, 0), (1, 1), (3, 5)] {
+        let counts = BarCounts { sessions, agents };
+        said.add(
+            format!("the bar, {sessions} and {agents}"),
+            bar_format(&theme, &counts),
+        );
     }
-    assert!(said.heard("nothing needs you"));
-    assert!(said.heard("need you"));
+    assert!(said.heard("agent"));
     said.assert_clean();
 }
 

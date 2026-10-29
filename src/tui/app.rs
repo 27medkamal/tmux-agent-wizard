@@ -949,7 +949,7 @@ impl<'a> App<'a> {
     }
 
     /// The agents that need you ([`attention::hot`]), counted by the state that needs it,
-    /// most urgent first: what the tree border and the bar count, each group in its state's
+    /// most urgent first: what the tree border counts, each group in its state's
     /// own glyph and colour ([`attention::hot_by_state`]).
     pub fn hot_by_state(&self) -> Vec<(AgentState, usize)> {
         attention::hot_by_state(
@@ -966,7 +966,7 @@ impl<'a> App<'a> {
         self.hot_by_state().iter().map(|&(_, count)| count).sum()
     }
 
-    /// The bar's numbers: sessions on the server, agents, and what needs you by state.
+    /// The bar's numbers: sessions on the server and agents.
     pub fn bar_counts(&self) -> crate::cli::status_bar::BarCounts {
         crate::cli::status_bar::BarCounts {
             sessions: self
@@ -981,7 +981,6 @@ impl<'a> App<'a> {
                 .iter()
                 .filter(|a| !self.snap.greyed(a.machine))
                 .count(),
-            needs: self.hot_by_state(),
         }
     }
 

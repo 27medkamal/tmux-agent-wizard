@@ -24,10 +24,7 @@ use anyhow::Context;
 use ratatui::style::Color;
 
 use crate::attention;
-use crate::config::StatusIndicators;
-use crate::store::AgentState;
 use crate::tmux::{PaneInfo, Tmux};
-use crate::tui::data::state_icon;
 use crate::tui::theme::Theme;
 
 /// The session user option that records the rows [`swap`] replaced, from the moment the
@@ -40,8 +37,7 @@ pub const SAVED_OPTION: &str = "@agent_wizard_status_saved";
 pub const BAR_OPTION: &str = "@agent_wizard_bar";
 
 /// What row 0 holds while the popup is open: [`BAR_OPTION`] expanded as a format, its
-/// styles, the rail's `#{@agent_wizard_status}` and the clock's `%H:%M` included — `T:`
-/// is the modifier that also expands strftime specifiers. In tmux since 3.1, below the
+/// styles and the clock's `%H:%M` included. `T:` is the modifier that also expands strftime specifiers. In tmux since 3.1, below the
 /// 3.2 floor; verified on 3.6b.
 pub const BAR_ROW: &str = "#{T:@agent_wizard_bar}";
 
@@ -70,19 +66,14 @@ pub struct BarCounts {
     pub sessions: usize,
     /// Every pane with an agent in it ([`attention::is_agent`]).
     pub agents: usize,
-    /// The agents that need you ([`attention::hot`]), counted by the state that needs it,
-    /// most urgent first ([`attention::hot_by_state`]). Empty when nothing does.
-    pub needs: Vec<(AgentState, usize)>,
 }
 
 /// [`BarCounts`] from one `list-panes` and the number of sessions — the launcher's
 /// numbers, before the popup has a snapshot of its own (`App::bar_counts` is the popup's).
 pub fn counts(panes: &[PaneInfo], sessions: usize) -> BarCounts {
-    let agents: Vec<&PaneInfo> = panes.iter().filter(|p| attention::is_agent(p)).collect();
     BarCounts {
         sessions,
-        agents: agents.len(),
-        needs: attention::hot_by_state(agents.iter().map(|p| (p.agent.state, p.agent.seen))),
+        agents: panes.iter().filter(|p| attention::is_agent(p)).count(),
     }
 }
 
@@ -118,38 +109,11 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// The bar as a `status-format` value: ` taw ` in the accent colour, bold; the session
-/// and agent counts; what needs you, each state as its glyph (per `[ui] status_indicators`)
-/// and count in the state's own colour, bold, most urgent first, then `need you` (`needs
-/// you` for one in all) in the text colour, or `nothing needs you` dim; then, right-aligned,
-/// the status rail, a `│` and the clock. The groups are the ones the tree border draws.
-pub fn bar_format(theme: &Theme, indicators: StatusIndicators, counts: &BarCounts) -> String {
-    let total: usize = counts.needs.iter().map(|&(_, count)| count).sum();
-    let need = if total > 0 {
-        let groups: Vec<String> = counts
-            .needs
-            .iter()
-            .map(|&(state, count)| {
-                format!(
-                    "#[fg={},bold]{}{count}#[default]",
-                    tmux_colour(theme.state_color(Some(state))),
-                    state_icon(Some(state), indicators)
-                )
-            })
-            .collect();
-        format!(
-            "{} #[fg={}]need{} you#[default]",
-            groups.join(" "),
-            tmux_colour(theme.fg),
-            if total == 1 { "s" } else { "" }
-        )
-    } else {
-        format!(
-            "#[fg={}]nothing needs you#[default]",
-            tmux_colour(theme.dim)
-        )
-    };
+/// and agent counts; then, right-aligned, the clock. What needs you is not here: the list's
+/// border says it, and the rows and machine headers show the states.
+pub fn bar_format(theme: &Theme, counts: &BarCounts) -> String {
     format!(
-        "#[fg={},bold] taw #[default]#[fg={}]  {} session{}  \u{b7}  {} agent{}  \u{b7}  #[default]{need}#[align=right]#{{@agent_wizard_status}}  \u{2502}  %H:%M ",
+        "#[fg={},bold] taw #[default]#[fg={}]  {} session{}  \u{b7}  {} agent{}#[default]#[align=right]%H:%M ",
         tmux_colour(theme.accent),
         tmux_colour(theme.fg),
         counts.sessions,
@@ -290,11 +254,10 @@ pub fn refresh_live(
     t: &Tmux,
     session: &str,
     theme: &Theme,
-    indicators: StatusIndicators,
     counts: &BarCounts,
     last: &mut Option<String>,
 ) {
-    let text = bar_format(theme, indicators, counts);
+    let text = bar_format(theme, counts);
     if last.as_deref() == Some(text.as_str()) {
         return;
     }
@@ -330,106 +293,45 @@ mod tests {
         assert_eq!(tmux_colour(Color::Indexed(208)), "colour208");
     }
 
-    /// What needs you, split by state (a green row under a count in the blocked colour would
-    /// read as blocked): a blocked agent and two finished ones read as the blocked glyph
-    /// and its count in the attention colour, the done glyph and its count in green, both
-    /// bold, and then the words in the text colour, `need` since there are three.
+    /// The bar names taw, the session and agent counts and, at the right, the clock.
     #[test]
-    fn the_bar_names_taw_the_counts_the_rail_and_the_clock() {
+    fn the_bar_names_taw_the_counts_and_the_clock() {
         let t = theme::resolve("catppuccin", &Default::default()).theme;
-        let symbols = StatusIndicators::Symbols;
         let bar = bar_format(
             &t,
-            symbols,
             &BarCounts {
                 sessions: 7,
                 agents: 9,
-                needs: vec![(AgentState::Blocked, 1), (AgentState::Done, 2)],
             },
         );
         assert!(
             bar.starts_with("#[fg=#89b4fa,bold] taw #[default]"),
             "{bar}"
         );
-        assert!(
-            bar.contains("7 sessions  \u{b7}  9 agents  \u{b7}  "),
-            "{bar}"
-        );
-        assert!(
-            bar.contains(
-                "#[fg=#fab387,bold]\u{23f8}1#[default] #[fg=#a6e3a1,bold]\u{2713}2#[default] #[fg=#cdd6f4]need you#[default]"
-            ),
-            "{bar}"
-        );
-        assert!(
-            bar.contains("#[align=right]#{@agent_wizard_status}  \u{2502}  %H:%M "),
-            "{bar}"
-        );
-    }
-
-    /// One in all reads `needs you`, and a lone finished agent is the done glyph in green.
-    #[test]
-    fn one_finished_agent_is_a_green_check_and_needs_you() {
-        let t = theme::resolve("catppuccin", &Default::default()).theme;
+        assert!(bar.contains("7 sessions  \u{b7}  9 agents"), "{bar}");
+        assert!(bar.ends_with("#[align=right]%H:%M "), "{bar}");
         let one = bar_format(
             &t,
-            StatusIndicators::Symbols,
             &BarCounts {
                 sessions: 1,
                 agents: 1,
-                needs: vec![(AgentState::Done, 1)],
             },
         );
-        assert!(
-            one.contains("1 session  \u{b7}  1 agent  \u{b7}  "),
-            "{one}"
-        );
-        assert!(
-            one.contains("#[fg=#a6e3a1,bold]\u{2713}1#[default] #[fg=#cdd6f4]needs you#[default]"),
-            "{one}"
-        );
-        assert!(!one.contains("#[fg=#fab387"), "no attention colour: {one}");
+        assert!(one.contains("1 session  \u{b7}  1 agent#"), "{one}");
     }
 
-    /// Nothing needing you is as it was: dim, no glyph.
+    /// What needs you is on the list's border, so the bar says none of it: no need words, no group
+    /// glyphs and no rail, whatever the counts are (rule 1 of the counts' round).
     #[test]
-    fn nothing_needing_you_is_dim_and_says_so() {
+    fn the_bar_holds_no_need_words_and_no_rail() {
         let t = theme::resolve("catppuccin", &Default::default()).theme;
-        let none = bar_format(
-            &t,
-            StatusIndicators::Symbols,
-            &BarCounts {
-                sessions: 2,
-                agents: 0,
-                needs: Vec::new(),
-            },
-        );
-        assert!(
-            none.contains("#[fg=#7f849c]nothing needs you#[default]"),
-            "{none}"
-        );
-    }
-
-    /// The dots setting draws the same dot for every state, so the two groups differ by
-    /// colour alone: `[ui] status_indicators = "dots"` in the bar as on the rows.
-    #[test]
-    fn the_dots_setting_draws_the_groups_as_dots_in_their_own_colours() {
-        let t = theme::resolve("catppuccin", &Default::default()).theme;
-        let bar = bar_format(
-            &t,
-            StatusIndicators::Dots,
-            &BarCounts {
-                sessions: 3,
-                agents: 3,
-                needs: vec![(AgentState::Blocked, 1), (AgentState::Done, 2)],
-            },
-        );
-        assert!(
-            bar.contains(
-                "#[fg=#fab387,bold]\u{25cf}1#[default] #[fg=#a6e3a1,bold]\u{25cf}2#[default] #[fg=#cdd6f4]need you#[default]"
-            ),
-            "{bar}"
-        );
+        for (sessions, agents) in [(0, 0), (1, 1), (7, 9)] {
+            let bar = bar_format(&t, &BarCounts { sessions, agents });
+            for word in ["need", "nothing", "you", "agent_wizard_status", "\u{2502}"] {
+                assert!(!bar.contains(word), "{word:?} in {bar}");
+            }
+            assert!(bar.contains(&format!("{agents} agent")), "{bar}");
+        }
     }
 
     #[test]
@@ -447,9 +349,8 @@ mod tests {
 
     #[test]
     fn counts_come_from_the_panes() {
-        let mut agent =
+        let agent =
             crate::rail::tests_support::pane_with_state(Some(crate::store::AgentState::Blocked));
-        agent.agent.seen = false;
         let idle =
             crate::rail::tests_support::pane_with_state(Some(crate::store::AgentState::Idle));
         let shell = crate::rail::tests_support::pane_with_state(None);
@@ -459,7 +360,6 @@ mod tests {
             BarCounts {
                 sessions: 4,
                 agents: 2,
-                needs: vec![(AgentState::Blocked, 1)],
             }
         );
     }
@@ -736,8 +636,8 @@ mod tests {
         assert_eq!(s.record(), None, "the record goes with the restore");
     }
 
-    /// What the user sees, drawn by a real client: the bar with its counts, the status
-    /// rail and a live clock while the popup is open; the popup's refresh redraws it at
+    /// What the user sees, drawn by a real client: the bar with its counts and a live clock, and
+    /// neither the status rail nor any need words, while the popup is open; the popup's refresh redraws it at
     /// once although only the option changed (`status-interval 0`: no periodic redraw);
     /// and once the launcher has put the line back, a refresh that raced the restore
     /// ([`before_the_restore`]) changes nothing on screen.
@@ -749,11 +649,9 @@ mod tests {
             .set_global_option("@agent_wizard_status", "RAIL-7")
             .unwrap();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
-        let symbols = StatusIndicators::Symbols;
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
-            needs: vec![(AgentState::Done, 1)],
         };
         let client = s.attach();
         let own = client.status_line_once(|l| l.starts_with("[s]"));
@@ -762,32 +660,30 @@ mod tests {
             "the session's own line first: {own:?}"
         );
 
-        let saved = swap(
-            &s.tmux,
-            &s.session,
-            1,
-            &bar_format(&theme, symbols, &counts),
-        )
-        .unwrap();
+        let saved = swap(&s.tmux, &s.session, 1, &bar_format(&theme, &counts)).unwrap();
         let drawn = client.status_line_once(|l| l.starts_with(" taw "));
         assert!(
-            drawn.starts_with(" taw   1 session  \u{b7}  2 agents  \u{b7}  \u{2713}1 needs you"),
+            drawn.starts_with(" taw   1 session  \u{b7}  2 agents"),
             "{drawn:?}"
         );
-        let clock = regex::Regex::new("RAIL-7  \u{2502}  [0-9]{2}:[0-9]{2}$").unwrap();
+        assert!(
+            !drawn.contains("RAIL-7") && !drawn.contains("need") && !drawn.contains('\u{2502}'),
+            "the positive half is above: no rail, no need words: {drawn:?}"
+        );
+        let clock = regex::Regex::new("2 agents +[0-9]{2}:[0-9]{2}$").unwrap();
         assert!(
             clock.is_match(&drawn),
-            "the rail and the clock close the line: {drawn:?}"
+            "the clock closes the line: {drawn:?}"
         );
 
         let mut last = None;
         let busier = BarCounts {
-            needs: vec![(AgentState::Blocked, 1), (AgentState::Done, 1)],
+            agents: 3,
             ..counts.clone()
         };
-        refresh_live(&s.tmux, &s.session, &theme, symbols, &busier, &mut last);
-        let drawn = client.status_line_once(|l| l.contains("\u{23f8}1 \u{2713}1 need you"));
-        assert!(drawn.contains("\u{23f8}1 \u{2713}1 need you"), "{drawn:?}");
+        refresh_live(&s.tmux, &s.session, &theme, &busier, &mut last);
+        let drawn = client.status_line_once(|l| l.contains("3 agents"));
+        assert!(drawn.contains("3 agents"), "{drawn:?}");
 
         let dir = tempfile::tempdir().unwrap();
         let popup = before_the_restore(&s.tmux, dir.path());
@@ -795,10 +691,10 @@ mod tests {
         let back = client.status_line_once(|l| l.starts_with("[s]"));
         assert!(back.starts_with("[s]"), "the user's line is back: {back:?}");
         let later = BarCounts {
-            needs: vec![(AgentState::Done, 3)],
+            agents: 4,
             ..counts
         };
-        refresh_live(&popup, &s.session, &theme, symbols, &later, &mut last);
+        refresh_live(&popup, &s.session, &theme, &later, &mut last);
         assert_eq!(
             client.status_line_during(Duration::from_millis(500), |l| !l.starts_with("[s]")),
             None,
@@ -947,15 +843,13 @@ mod tests {
     fn the_popups_refresh_writes_only_the_bars_text() {
         let s = Server::start();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
-        let symbols = StatusIndicators::Symbols;
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
-            needs: vec![(AgentState::Done, 1)],
         };
         let mut last = None;
 
-        refresh_live(&s.tmux, &s.session, &theme, symbols, &counts, &mut last);
+        refresh_live(&s.tmux, &s.session, &theme, &counts, &mut last);
         assert_eq!(
             s.own_status_format(),
             "",
@@ -964,10 +858,10 @@ mod tests {
 
         swap(&s.tmux, &s.session, 1, "LAUNCHER-BAR").unwrap();
         let mut last = None;
-        refresh_live(&s.tmux, &s.session, &theme, symbols, &counts, &mut last);
+        refresh_live(&s.tmux, &s.session, &theme, &counts, &mut last);
         assert_eq!(
             s.bar(),
-            Some(bar_format(&theme, symbols, &counts)),
+            Some(bar_format(&theme, &counts)),
             "fresh counts replace the launcher's"
         );
         assert_eq!(
@@ -980,16 +874,16 @@ mod tests {
         s.tmux
             .set_session_option(&s.session, BAR_OPTION, "SENTINEL")
             .unwrap();
-        refresh_live(&s.tmux, &s.session, &theme, symbols, &counts, &mut last);
+        refresh_live(&s.tmux, &s.session, &theme, &counts, &mut last);
         assert_eq!(s.bar().as_deref(), Some("SENTINEL"));
 
         // New counts are.
         let busier = BarCounts {
-            needs: vec![(AgentState::Done, 2)],
+            agents: 5,
             ..counts
         };
-        refresh_live(&s.tmux, &s.session, &theme, symbols, &busier, &mut last);
-        assert_eq!(s.bar(), Some(bar_format(&theme, symbols, &busier)));
+        refresh_live(&s.tmux, &s.session, &theme, &busier, &mut last);
+        assert_eq!(s.bar(), Some(bar_format(&theme, &busier)));
         assert_eq!(s.row(0).as_deref(), Some(BAR_ROW));
     }
 
@@ -1002,29 +896,21 @@ mod tests {
     fn a_refresh_racing_the_restore_cannot_put_the_bar_back_and_the_next_open_drops_it() {
         let s = Server::start();
         let theme = crate::tui::theme::resolve("catppuccin", &Default::default()).theme;
-        let symbols = StatusIndicators::Symbols;
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
-            needs: vec![(AgentState::Done, 1)],
         };
-        let saved = swap(
-            &s.tmux,
-            &s.session,
-            1,
-            &bar_format(&theme, symbols, &counts),
-        )
-        .unwrap();
+        let saved = swap(&s.tmux, &s.session, 1, &bar_format(&theme, &counts)).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let popup = before_the_restore(&s.tmux, dir.path());
         restore(&s.tmux, &s.session, &saved).unwrap();
 
         let mut last = None;
         let busier = BarCounts {
-            needs: vec![(AgentState::Done, 2)],
+            agents: 5,
             ..counts
         };
-        refresh_live(&popup, &s.session, &theme, symbols, &busier, &mut last);
+        refresh_live(&popup, &s.session, &theme, &busier, &mut last);
         assert_eq!(
             s.own_status_format(),
             "",

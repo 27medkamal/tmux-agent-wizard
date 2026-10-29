@@ -5,6 +5,9 @@
 //! ━━ ● pi  not answering, last seen 2m ago ━━━━━━━━━━━━━━
 //! ```
 //!
+//! The counts show only when two or more machine groups of the drawn list have agents: they say where
+//! things are, and with one group or none they would repeat the rows.
+//!
 //! The rule is in the theme's muted colour, the dot green for a machine that is connected (and
 //! always for this one), yellow while it connects, red when it does not answer, and hollow and
 //! muted for a machine of the table that no app keeps. The name is bold in the accent colour, the
@@ -56,14 +59,37 @@ fn dot_of(app: &App, machine: Option<usize>) -> (&'static str, Color) {
     }
 }
 
+/// How many of the machine groups in the drawn list have agents: the headers whose tail is counts
+/// and has a state in it.
+fn groups_with_agents(app: &App) -> usize {
+    app.rows
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Machine(machine) => Some(*machine),
+            _ => None,
+        })
+        .filter(|&machine| {
+            matches!(
+                machines::header_tail(&app.snap, machine),
+                machines::HeaderTail::Counts(counts) if !counts.is_empty()
+            )
+        })
+        .count()
+}
+
 fn parts_of(app: &App, machine: Option<usize>) -> Parts {
     let indicators = app.cfg.ui.status_indicators;
     let (dot, dot_colour) = dot_of(app, machine);
+    // The counts say where things are, so they show only when agents are in two groups or more;
+    // over one group (or none) they would only repeat the app's top line and the rows.
+    let counted = groups_with_agents(app) >= 2;
     let (words, counts) = match machines::header_tail(&app.snap, machine) {
         machines::HeaderTail::Counts(counts) => (
             String::new(),
             counts
                 .into_iter()
+                .filter(|_| counted)
                 .map(|(state, count)| {
                     (
                         format!("{}{count}", data::state_icon(Some(state), indicators)),
@@ -280,6 +306,52 @@ mod tests {
         let fill = 80 - left.width() - 1 - right.width();
         assert_eq!(text(&line), format!("{left} {}{right}", rule(fill)));
         assert_eq!(text(&line).width(), 80);
+    }
+
+    /// The glyph-and-count pieces a header carries: any of the five state icons followed by a digit.
+    fn has_counts(line: &str) -> bool {
+        let indicators = Config::default().ui.status_indicators;
+        COUNTS.iter().any(|&state| {
+            let icon = data::state_icon(Some(state), indicators);
+            line.match_indices(icon)
+                .any(|(at, _)| line[at + icon.len()..].starts_with(|c: char| c.is_ascii_digit()))
+        })
+    }
+
+    /// Rule 3 of the counts' round: the counts say where things are, so they show only when agents are
+    /// in two machine groups of the drawn list or more; with one group, or none, no header has them,
+    /// and the dot, the name and the words stay.
+    #[test]
+    fn the_counts_show_only_when_two_machine_groups_have_agents() {
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        let name = this_machine_word();
+        // This machine and studio both have agents.
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(has_counts(&line), "two groups: {line:?}");
+        }
+        // Only this machine's agents are left: studio has sessions and no agent, and nothing shows counts.
+        let mut one = a.snap.clone();
+        for agent in &mut one.agents {
+            agent.machine = None;
+        }
+        a.set_snapshot(one);
+        for (machine, shown) in [(None, name.to_string()), (Some(0), "studio".to_string())] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(line.contains(&format!("\u{25cf} {shown}")), "{line:?}");
+            assert!(!has_counts(&line), "one group: {line:?}");
+        }
+        // The words of a machine that is not live stay beside its name.
+        let pi = text(&drawn(&a, Some(1), 80));
+        assert!(pi.contains(PI_WORDS), "{pi:?}");
+        // No agent anywhere: no counts either.
+        let mut none = a.snap.clone();
+        none.agents.clear();
+        a.set_snapshot(none);
+        let line = text(&drawn(&a, None, 80));
+        assert!(line.contains(&format!("\u{25cf} {name}")), "{line:?}");
+        assert!(!has_counts(&line), "no group: {line:?}");
     }
 
     #[test]

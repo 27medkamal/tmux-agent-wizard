@@ -52,7 +52,7 @@ Nothing is copied between machines: the app lists and shows, and taw on each mac
 ## The app's screen
 
 ```
- taw app  ·  3 machines  ·  6 sessions  ·  7 agents  ·  ⏸2 need you      ⏸2 ⏵4 ✓1  │  14:02
+ taw app  ·  6 sessions  ·  7 agents                                      14:02
  this machine  ⏸1 ⏵1
    (its sessions and panes, as the popup draws them)
  studio  ⏸1 ⏵2 ✓1
@@ -61,7 +61,7 @@ Nothing is copied between machines: the app lists and shows, and taw on each mac
    (pi's sessions and panes)
 ```
 
-The top line says how many machines the list holds (this machine counted), then the sessions and agents, then who needs you. Each header carries the machine's state counts while it is connected and lists sessions, and its own words when it is not (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once in the top line. A machine that is away shows its last words and when it was last seen.
+The top line says how many sessions and agents the list holds, and the clock; who needs you is on the list's border, and a machine that is away says so on its own header, so the top line names neither. A header carries the machine's state counts only when agents are in two machine groups or more (then they say where things are), and its own words when the machine is not connected (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once, in a toast. A machine that is away shows its last words and when it was last seen.
 
 The numbers of a session count across machines, and a machine that appears or drops never moves a number of this machine's. A remote row's id is `studio:%16`, the machine and that machine's own tmux id, so it can never be one of this machine's.
 
@@ -147,13 +147,11 @@ A header says one of these. The first group is what the machine's header and `ta
 | `studio has no tmux session now: Enter on its row starts one` | the toast when the last session of a connected machine ended |
 | `C-b + A: back to the taw list` | on the status line of the machine's own tmux for 4 s after an attach, with that machine's prefix and popup key; `C-b + d` where taw's plugin is not loaded in that tmux |
 | `Q back to tmux` | the hint line and the help of an app the doorway started: `Q` and `Ctrl-C` put the terminal back in the tmux session it came from |
-| `not connected: run taw app outside tmux` | the popup's header of a machine while no app runs on this machine: the popup knows nothing of it but its name (and, from an earlier app run, whether it is this machine's own tmux server, which then draws as with an app), and the top line does not count it |
+| `not connected: run taw app outside tmux` | the popup's header of a machine while no app runs on this machine: the popup knows nothing of it but its name (and, from an earlier app run, whether it is this machine's own tmux server, which then draws as with an app) |
 | `go to studio (Q there brings you back)` | what the popup's hint line says after `Enter` while the cursor is on a row of a connected machine |
 | `on another machine's row it hands this terminal to the app; Q there brings you back` | the line of `?` under Enter's, in the popup, while machines are listed |
 | `studio is this tmux server` | the name is this machine's own tmux; it is not listed twice, and when it is the only machine listed no header is drawn |
 | ` (README, "Remote machines"); it then connects by itself` | the end of a `taw machine check` line that needs you |
-| `3 machines` | the top line: this machine counted, all connected |
-| `3 machines, pi offline` | the top line when pi is not connected |
 | `pi is not connected (last seen 3 min ago)` | a key on a row of a machine that is not connected |
 | `no preview: pi is not connected` | the preview of such a row |
 | `(3m ago)` | the age of the preview's last capture |

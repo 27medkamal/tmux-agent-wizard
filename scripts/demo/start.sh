@@ -205,14 +205,14 @@ t set-option -p -t "$pane" @agent_kind_hint opencode
 changelog_state=idle
 [ -z "$STORY" ] || changelog_state=blocked
 pane=$(t new-window -d -P -F '#{pane_id}' -t docs: -n changelog -c "$CODE/docs" \
-  "$(agent_cmd claude changelog 'Draft the v2 changelog' "$changelog_state")")
+  "$(agent_cmd claude changelog 'Draft v2 changelog' "$changelog_state")")
 t set-option -p -t "$pane" @agent_kind_hint claude
 [ -n "$STORY" ] || t new-window -d -t docs: -n preview -c "$CODE/docs" \
   "$(serve "console.log('Serving docs on http://127.0.0.1:8000/');")"
 
 # infra: Claude Code reviewing a plan, and a shell.
 pane=$(t new-session -d -P -F '#{pane_id}' -s infra -n review -c "$CODE/infra" \
-  "$(agent_cmd claude infra 'Review the terraform plan' working)")
+  "$(agent_cmd claude infra 'Review terraform' working)")
 t set-option -p -t "$pane" @agent_kind_hint claude
 t set-option -g @demo_pane_infra "$pane"
 [ -n "$STORY" ] || t new-window -d -t infra: -n shell -c "$CODE/infra"
@@ -227,7 +227,7 @@ t set-option -p -t "$pane" @agent_kind_hint gemini
 # data: Claude Code in a sandbox, and a shell. The sandbox stand-in is marked the way
 # `taw sandbox` marks a pane (@agent_sandbox, and the pid it belongs to).
 pane=$(t new-session -d -P -F '#{pane_id}' -s data -n pipeline -c "$CODE/data" \
-  "$(sandboxed_cmd claude data 'Backfill the nightly metrics' working)")
+  "$(sandboxed_cmd claude data 'Backfill metrics' working)")
 t set-option -p -t "$pane" @agent_kind_hint claude
 t set-option -p -t "$pane" @agent_sandbox default
 t set-option -p -t "$pane" @agent_sandbox_pid "$(t display-message -p -t "$pane" '#{pane_pid}')"

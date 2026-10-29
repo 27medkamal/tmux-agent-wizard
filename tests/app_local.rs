@@ -419,6 +419,15 @@ fn a_hand_attached_session_is_no_own_row_and_enter_on_it_goes_in() {
         terminal_screen(&term)
     );
     let client_pid = the_record(&mac)["client_pid"].as_u64().unwrap() as u32;
+    // The record names the client as soon as it is started, and the server lists it once it has attached.
+    assert!(
+        wait_for(
+            || clients_of(&mac).iter().any(|client| client.0 == client_pid),
+            Duration::from_secs(20)
+        ),
+        "the app's client {client_pid} is not one of the server's: {:?}",
+        clients_of(&mac)
+    );
     let (_, name, _) = clients_of(&mac)
         .into_iter()
         .find(|client| client.0 == client_pid)

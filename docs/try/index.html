@@ -852,7 +852,7 @@
   const PHONE = { app: "press it: your phone gets one push, sent by the app (this machine's [hooks] notification, with TAW_MACHINE=studio), while studio's own hook stays quiet under the app's lease", popup: "press it: the app that runs in another terminal keeps the feeds and sends your phone one push, with TAW_MACHINE=studio; studio's own hook stays quiet under its lease" };
   const whereWords = () => (!appMode() ? ['prefix + A opens taw · ', ' · you are in api:1 (its Claude Code), you came from docs'] : S.inside ? [`${nameOf(machineOf(S.inside.id))}'s own tmux, attached by the app in this terminal · `, ' · the app waits behind it, out of sight'] : ['taw app, the program this terminal runs, outside tmux · ', ` · you came out of ${placeLabel(S.appFrom) || 'nowhere yet'}`]);
 
-  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/[●✻✽✢✶⏵⏸⎿❯✓○◌▢·…⚠⏺▐▛▜▀▝⟩◆◀▶✔↓↑±▏»←│✦⊷▣✱\u2192┃]/g, c => `<span class="g">${c}</span>`).replace(/📦/gu, c => `<span class="g2">${c}</span>`);
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/[●✻✽✢✶⏵⏸⎿❯✓○◌▢·…⚠⏺▐▛▜▀▝⟩◆◀▶✔↓↑±▏»←│✦⊷▣✱\u2192┃›•⠏■⬝△]/g, c => `<span class="g">${c}</span>`).replace(/📦/gu, c => `<span class="g2">${c}</span>`);
   const span = (txt, c) => `<span class="${c || ''}">${esc(txt)}</span>`;
   const cutAt = (s, a, b) => { const out = s.slice(a, b); return /[\uD800-\uDFFF]/.test(out) ? out.replace(/^[\uDC00-\uDFFF]/, ' ').replace(/[\uD800-\uDBFF]$/, ' ') : out; };
   const clipEnd = (s, n) => s.length <= n ? s : n <= 0 ? '' : cutAt(s, 0, n - 1) + '…';

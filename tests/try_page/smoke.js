@@ -2,7 +2,7 @@
 // draws it. Run by tests/try_page.rs with `node tests/try_page/smoke.js docs/try/index.html`;
 // exit 0 and one summary line when every drawing is sound, exit 1 and the problems otherwise.
 // What it fails on: any exception, a row count other than 34, a row wider than the terminal,
-// `undefined` or `NaN` in a row.
+// `undefined` or `NaN` in a row, and a glyph a screen draws that is not one cell wide by class.
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
@@ -177,6 +177,23 @@ for (const cols of [160, 100, 99, 60]) {
       else if (x < 0.95) { const s = pick(SC); name = 'scenario ' + s; fn = () => p.scenario(s); }
       else { const l = Math.floor(r() * ROWS); name = 'click ' + l; fn = () => p.click(l); }
       if (!step(p, cols, `fuzz run ${run} step ${i} (${name})`, fn)) break;
+    }
+  }
+}
+
+// 5. The glyphs. Every non-ASCII glyph a screen draws is in the page's one-cell class, `esc`'s
+// `.g` (or its two-cell class `.g2`), or is a no-break space or box drawing, which every monospace font draws in a cell.
+{
+  const re = /replace\(\/\[([^\]]+)\]\/g, c => `<span class="g">/.exec(html);
+  if (!re) note('glyph class', 'the one-cell glyph class of esc was not found in the page');
+  else {
+    const cls = new Set(JSON.parse('"' + re[1].replace(/"/g, '\\"').replace(/\\u([0-9a-fA-F]{4})/g, '\\u$1') + '"'));
+    const two = /replace\(\/(\S+)\/gu, c => `<span class="g2">/.exec(html);
+    const twoSet = new Set(two ? [...two[1]] : []);
+    for (const g of glyphs) {
+      const cp = g.codePointAt(0);
+      if (cls.has(g) || twoSet.has(g) || g === '\u00a0' || (cp >= 0x2500 && cp <= 0x257f)) continue;
+      note('glyphs', `the glyph ${g} (U+${cp.toString(16).toUpperCase().padStart(4, '0')}) is drawn but not in esc's one-cell class`);
     }
   }
 }

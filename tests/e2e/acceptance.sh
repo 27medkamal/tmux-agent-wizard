@@ -4019,7 +4019,9 @@ check "a pane of orchard has the far variable, no ssh agent socket, and the far 
 
 # --- this Mac: studio in [machines], and the numbering to compare at the end
 [ ! -f "$TAW_CONFIG_DIR/config.toml" ] || { rm_config_saved="$rm_dir/config.saved"; mv "$TAW_CONFIG_DIR/config.toml" "$rm_config_saved"; }
-printf '[machines]\nstudio = "studio"\n' > "$TAW_CONFIG_DIR/config.toml"
+# This Mac has a project folder of its own too (step (h): the far picker must not list it).
+mkdir -p "$rm_dir/local-projects/rmlocal"
+printf '[machines]\nstudio = "studio"\n\n[sessions]\nproject_dirs = ["%s"]\n' "$rm_dir/local-projects" > "$TAW_CONFIG_DIR/config.toml"
 # A claude on this Mac's own server as well, so that the walk has a stop on each side and a machine dropping off
 # leaves one for Tab to go to (the fake claude of the harness, idle).
 rm_mac_agent=$(e2e_start_agent claude)
@@ -4245,6 +4247,8 @@ if [ "$rm_dead" = 0 ]; then
   rm_tab_to gardener 4
   check "(h) the cursor is on a live row of studio" "gardener" "$(rm_selected | grep -o gardener)"
   rm_h_calls=$(rm_calls)
+  # This Mac's own picker would list its folder `rmlocal`, which studio does not have: the far list must not show it.
+  check "(h) this Mac's own list holds a folder of its own that studio has not: rmlocal" "1" "$(taw session candidates --json 2>/dev/null | grep -q '/rmlocal"' && echo 1 || echo 0)"
   rm_press n
   rm_see "(h) n on a row of studio opens a picker titled for studio" "new session on studio"
 fi
@@ -4252,6 +4256,7 @@ if [ "$rm_dead" = 0 ]; then
   # Studio's folders, in studio's own tilde form: its project folder and its zoxide entry. Nothing is typed yet.
   rm_see "(h) the picker lists studio's project folder" "$rm_h_proj_shown"
   rm_see "(h) ... and studio's zoxide folder" "$rm_h_zox_shown"
+  check "(h) ... and none of this Mac's folders: rmlocal is not in it" "1" "$(rm_has rmlocal && echo 0 || echo 1)"
   check "(h) studio's taw was asked for its folders: session candidates --json" "1" "$(rm_h_asked "$rm_h_calls" "'session' 'candidates' '--json'")"
 fi
 if [ "$rm_dead" = 0 ]; then
@@ -4264,8 +4269,8 @@ if [ "$rm_dead" = 0 ]; then
   rm_press Enter
   rm_wait 15000 rm_h_session_there
   check "(h) studio's own server has the session" "1" "$(rm_h_session_there && echo 1 || echo 0)"
-  case "$(rm_h_session_dir)" in */studio/home/projects/"$rm_h_name") rm_h_dir_ok=1 ;; *) rm_h_dir_ok=0 ;; esac
-  check "(h) ... started in the project folder: $(rm_h_session_dir)" "1" "$rm_h_dir_ok"
+  # Exactly the folder (its real path: studio's taw resolves the temp directory's own link).
+  check "(h) ... started in exactly the project folder" "$(unset CDPATH; cd "$rm_h/projects/$rm_h_name" && pwd -P)" "$(rm_h_session_dir)"
   check "(h) studio's taw was asked as the app asks it: open --json --no-switch -- <the folder>" "1" "$(rm_h_asked "$rm_h_calls" "'open' '--json' '--no-switch' '--' '$rm_h/projects/$rm_h_name'")"
   rm_see "(h) the app goes into the session: studio's tmux is on the screen, at it" "[$rm_h_name]"
 fi

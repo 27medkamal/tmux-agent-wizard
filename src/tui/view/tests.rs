@@ -236,7 +236,7 @@ fn the_sessions_depth_counts_each_state_on_the_header() {
 
 #[test]
 fn a_custom_sidebar_template_renders_herdrs_way_instead_of_the_three_columns() {
-    let cfg = config("[ui.sidebar.spaces]\nrows = [[\"workspace\"]]\n");
+    let cfg = config("[ui]\nlabels = false\n[ui.sidebar.spaces]\nrows = [[\"workspace\"]]\n");
     let mut app = app(&cfg);
     let screen = drawn(&mut app, W, H);
 
@@ -244,6 +244,99 @@ fn a_custom_sidebar_template_renders_herdrs_way_instead_of_the_three_columns() {
     assert!(
         screen[y].starts_with("\u{2502}mobile"),
         "a configured template is drawn as herdr draws it: {:?}",
+        screen[y]
+    );
+}
+
+/// With `[ui] labels` on, a session header drawn from a template keeps its number and its flag,
+/// as a built-in header has them: the number key works, so it is drawn. mobile is the session
+/// the popup was opened from (`*`), infra is the third.
+#[test]
+fn a_session_template_keeps_the_number_and_the_flag_while_labels_are_on() {
+    let cfg = config("[ui.sidebar.sessions]\nrows = [[\"workspace\"]]\n");
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (_, x) = find(&screen, "1 * mobile");
+    assert_eq!(x, 1, "the number leads the row, inside the border");
+    assert!(
+        screen.iter().any(|l| l.contains("\u{2502}3   infra")),
+        "{}",
+        screen.join("\n")
+    );
+    assert!(
+        !screen.iter().any(|l| l.contains("master")),
+        "the template draws the name alone:\n{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn a_session_template_draws_no_number_while_labels_are_off() {
+    let cfg = config("[ui]\nlabels = false\n[ui.sidebar.sessions]\nrows = [[\"workspace\"]]\n");
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, _) = find(&screen, "\u{2502}mobile");
+    assert!(
+        screen[y].starts_with("\u{2502}mobile"),
+        "labels off, so rows are the template's alone: {:?}",
+        screen[y]
+    );
+    assert!(
+        !screen.iter().any(|l| l.contains("\u{2502}3 ")),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+/// With `[ui] labels` on, an agent row drawn from a template keeps its letter and its tree
+/// connector, as a built-in row has them. mobile's two agents are its first two rows: `a` and `b`,
+/// the second one the last of its session.
+#[test]
+fn an_agent_template_keeps_the_letter_and_the_connector_while_labels_are_on() {
+    let cfg = config(
+        r##"[ui.sidebar.agents]
+rows = [["state_icon", "agent"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, x) = find(&screen, "  a \u{251c} \u{23f5} claude");
+    assert_eq!(
+        x, 1,
+        "the letter and the connector lead the row: {}",
+        screen[y]
+    );
+    assert!(
+        screen.iter().any(|l| l.contains("  b \u{2514} ")),
+        "the last row of a session hangs from the corner:\n{}",
+        screen.join("\n")
+    );
+    assert!(
+        !screen.iter().any(|l| l.contains("1:zsh.1")),
+        "the template draws no window column:\n{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn an_agent_template_draws_no_letter_while_labels_are_off() {
+    let cfg = config(
+        r##"[ui]
+labels = false
+[ui.sidebar.agents]
+rows = [["state_icon", "agent"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, _) = find(&screen, "\u{23f5} claude");
+    assert!(
+        screen[y].starts_with("\u{2502}\u{23f5} claude"),
+        "labels off, so rows are the template's alone: {:?}",
         screen[y]
     );
 }

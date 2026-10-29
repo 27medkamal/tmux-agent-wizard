@@ -156,6 +156,10 @@ row_gap = 0
 rows = [["state_icon", "workspace"], ["branch", "git_status"]]
 ```
 
+A row drawn from a template keeps what the popup puts in front of every row while `[ui] labels` is on: a session's
+number and its `*` or `-` flag, and an agent's letter and tree connector, so the keys stay on screen. The template
+draws what follows them. With `[ui] labels = false` the rows are the template's alone.
+
 A token can be styled inline, `{ token = "workspace", fg = "#89b4fa", bold = true }`
 (`fg` is `#rrggbb`, `#rgb` or a colour name), and can carry up to 16 `rules`, conditions
 on its text that restyle it or hide it (herdr v0.9.1); the example's `$load` and `$machine`

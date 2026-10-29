@@ -1157,13 +1157,25 @@ fn session_lines(
     let Some(space) = app.snap.spaces.get(index) else {
         return Vec::new();
     };
+    let (flag, flag_style) = session_flag_style(app, space);
     if let Some(template) = rows::spaces_template(&app.cfg.ui.sidebar, defaults) {
-        return template_lines(template, space, ctx);
+        // With `[ui] labels` on, the number and the flag stay in front of the template's rows,
+        // as on a built-in header: the key is still pressed, so it is still drawn.
+        let prefix = if app.cfg.ui.labels {
+            vec![
+                number_span(number, &app.theme),
+                Span::raw(" "),
+                Span::styled(flag.to_string(), flag_style),
+                Span::raw(" "),
+            ]
+        } else {
+            Vec::new()
+        };
+        return prefixed(prefix, template_lines(template, space, ctx));
     }
     let theme = &app.theme;
     let indicators = app.cfg.ui.status_indicators;
     let dim = Style::default().fg(theme.dim);
-    let (flag, flag_style) = session_flag_style(app, space);
     // Only the number is styled; the column after it is plain, as the one after a row's letter.
     let mut spans = vec![
         number_span(number, theme),
@@ -1265,7 +1277,17 @@ fn pane_lines(
         && let Some(template) =
             rows::agents_template(&app.cfg.ui.sidebar, defaults, agent.kind.as_deref())
     {
-        return template_lines(template, agent, ctx);
+        // With `[ui] labels` on, the letter and the connector stay in front of the template's
+        // rows, as on a built-in row (lit as the open window's rows are).
+        let prefix = if app.cfg.ui.labels {
+            let open = tree::space_of(&app.snap, &Row::Pane(index))
+                .and_then(|space| app.snap.spaces.get(space))
+                .is_some_and(|s| s.active_window_id == pane.window_id);
+            row_prefix(app, last, number, mine, open, letter)
+        } else {
+            Vec::new()
+        };
+        return prefixed(prefix, template_lines(template, agent, ctx));
     }
     let theme = &app.theme;
     let dim = Style::default().fg(theme.dim);
@@ -1711,6 +1733,33 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
+}
+
+/// `lines` with `prefix` in front of the first, and as many blank columns in front of each of
+/// the others, so a template that draws more than one line for a row keeps them under its first.
+/// No prefix leaves the lines as they are.
+fn prefixed(prefix: Vec<Span<'static>>, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    if prefix.is_empty() {
+        return lines;
+    }
+    if lines.is_empty() {
+        // Every token of the row was empty: the key it carries is still drawn.
+        return vec![Line::from(prefix)];
+    }
+    let width: usize = prefix.iter().map(|s| s.content.width()).sum();
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(at, line)| {
+            let mut spans = if at == 0 {
+                prefix.clone()
+            } else {
+                vec![Span::raw(" ".repeat(width))]
+            };
+            spans.extend(line.spans);
+            Line::from(spans)
+        })
+        .collect()
 }
 
 /// One entry's configured rows, herdr's way. A row whose every token is empty (a session

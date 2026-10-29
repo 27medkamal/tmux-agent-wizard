@@ -51,7 +51,8 @@ fn left_spans(app: &App, counts: &BarCounts, with_machines: bool) -> Vec<Span<'s
     spans
 }
 
-/// The line itself, `width` columns. The right is the clock after any away machine words, and the
+/// The line itself, at most `width` columns: exactly `width` with a right on it (a space at its end),
+/// just the left when the clock is dropped. The right is the clock after any away machine words, and the
 /// clock goes first when the line is narrow (the right's priorities are below); the left is cut with
 /// an ellipsis to what is left.
 pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
@@ -293,16 +294,23 @@ mod tests {
     fn scan_narrow_line(a: &App, machines: &str) {
         let clock = clock_of(a);
         let counts = a.bar_counts();
+        let away = a.away_unheaded();
         let whole = format!("{} sessions", counts.sessions);
         let mut stages = [false; 4];
         for width in 20..=150u16 {
             let line = text(&app_top_line(a, width));
-            assert!(line.chars().count() <= width as usize, "{line:?}");
             let (has_clock, has_count, cut) = (
                 line.contains(&clock),
                 line.contains(machines),
                 line.contains('\u{2026}'),
             );
+            // With a right (the clock, or away words) the line is the width exactly, a space at its
+            // end; with none it is just the left.
+            if has_clock || !away.is_empty() {
+                assert_eq!(line.chars().count(), width as usize, "{width}: {line:?}");
+            } else {
+                assert!(line.chars().count() <= width as usize, "{line:?}");
+            }
             assert!(
                 !has_clock || has_count,
                 "{width}: the clock outlived the count: {line:?}"

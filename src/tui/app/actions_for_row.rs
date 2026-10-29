@@ -787,12 +787,7 @@ impl App<'_> {
             self.open_project_picker();
             return;
         };
-        // The popup has no connection to the machine: until it says so, it keeps this Mac's picker.
-        if !self.is_app() {
-            self.open_project_picker();
-            return;
-        }
-        if !header.live {
+        if !header.live || !self.is_app() {
             let said = self.refusal(header);
             self.toast(said);
             return;

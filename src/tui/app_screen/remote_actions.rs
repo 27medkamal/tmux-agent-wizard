@@ -1941,6 +1941,15 @@ mod rows_tests {
             "{:?}",
             toast_of(&away)
         );
+
+        let mut popup = app_over(&rig.cfg, five_and_two("idle", true));
+        select(&mut popup, "studio:$4");
+        let _ = press(&mut popup, KeyCode::Char('n'));
+        assert!(
+            matches!(popup.overlay, Overlay::None),
+            "the popup opens no picker for it"
+        );
+        assert_eq!(toast_of(&popup), Some(words::read_only("studio")));
     }
 
     /// The far argv is exactly `open --json --no-switch -- <term>` (a dash term stays a term), a second press while

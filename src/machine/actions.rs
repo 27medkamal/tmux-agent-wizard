@@ -74,10 +74,17 @@ pub fn remote_argv(action: &Action) -> Vec<String> {
             argv
         }),
         // `--json` for the envelope, `--no-switch` so no client over there moves (someone may be attached on
-        // that machine), and `--` so a term that starts with a dash stays a term.
+        // that machine), and `--` so a term that starts with a dash stays a term. The words of the term are an
+        // argument each, as `taw open code api` gets them at a shell: that taw tries them joined with single
+        // spaces as a folder and hands zoxide each as its own keyword, which one argument with a space in it
+        // would not be.
         Action::NewRemoteSession { term, .. } => word(term)
             .filter(|term| !term.trim().is_empty())
-            .map(|term| args(&["open", "--json", "--no-switch", "--", term])),
+            .map(|term| {
+                let mut argv = args(&["open", "--json", "--no-switch", "--"]);
+                argv.extend(term.split_whitespace().map(str::to_string));
+                argv
+            }),
         // No verb over there: going somewhere is the app's own business, and the rest are about
         // this machine's own tmux (there is no window-close action to send either).
         Action::Jump { .. }
@@ -469,6 +476,39 @@ mod tests {
             }),
             words(&["worktree", "remove", "--workspace", "w5", "--force"])
         );
+    }
+
+    #[test]
+    fn the_far_n_gives_the_far_taw_each_word_of_the_term() {
+        let open = |term: &str| {
+            argv(Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: term.into(),
+            })
+        };
+        assert_eq!(
+            open("code api"),
+            words(&["open", "--json", "--no-switch", "--", "code", "api"])
+        );
+        // Any run of white space is one split, and the ends are nothing.
+        assert_eq!(
+            open("  code \t api  "),
+            words(&["open", "--json", "--no-switch", "--", "code", "api"])
+        );
+        assert_eq!(
+            open("api"),
+            words(&["open", "--json", "--no-switch", "--", "api"])
+        );
+        // A word that starts with a dash is still a term, after `--`.
+        assert_eq!(
+            open("-odd api"),
+            words(&["open", "--json", "--no-switch", "--", "-odd", "api"])
+        );
+        assert_eq!(
+            open("--help"),
+            words(&["open", "--json", "--no-switch", "--", "--help"])
+        );
+        assert!(open("   ").is_empty());
     }
 
     #[test]

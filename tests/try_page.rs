@@ -405,7 +405,8 @@ fn every_worktree_folder_the_page_shows_is_in_taws_shape() {
 /// Codex CLI 0.164's composer says `Ask Codex to do anything` whenever it is empty (the `PLACEHOLDER`
 /// of codex-rs/tui/src/chatwidget.rs); `Ask a follow-up question` is only the side conversation's, and
 /// `Summarize recent commits` is gone from its binary. The footer's `tab to queue message` is its
-/// `footer.rs` while a turn runs, and `? for shortcuts` after it.
+/// `footer.rs` while a turn runs, and `? for shortcuts` after it. Its approval overlay ends `Press enter to confirm
+/// or esc to go back`.
 #[test]
 fn the_codex_screens_use_codexs_own_composer_and_footer_words() {
     let page = read(PAGE);
@@ -434,6 +435,16 @@ fn the_codex_screens_use_codexs_own_composer_and_footer_words() {
     assert!(
         codex.contains("apart('  tab to queue message', "),
         "the working footer"
+    );
+    // The approval footer: 0.164's binary holds `Press ` + a key + ` to confirm or ` + a key + ` to go back`, the keys
+    // being its `enter` and `esc` hints (the `to cancel` footer is an older version's).
+    assert!(
+        codex.contains("'  Press enter to confirm or esc to go back'"),
+        "the blocked footer is not Codex 0.164's"
+    );
+    assert!(
+        !codex.contains("esc to cancel"),
+        "an older Codex's footer is still there"
     );
 }
 

@@ -6592,6 +6592,50 @@ fn template_titles_start_at_one_column_whatever_the_agents_name() {
     );
 }
 
+/// Two template lines with the same tokens share their columns, whichever template they came from:
+/// codex rows (their own `rows_by_agent` line) and claude rows (the panel's `rows`) start their
+/// titles at one column although codex is the shorter name.
+#[test]
+fn template_lines_with_the_same_tokens_share_their_columns() {
+    let cfg = config(
+        r##"[ui.sidebar.agents]
+rows = [["state_icon", "agent", "terminal_title_stripped"]]
+
+[ui.sidebar.agents.rows_by_agent]
+codex = [["state_icon", "agent", "terminal_title_stripped"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    let claude = start_of(&screen, "Tidy page styles");
+    assert_eq!(
+        start_of(&screen, "fix flaky tests"),
+        claude,
+        "{}",
+        screen.join("\n")
+    );
+}
+
+/// Lines with different tokens still align on their own.
+#[test]
+fn template_lines_with_other_tokens_align_on_their_own() {
+    let cfg = config(
+        r##"[ui.sidebar.agents]
+rows = [["state_icon", "agent", "terminal_title_stripped"]]
+
+[ui.sidebar.agents.rows_by_agent]
+codex = [["agent", "terminal_title_stripped"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    let claude = start_of(&screen, "Tidy page styles");
+    let codex = start_of(&screen, "fix flaky tests");
+    // codex's line has no glyph (two columns) and its own agent column, one narrower than
+    // claude's: its title sits three columns before claude's.
+    assert_eq!(codex + 3, claude, "{}", screen.join("\n"));
+}
+
 #[test]
 fn template_branches_start_at_one_column_across_session_rows() {
     let cfg = config(DEMO_ROWS);

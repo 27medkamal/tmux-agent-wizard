@@ -37,11 +37,17 @@ const AGENT_CAP: usize = 16;
 /// rows of one list line up in columns: the widest value in the position, up to a cap. Measured
 /// over every row the list holds (not the ones in view), so scrolling moves nothing.
 ///
-/// A template line is told by its address: rows drawn from one line of one template share its
-/// columns, whatever machine they came from.
+/// A template line is told by its token names: rows drawn from lines with the same tokens share
+/// their columns, whatever template or machine they came from; lines with other tokens align on
+/// their own.
 #[derive(Default)]
 pub struct Columns {
-    widths: HashMap<usize, Vec<usize>>,
+    widths: HashMap<Vec<String>, Vec<usize>>,
+}
+
+/// What tells one template line from another: its token names.
+fn line_key(tokens: &[RowToken]) -> Vec<String> {
+    tokens.iter().map(|t| t.token.clone()).collect()
 }
 
 impl Columns {
@@ -54,7 +60,7 @@ impl Columns {
     ) {
         let widths = self
             .widths
-            .entry(tokens.as_ptr() as usize)
+            .entry(line_key(tokens))
             .or_insert_with(|| vec![0; tokens.len()]);
         for (at, cell) in cells(tokens, src, indicators).iter().enumerate() {
             if let Some(part) = cell {
@@ -69,9 +75,7 @@ impl Columns {
     }
 
     fn of(&self, tokens: &[RowToken]) -> Option<&[usize]> {
-        self.widths
-            .get(&(tokens.as_ptr() as usize))
-            .map(Vec::as_slice)
+        self.widths.get(&line_key(tokens)).map(Vec::as_slice)
     }
 }
 

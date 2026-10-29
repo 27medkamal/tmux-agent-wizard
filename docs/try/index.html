@@ -1276,10 +1276,13 @@
   const termWrap = document.getElementById('termwrap'), pageNote = document.getElementById('pagenote'), qlabel = document.getElementById('qlabel'), qarrow = document.getElementById('qarrow'), qpath = document.getElementById('qpath');
   const ZONE = EMBED ? 52 : 58;
   termWrap.append(pageNote, qarrow, qlabel);
+  const probes = document.createElement('div');
+  probes.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:hidden';
+  document.body.appendChild(probes);
   const probe = document.createElement('span');
   probe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:100px/1 ' + getComputedStyle(term).fontFamily;
   probe.textContent = 'x'.repeat(50);
-  document.body.appendChild(probe);
+  probes.appendChild(probe);
   const advance = () => probe.getBoundingClientRect().width / 5000;
   // The room the window has in height: the page's viewport less what sits above the window and the arrow's zone
   // under it. In the homepage's frame the viewport is the page's, and the page scrolls to #try with its own gap
@@ -1300,7 +1303,7 @@
   // two painted rows, so the row height is the text box measured at that size, never more than 1.35 times it.
   const lineProbe = document.createElement('span'), lineText = document.createElement('span');
   lineProbe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-family:' + getComputedStyle(term).fontFamily;
-  lineText.textContent = 'x'; lineProbe.appendChild(lineText); document.body.appendChild(lineProbe);
+  lineText.textContent = 'x'; lineProbe.appendChild(lineText); probes.appendChild(lineProbe);
   const rowHeight = size => { lineProbe.style.fontSize = size + 'px'; return Math.min(Math.floor(size * 1.35), Math.floor(lineText.getBoundingClientRect().height)); };
   function fitTerm() {
     let size = Math.max(6, Math.floor((termWrap.clientWidth - 22) / (COLS * advance()) * 10) / 10);

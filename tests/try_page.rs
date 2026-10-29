@@ -818,6 +818,11 @@ fn node_available() -> bool {
 /// flat list, a filter, titles off and the away machine live, then every agent screen and a
 /// short seeded fuzz. It fails on an exception, a row count other than 34, a row wider than the
 /// terminal, or `undefined` or `NaN` in the text.
+///
+/// Without node on PATH the test prints a skip line and passes. libtest shows what a passing test
+/// prints only with `--nocapture`, so in a plain `cargo test` that skip is silent. The gate
+/// (`ignore/tools/gate.sh`) sets `TAW_REQUIRE_NODE`, which turns the skip into a failure; any value
+/// of it counts, even `0` (the test only asks whether the variable is set).
 #[test]
 fn the_pages_script_draws_without_a_fault() {
     if !node_available() {

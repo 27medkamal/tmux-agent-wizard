@@ -11,7 +11,8 @@ function load(html, opts = {}) {
   let script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
   if (opts.peek) script = script.replace(/\}\)\(\);\s*$/, 'globalThis.__peek = () => ({ agentScreen, SCREENS, PREV }); })();');
   let clock = 1_000_000; const errors = [];
-  const rect = () => ({ top: 0, left: 0, bottom: opts.rectH || 0, right: 0, width: opts.rectW || 0, height: opts.rectH || 0 });
+  let measures = 0;
+  const rect = () => (measures++, { top: 0, left: 0, bottom: opts.rectH || 0, right: 0, width: opts.rectW || 0, height: opts.rectH || 0 });
   class El {
     constructor(tag, attrs = {}) { this.tagName = tag.toUpperCase(); this.attrs = attrs; this.id = attrs.id || ''; this._html = ''; this.textContent = ''; this.value = attrs.value || ''; this.checked = !!attrs.checked; this.dataset = {}; this.listeners = {}; this.classSet = new Set(); this.parentElement = new Proxy({}, { get: (t, k) => k === 'classList' ? { toggle() {}, add() {}, remove() {}, contains: () => false } : undefined }); this.style = { setProperty() {} }; this.clientWidth = opts.clientWidth || 1400; this.offsetWidth = 100; this.offsetHeight = 20; }
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
@@ -64,6 +65,8 @@ function load(html, opts = {}) {
     raw() { return term._raw || ''; },
     frame() { return term.innerHTML; },
     winListeners,
+    measures: () => measures,
+    fontSize: () => term.style.fontSize,
   };
   return api;
 }
@@ -250,6 +253,22 @@ for (const cols of [160, 100, 60]) {
       if (!t.includes(WORDS)) note(`the top line at ${cols}`, `the away words are gone: ${t.trim()}`);
       if (t.length > cols) note(`the top line at ${cols}`, `the line is ${t.length} columns`);
     }
+  }
+}
+
+// 8. A key does not size the window again: the size is worked out on load and on resize, so a key press
+// reads no layout (no getBoundingClientRect) and leaves the font size as it was.
+{
+  const where = 'keys after the first drawing';
+  const p = loadPage(where, { embed: true, frame: true, rectW: 1400, rectH: 600 }, 160);
+  if (p) {
+    const size = p.fontSize(), before = p.measures();
+    step(p, 160, where, () => { for (const k of ['j', 'j', 'k', 'Tab', 'j', 'J', 'K', '/', 'Escape']) p.key(k); });
+    if (p.measures() !== before) note(where, `${p.measures() - before} layout reads while keys were pressed`);
+    if (p.fontSize() !== size) note(where, `the font size went from ${size} to ${p.fontSize()} on keys`);
+    const reads = p.measures();
+    p.resize();
+    if (p.measures() === reads) note(where, 'a resize does not size the window again');
   }
 }
 

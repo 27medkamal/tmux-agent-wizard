@@ -540,7 +540,7 @@ fn the_page_lists_no_keys_and_draws_one_arrow_at_the_help_hint() {
     assert_eq!(page.matches("class=\"qarrow\"").count(), 1, "one arrow");
     for how in [
         "el.textContent === '?'",
-        "new MutationObserver(refit).observe(term, { childList: true })",
+        "new MutationObserver(placeArrow).observe(term, { childList: true })",
         "S.filter === null && S.model !== 'search' && !S.toast && !insideNow()",
     ] {
         assert!(
@@ -548,6 +548,11 @@ fn the_page_lists_no_keys_and_draws_one_arrow_at_the_help_hint() {
             "{PAGE}: the arrow does not find the hint: {how}"
         );
     }
+    // A key redraws the rows and the arrow follows them; the window's size is not worked out again.
+    assert!(
+        !page.contains("new MutationObserver(refit)"),
+        "{PAGE}: the window is sized again on every drawing"
+    );
 }
 
 /// The contract with the homepage (`docs/index.md` holds an iframe on `try/index.html?embed=1`,

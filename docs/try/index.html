@@ -1359,9 +1359,12 @@
     qlabel.style.left = Math.max(0, left) + 'px';
     qlabel.style.top = (base - lh / 2) + 'px';
   }
+  // The size is worked out when the page loads, when the window is resized and when the theme or the fonts change,
+  // never on a key: a key only redraws the rows, and the arrow follows them.
   const refit = () => { fitTerm(); placeArrow(); };
-  new MutationObserver(refit).observe(term, { childList: true });
+  new MutationObserver(placeArrow).observe(term, { childList: true });
   window.addEventListener('resize', refit);
+  if (document.fonts) { document.fonts.addEventListener('loadingdone', refit); if (document.fonts.ready) document.fonts.ready.then(refit); }
   if (EMBED) try { window.parent.addEventListener('resize', refit); } catch (e) { }
   const themeOf = () => {
     try { const scheme = window.parent.document.body.getAttribute('data-md-color-scheme'); if (scheme) return scheme === 'slate' ? 'dark' : 'light'; } catch (e) { }
@@ -1373,6 +1376,7 @@
       const dark = themeOf() === 'dark';
       document.documentElement.classList.toggle('dark', dark);
       if (frame) frame.style.colorScheme = dark ? 'dark' : 'light';
+      refit();
     };
     paint();
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);

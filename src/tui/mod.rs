@@ -1737,7 +1737,11 @@ mod tests {
         assert!(app.snap.spaces.iter().all(|s| s.machine.is_none()));
         let gone = text_of(&popup_frame(app.snap.clone(), app.worktrees.clone()));
         assert!(!gone.contains("garden"), "nobody keeps it: {gone}");
-        assert!(gone.contains(crate::machine::words::NO_KEEPER), "{gone}");
+        // The list is as wide as its rows, so the header keeps its first clause and its rule.
+        let (said, _) = crate::machine::words::NO_KEEPER
+            .split_once(':')
+            .expect("a sentence with a clause after its first");
+        assert!(gone.contains(&format!("{said} \u{2501}")), "{gone}");
     }
 
     /// The table the popup started with is the one it keeps: the rows of its machines stay when the config file

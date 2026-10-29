@@ -755,8 +755,13 @@ fn a_machine_that_is_not_live_says_its_words_in_dim_and_no_counts() {
     let buf = draw(&mut app);
     let y = find(&buf, "pi  not");
     let text = line(&buf, y);
-    assert!(text.contains(&format!("pi  {PI_WORDS}")), "{text:?}");
-    let at = text.find(PI_WORDS).unwrap();
+    // The list is as wide as its rows, not as its words: the retry does not fit beside the rule,
+    // and the clauses before it do.
+    let shown = "not answering, last seen 2m ago";
+    assert!(PI_WORDS.starts_with(shown));
+    assert!(text.contains(&format!("pi  {shown} \u{2501}")), "{text:?}");
+    assert!(!text.contains("trying again"), "{text:?}");
+    let at = text.find(shown).unwrap();
     let x = u16::try_from(text[..at].chars().count()).unwrap();
     assert_eq!(buf[(x, y)].fg, theme.dim);
     assert_eq!(

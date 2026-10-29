@@ -101,11 +101,9 @@ impl Tmux {
             Some(deadline) => output_by(&mut cmd, deadline)
                 .with_context(ran)?
                 .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "tmux did not answer in time: `{} {}`",
-                        self.bin.display(),
-                        args.join(" ")
-                    )
+                    anyhow::Error::new(TimedOut {
+                        command: format!("{} {}", self.bin.display(), args.join(" ")),
+                    })
                 })?,
         };
         if !output.status.success() {
@@ -449,6 +447,15 @@ pub struct CommandFailed {
     pub status: std::process::ExitStatus,
     /// What tmux wrote to its stderr, trimmed: empty when it said nothing.
     pub stderr: String,
+}
+
+/// A bounded tmux call ([`Tmux::run_by`]) that had not ended by its deadline: killed and reaped. It is its
+/// own type so a caller can say so in its own words, as the message names the command line.
+#[derive(Debug, thiserror::Error)]
+#[error("tmux did not answer in time: `{command}`")]
+pub struct TimedOut {
+    /// The binary and its arguments, as the message spells them.
+    pub command: String,
 }
 
 impl CommandFailed {

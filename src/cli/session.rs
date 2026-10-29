@@ -140,10 +140,7 @@ pub(crate) fn offered_here(ctx: &Ctx, home: &Path, zoxide: &[String]) -> anyhow:
         .unwrap_or_else(|e| {
             if !crate::tmux::no_server(&e) {
                 log::warn!("session candidates: tmux did not list the sessions: {e:#}");
-                sessions_error = Some(match e.downcast_ref::<crate::tmux::CommandFailed>() {
-                    Some(failed) => failed.reason(),
-                    None => format!("{e:#}"),
-                });
+                sessions_error = Some(sessions_error_words(&e));
             }
             Vec::new()
         });
@@ -164,6 +161,21 @@ pub(crate) fn offered_here(ctx: &Ctx, home: &Path, zoxide: &[String]) -> anyhow:
         list: picker::offered(&snap, &ctx.cfg, home, zoxide, picker::OFFERED_CAPS),
         sessions_error,
     })
+}
+
+/// Why tmux's sessions are missing, in a few words and never its command line or format: tmux's own
+/// first line when it said no, fixed words when it did not answer in time, and the system's reason when
+/// it could not be started.
+fn sessions_error_words(e: &anyhow::Error) -> String {
+    if let Some(failed) = e.downcast_ref::<crate::tmux::CommandFailed>() {
+        failed.reason()
+    } else if e.downcast_ref::<crate::tmux::TimedOut>().is_some() {
+        format!("tmux did not answer within {} s", SESSIONS_BOUND.as_secs())
+    } else if let Some(io) = e.root_cause().downcast_ref::<std::io::Error>() {
+        format!("could not run tmux: {io}")
+    } else {
+        format!("{e:#}")
+    }
 }
 
 /// How long `taw session candidates` waits for tmux, over all its calls.

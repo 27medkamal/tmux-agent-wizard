@@ -8652,7 +8652,8 @@ fn session_candidates_does_not_wait_for_a_tmux_that_hangs() {
     );
     let env = parse_envelope(&args, &stdout, &stderr);
     let error = env["result"]["sessions_error"].as_str().unwrap_or_default();
-    assert!(error.contains("did not answer"), "{env}");
+    assert_eq!(error, "tmux did not answer within 3 s", "{env}");
+    assert!(!error.contains("-F"), "{env}");
     assert_eq!(
         env["result"]["candidates"].as_array().unwrap().len(),
         5,
@@ -8670,6 +8671,30 @@ fn session_candidates_does_not_wait_for_a_tmux_that_hangs() {
         .status()
         .unwrap();
     assert!(!alive.success(), "tmux {pid} is still running");
+}
+
+/// A tmux that cannot be started says so in a few words with the system's reason, and never the command
+/// line or its format.
+#[test]
+fn session_candidates_says_when_tmux_cannot_be_started() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let tmux = c.bin.path().join("no-such-tmux").display().to_string();
+    let args = ["session", "candidates", "--json"];
+    let (code, stdout, stderr) = c.run_env(&f, &f.socket, &[("TAW_TMUX_BIN", &tmux)], &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    let error = env["result"]["sessions_error"].as_str().unwrap_or_default();
+    assert_eq!(
+        error, "could not run tmux: No such file or directory (os error 2)",
+        "{env}"
+    );
+    assert!(!error.contains("-F") && !error.contains("list-"), "{env}");
+    assert_eq!(
+        env["result"]["candidates"].as_array().unwrap().len(),
+        5,
+        "{env}"
+    );
 }
 
 /// Without `--json` it is a line for each folder, its kind and name, and no envelope.

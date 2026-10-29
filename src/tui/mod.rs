@@ -865,12 +865,10 @@ fn install_panic_hook() {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::PermissionsExt as _;
-
     fn script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
         let path = dir.join("zoxide");
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_exec::make_executable(&path);
         path
     }
 

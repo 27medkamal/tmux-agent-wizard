@@ -58,6 +58,11 @@ const ALLOWED: &[(&str, usize, &str)] = &[
         "a test's folder mode helper and its guard",
     ),
     (
+        "tests/cli_json.rs",
+        1,
+        "tmux's private socket folder a test makes",
+    ),
+    (
         "tests/e2e_sandbox.rs",
         2,
         "a profile its owner may not run, which the test expects refused, and a folder",

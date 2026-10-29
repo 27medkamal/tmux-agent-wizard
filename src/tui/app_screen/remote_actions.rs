@@ -542,7 +542,9 @@ impl Rows {
                     match crate::machine::actions::session_opened(&done.stdout) {
                         Some((name, created, dir)) => {
                             app.toast(words::session_made(machine, &name, &dir, created));
-                            if here {
+                            if !app.overlay.is_open()
+                                && cursor_is_where_n_was_pressed(app, &sent.row, machine, &name)
+                            {
                                 self.awaiting = Some(Awaiting {
                                     machine: machine.to_string(),
                                     name,
@@ -674,18 +676,9 @@ impl Rows {
     fn go_in_to_awaited(&mut self, app: &mut App) -> Option<Route> {
         let waiting = self.awaiting.as_ref()?;
         let is_awaited = |space: &crate::tui::data::SpaceRow| {
-            space.session_name == waiting.name
-                && space
-                    .machine
-                    .and_then(|at| app.snap.machines.get(at))
-                    .is_some_and(|header| header.name == waiting.machine)
+            is_session_of(app, space, &waiting.machine, &waiting.name)
         };
-        // The empty-machine row is replaced by the new session's row on that machine, so the cursor that was
-        // on it and is now on the awaited session's row is where it was.
-        let empty_row = format!("empty row of {}", waiting.machine);
-        let on_new_row = waiting.at.as_deref() == Some(empty_row.as_str())
-            && matches!(app.current(), Some(crate::tui::tree::Row::Session(s)) if is_awaited(&app.snap.spaces[*s]));
-        if (waiting.at != app.row_identity() && !on_new_row)
+        if !cursor_is_where_n_was_pressed(app, &waiting.at, &waiting.machine, &waiting.name)
             || app.overlay.is_open()
             || waiting.since.elapsed() >= SESSION_WAIT
         {
@@ -711,6 +704,35 @@ impl Rows {
         };
         super::machine::route(&Action::SwitchWorkspace { session }, active_pane_of)
     }
+}
+
+/// Whether `space` is the session called `name` on `machine`.
+fn is_session_of(app: &App, space: &crate::tui::data::SpaceRow, machine: &str, name: &str) -> bool {
+    space.session_name == name
+        && space
+            .machine
+            .and_then(|at| app.snap.machines.get(at))
+            .is_some_and(|header| header.name == machine)
+}
+
+/// Whether the cursor is where `n` was pressed (`at`, the row's identity then) for the session `name` that
+/// `machine` made: on the same row, or, when `n` was pressed on the machine's empty-machine row, on that
+/// machine's row of the new session, which replaces the empty row at the same place. The answer to `open` and
+/// the wait for the row both ask this, so that the list showing the session before or after the answer comes
+/// makes no difference.
+fn cursor_is_where_n_was_pressed(
+    app: &App,
+    at: &Option<String>,
+    machine: &str,
+    name: &str,
+) -> bool {
+    if at == &app.row_identity() {
+        return true;
+    }
+    let empty_row = format!("empty row of {machine}");
+    at.as_deref() == Some(empty_row.as_str())
+        && matches!(app.current(), Some(crate::tui::tree::Row::Session(s))
+            if is_session_of(app, &app.snap.spaces[*s], machine, name))
 }
 
 /// What the popup says when its own action has run, said of `machine`'s: a group closed (the session and how
@@ -2889,6 +2911,52 @@ mod rows_tests {
         app.rows.rows[at] = Row::Session(newest);
         let routes = feed.remote.settle(&mut app);
         assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { machine, .. } if machine == "studio"),
+            "{routes:?}"
+        );
+        assert_eq!(app.sel, at, "the cursor is on the new row");
+        assert!(feed.remote.awaiting.is_none());
+    }
+
+    /// `n` on a machine's empty-machine row, and the far feed's snapshot with the new session reaches the list
+    /// before the reply to `open` is taken: the new row has replaced the empty one under the cursor already, so
+    /// the row the cursor is on is not the row `n` was pressed on, and still the app goes in.
+    /// Mutation: the answer's `here` compares only `sent.row` with the cursor's row (no empty-row rule).
+    #[test]
+    fn the_app_goes_in_when_the_list_shows_the_new_row_before_the_answer_is_taken() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        let studio = app
+            .snap
+            .machines
+            .iter()
+            .position(|header| header.name == "studio")
+            .expect("studio's header");
+        app.rows.rows.push(Row::NoSession(studio));
+        let at = app.rows.rows.len() - 1;
+        app.sel = at;
+        assert_eq!(app.row_identity().as_deref(), Some("empty row of studio"));
+        let _fake = rig.fake(
+            &OPENED.replace("garden\",\"created", "newbie\",\"created"),
+            0,
+            false,
+        );
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "x".into(),
+                exact: false,
+            },
+        );
+        // Before any settle: the feed's snapshot is in, its row has replaced the empty one.
+        list_session(&mut app, "newbie", false);
+        let newest = app.snap.spaces.len() - 1;
+        app.rows.rows[at] = Row::Session(newest);
+        let routes = answered(&mut feed, &mut app);
+        assert_eq!(routes.len(), 1, "{routes:?}; toast {:?}", toast_of(&app));
         assert!(
             matches!(&routes[0], Route::Attach { machine, .. } if machine == "studio"),
             "{routes:?}"

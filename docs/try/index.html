@@ -913,7 +913,39 @@
   function wrapPreview(lines, r, width) { if (!S.wrap || fullScreenRow(r) || width < 8) return lines; const out = []; for (const l of lines) { let rest = l; while (rest.length > width) { out.push(rest.slice(0, width)); rest = rest.slice(width); } out.push(rest); } return out; }
   const previewTitle = r => { const at = machineAt(r, r ? (r.kind === 'project' ? r.path : r.kind === 'worktree' ? `~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, r.wt.branch)}` : r.s.path) : ''); const box = r && r.kind === 'agent' ? boxOf(r.a) : null; return box ? `${at} · ${BOX} in a sandbox: ${boxWords(box)}` : at; };
 
-  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const left = ours ? (appMode() ? span(' taw app', 'c-acc bold') + countParts().map(c => span('  \u00b7  ', 'c-dim') + span(c, 'c-fg')).join('') : span(' taw ', 'c-acc bold') + span(barCounts(), 'c-fg')) : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = ours ? span(' 17:58 ', 'c-dim') : rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
+  // The app's top line as taw draws it (src/tui/view/app_line.rs): the name and the counts on the left, the clock on the
+  // right after any away machine no header names; the machine count is the first count to go on a narrow line, after the clock.
+  const awayNames = names => names.join(', ') + ' not connected';
+  const awayUnheaded = () => {
+    if (!S.remote) return [];
+    const shown = new Set();
+    if (!(S.flat && S.depth !== 'sessions')) { if (!query().trim()) return []; ROWS_CACHE.forEach(r => { if (r.s) shown.add(r.s.machine || ''); }); }
+    return MACHINES.map(m => m.name).filter(m => !machineLive(m) && !shown.has(m));
+  };
+  function appTopLine(W) {
+    const parts = countParts(), withMachines = machineCount() >= 2;
+    const leftOf = list => span(' taw app', 'c-acc bold') + list.map(c => span('  \u00b7  ', 'c-dim') + span(c, 'c-fg')).join('');
+    const left = leftOf(withMachines ? parts.slice(1) : parts), wide = withMachines ? leftOf(parts) : null;
+    const half = Math.floor(W / 2), away = awayUnheaded(), clock = '17:58';
+    const clockAlone = clock.length + 2 <= half ? span(clock, 'c-dim') : '';
+    const whole = wide || left; let right, shown = false;
+    if (!away.length) right = vis(whole).length + 1 + vis(clockAlone).length < W ? clockAlone : '';
+    else {
+      const words = span(awayNames(away), 'c-yel'), both = words + span('  \u2502  ', 'c-dim') + span(clock, 'c-dim');
+      if (vis(both).length + 2 <= half && vis(whole).length + 1 + vis(both).length < W) { right = both; shown = true; }
+      else if (vis(words).length + 2 <= half) { right = words; shown = true; }
+      else { const most = W - (' taw app'.length + 3); right = vis(words).length <= most ? words : most <= 0 ? '' : clipHtml(words, most - 1) + span('\u2026', 'c-dim'); shown = true; }
+    }
+    const rw = vis(right).length, room = rw ? W - (rw + 1 + (shown ? 1 : 0)) : W;
+    let l = wide && vis(wide).length <= room ? wide : left;
+    if (vis(l).length > room) l = room <= 0 ? '' : clipHtml(l, room - 1) + span('\u2026', 'c-dim');
+    if (!rw) return l;
+    return l + ' '.repeat(Math.max(0, W - vis(l).length - rw - 1)) + right + ' ';
+  }
+  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const W = inner + 2; let line;
+    if (appMode()) line = appTopLine(W); else if (ours) { const away = awayUnheaded(); const left = span(' taw ', 'c-acc bold') + span(barCounts(), 'c-fg'); const right = (away.length ? span(awayNames(away) + '  \u2502  ', 'c-dim') : '') + span('17:58 ', 'c-dim'); line = left + ' '.repeat(Math.max(1, W - vis(left).length - vis(right).length)) + right; }
+    else { const left = span(` [${cur.name}] `, 'c-acc bold') + wins; const right = rail + span('  │  17:58 ', 'c-dim'); line = left + ' '.repeat(Math.max(1, W - vis(left).length - vis(right).length)) + right; }
+    return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
 
   function draw() {
     const term = document.getElementById('term'); const inner = COLS; const lines = []; const popupRows = ROWS - 1;
@@ -921,8 +953,8 @@
     document.getElementById('pagenote').textContent = S.pageNote ? 'page: ' + S.pageNote : '';
     const ww = whereWords(); document.getElementById('where0').textContent = ww[0]; document.getElementById('where1').textContent = ww[1];
     if (insideNow()) { drawInside(term); document.getElementById('focushint').textContent = S.focus ? '' : 'click the window, then use the keys'; document.getElementById('clientw').textContent = COLS; renderOrderTable(); renderNameTable(); return; }
-    const status = statusLine(inner - 2); if (S.statusTop) lines.push(status);
     ROWS_CACHE = buildRows(); if (!ROWS_CACHE[S.sel]) S.sel = 0;
+    const status = statusLine(inner - 2); if (S.statusTop) lines.push(status);
     const hintsText = S.overlay ? overlayHints() : S.model === 'search'
       ? ['type filter (fzf syntax)', typedHint(), '↑/↓ ctrl-n/p move', enterHint(), 'right-click menu', 'Esc quit'].filter(Boolean).join('  ·  ')
       : S.filter !== null ? [`/${withCursor(S.filter, S.filterc)}`, typedHint(), 'Esc clear', 'Tab next up', '↑/↓ move', enterHint()].filter(Boolean).join('  ·  ')

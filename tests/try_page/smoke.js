@@ -210,6 +210,49 @@ for (const cols of [160, 100, 60]) {
   }
 }
 
+// 7. The top line names a machine that is not answering, as taw's does: before the clock when no header
+// names it (the flat list, a filter that leaves it without a row), and not when its header says it (the tree).
+{
+  const WORDS = 'pi not connected';
+  const top = p => p.text()[0];
+  for (const kind of ['app', 'popup']) {
+    const here = `the top line in the ${kind}`;
+    const p = loadPage(here, { embed: true, frame: true }, 160);
+    if (!p) continue;
+    if (kind === 'popup') step(p, 160, here, () => { p.radio('rmwhere', 'popup'); p.radio('bar', 'taw'); });
+    if (top(p).includes(WORDS)) note(here, `the tree, where pi's header says it, repeats ${WORDS}`);
+    if (!p.text().some(r => r.includes('not answering, last seen 2m ago'))) note(here, "pi's header does not say not answering in the tree");
+    step(p, 160, here, () => p.radio('layout', 'flat'));
+    if (!/pi not connected {2}\u2502 {2}\d\d:\d\d $/.test(top(p))) note(here, `the flat list's top line does not end with the away words and the clock: ${top(p)}`);
+    step(p, 160, here, () => p.radio('layout', 'tree'));
+    if (top(p).includes(WORDS)) note(here, 'the tree names pi on the top line again after the flat list');
+    step(p, 160, here, () => p.radio('layout', 'flat'));
+    step(p, 160, here, () => p.radio('rmpi', 'live'));
+    if (top(p).includes(WORDS)) note(here, 'a connected pi is named on the top line');
+    step(p, 160, here, () => p.radio('rmpi', 'dropped'));
+    if (!top(p).includes(WORDS)) note(here, 'pi is not named in the flat list once it drops again');
+    // A filter in the tree: pi has a header only while a row of it matches.
+    step(p, 160, here, () => p.radio('layout', 'tree'));
+    step(p, 160, here, () => { p.key('/'); p.type('claude'); });
+    const filtered = top(p);
+    const header = p.text().some(r => r.includes('not answering, last seen 2m ago'));
+    if (header === filtered.includes(WORDS)) note(here, `under a filter pi's header ${header ? 'is' : 'is not'} drawn and the top line ${filtered.includes(WORDS) ? 'names' : 'does not name'} it: ${filtered.trim()}`);
+    step(p, 160, here, () => { p.key('Escape'); p.type('/zzzzq'); });
+    if (!top(p).includes(WORDS)) note(here, `a filter that matches nothing leaves pi without a header and without a name: ${top(p).trim()}`);
+  }
+  // A narrow line keeps the away words; the clock goes first, then the machine count.
+  const p = loadPage('the narrow top line', { embed: true, frame: true }, 160);
+  if (p) {
+    step(p, 160, 'the narrow top line', () => p.radio('layout', 'flat'));
+    for (const cols of [160, 100, 60]) {
+      step(p, cols, `the narrow top line at ${cols}`, () => p.radio('width', String(cols)));
+      const t = top(p);
+      if (!t.includes(WORDS)) note(`the top line at ${cols}`, `the away words are gone: ${t.trim()}`);
+      if (t.length > cols) note(`the top line at ${cols}`, `the line is ${t.length} columns`);
+    }
+  }
+}
+
 if (problems.size) {
   for (const [what, v] of problems) console.log(`FAIL x${v.n} ${what} (first: ${v.where})`);
   process.exit(1);

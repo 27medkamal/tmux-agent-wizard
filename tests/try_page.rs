@@ -624,7 +624,8 @@ fn a_machine_header_is_one_full_width_rule_with_a_dot_the_name_and_the_counts() 
         "'\u{2501}'.repeat(",
         "dropped: 'not answering, last seen 2m ago'",
         "const machineCount = () => (S.remote ? 1 + MACHINES.length : 1);",
-        "span(' taw app', 'c-acc bold') + countParts().map(c => span('  \\u00b7  ', 'c-dim') + span(c, 'c-fg'))",
+        "const leftOf = list => span(' taw app', 'c-acc bold') + list.map(c => span('  \\u00b7  ', 'c-dim') + span(c, 'c-fg'))",
+        "const awayNames = names => names.join(', ') + ' not connected';",
         "machineHeaderHtml(it.m, sideW - 2, it.counts)",
     ] {
         assert!(page.contains(part), "{PAGE} lacks {part:?}");

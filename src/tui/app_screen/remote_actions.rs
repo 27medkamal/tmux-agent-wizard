@@ -395,6 +395,8 @@ pub(super) struct Rows {
 pub(super) struct Awaiting {
     machine: String,
     name: String,
+    /// The row the cursor was on when `n` was pressed ([`App::row_identity`]): the wait ends when it leaves it.
+    at: Option<String>,
     pub(super) since: Instant,
 }
 
@@ -452,7 +454,7 @@ impl Rows {
             Pending {
                 token,
                 action: action.clone(),
-                row: app.cursor_id(),
+                row: app.row_identity(),
                 group,
             },
         );
@@ -470,8 +472,8 @@ impl Rows {
             let machine = done.machine.as_str();
             let sent = self.pending.remove(machine);
             let current = sent.as_ref().filter(|sent| sent.token == done.token);
-            let here =
-                current.is_some_and(|sent| sent.row == app.cursor_id() && !app.overlay.is_open());
+            let here = current
+                .is_some_and(|sent| sent.row == app.row_identity() && !app.overlay.is_open());
             match (done.reply, current) {
                 // A session made over there: said, and when the cursor is still where `n` was pressed, gone
                 // in to once the list shows its row.
@@ -485,6 +487,7 @@ impl Rows {
                                 self.awaiting = Some(Awaiting {
                                     machine: machine.to_string(),
                                     name,
+                                    at: sent.row.clone(),
                                     since: Instant::now(),
                                 });
                             }
@@ -565,33 +568,35 @@ impl Rows {
 
 impl Rows {
     /// The route into the session a machine made for `n`, when the list shows its row: the row is selected and
-    /// the route is the one Enter on it takes. Nothing after [`SESSION_WAIT`]: nothing is selected, the toast
-    /// stays, and the app waits for nothing.
+    /// the route is the one Enter on it takes. The wait ends with no route, before the list is looked at, when
+    /// the cursor has left the row `n` was pressed on, something is open over the list, or [`SESSION_WAIT`]
+    /// has passed: nothing is selected and the toast stays. A row the filter hides ends it too, with `sel`
+    /// as it was.
     fn go_in_to_awaited(&mut self, app: &mut App) -> Option<Route> {
         let waiting = self.awaiting.as_ref()?;
-        let found = app.snap.spaces.iter().position(|space| {
+        if waiting.at != app.row_identity()
+            || app.overlay.is_open()
+            || waiting.since.elapsed() >= SESSION_WAIT
+        {
+            self.awaiting = None;
+            return None;
+        }
+        let space = app.snap.spaces.iter().position(|space| {
             space.session_name == waiting.name
                 && space
                     .machine
                     .and_then(|at| app.snap.machines.get(at))
                     .is_some_and(|header| header.name == waiting.machine)
-        });
-        let Some(space) = found else {
-            if waiting.since.elapsed() >= SESSION_WAIT {
-                self.awaiting = None;
-            }
-            return None;
-        };
-        self.awaiting = None;
-        let session = app.snap.spaces[space].session_id.clone();
-        if let Some(at) = app
+        })?;
+        let shown = app
             .rows
             .rows
             .iter()
-            .position(|row| matches!(row, crate::tui::tree::Row::Session(s) if *s == space))
-        {
-            app.sel = at;
-        }
+            .position(|row| matches!(row, crate::tui::tree::Row::Session(s) if *s == space));
+        self.awaiting = None;
+        let at = shown?;
+        let session = app.snap.spaces[space].session_id.clone();
+        app.sel = at;
         let active_pane_of = |id: &str| {
             app.snap
                 .spaces
@@ -2084,6 +2089,172 @@ mod rows_tests {
             toast_of(&app),
             Some("update taw on studio to make sessions there from here".to_string())
         );
+    }
+
+    /// Makes studio list a session named `name`, as its feed does a settle after the answer: the space is in the
+    /// snapshot, and its row in the list unless `shown` is false (a row the filter hides).
+    fn list_session(app: &mut App, name: &str, shown: bool) {
+        let mut space = app
+            .snap
+            .spaces
+            .iter()
+            .find(|s| s.session_id == "studio:$4")
+            .unwrap()
+            .clone();
+        space.session_id = format!("studio:${}", 100 + app.snap.spaces.len());
+        space.session_name = name.to_string();
+        app.snap.spaces.push(space);
+        if shown {
+            let at = app.snap.spaces.len() - 1;
+            app.rows.rows.push(Row::Session(at));
+        }
+    }
+
+    /// Moves the cursor to a row of this machine's own.
+    fn move_off(app: &mut App) {
+        app.sel = app
+            .rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Pane(p) if app.snap.panes[*p].machine.is_none()))
+            .expect("a local pane");
+    }
+
+    /// `n` is answered on the row the cursor is on, with a session named `name` that the list does not show
+    /// yet: the app is waiting for its row. The guard keeps the stand-in ssh.
+    fn made_not_yet_shown(rig: &Rig, feed: &mut Feed, app: &mut App, name: &str) -> seam::Guard {
+        let guard = rig.fake(
+            &OPENED.replace("garden\",\"created", &format!("{name}\",\"created")),
+            0,
+            false,
+        );
+        send(
+            feed,
+            app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "x".into(),
+            },
+        );
+        assert!(answered(feed, app).is_empty());
+        assert!(feed.remote.awaiting.is_some(), "waiting for its row");
+        guard
+    }
+
+    /// The cursor moved to another row before the list showed the new one: nothing is selected or gone in to,
+    /// and the wait is over.
+    /// Mutation: `go_in_to_awaited` stops comparing `waiting.at` with the cursor's row.
+    #[test]
+    fn the_app_does_not_go_in_once_the_cursor_has_left_the_row() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        move_off(&mut app);
+        let sel = app.sel;
+        list_session(&mut app, "newbie", true);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "the wait is over");
+        assert_eq!(app.sel, sel, "nothing was selected");
+    }
+
+    /// The row shows after the wait ran out: no route, even though it is listed and the cursor never moved.
+    /// Mutation: the `SESSION_WAIT` test is taken out of the first check of `go_in_to_awaited`.
+    #[test]
+    fn the_app_does_not_go_in_to_a_row_that_shows_after_the_wait() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        let sel = app.sel;
+        list_session(&mut app, "newbie", true);
+        feed.remote.awaiting.as_mut().unwrap().since =
+            Instant::now() - SESSION_WAIT - Duration::from_secs(1);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "the wait is over");
+        assert_eq!(app.sel, sel, "nothing was selected");
+    }
+
+    /// A question is open when the row shows: the app does not take the screen from it.
+    /// Mutation: `go_in_to_awaited` stops looking at `app.overlay.is_open()`.
+    #[test]
+    fn the_app_does_not_go_in_over_an_open_question() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        let sel = app.sel;
+        let _ = press(&mut app, KeyCode::Char('x'));
+        assert!(question(&app).contains("studio"), "the question is open");
+        list_session(&mut app, "newbie", true);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "the wait is over");
+        assert!(app.overlay.is_open(), "the question stays");
+        assert_eq!(app.sel, sel, "nothing was selected");
+    }
+
+    /// A filter hides the new row: no route, and the cursor stays where it was.
+    /// Mutation: `go_in_to_awaited` goes in when the row is not in `app.rows` (`shown?` becomes a lookup that
+    /// falls back to the old `sel`).
+    #[test]
+    fn the_app_does_not_go_in_to_a_row_the_filter_hides() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        let name = app.session_name_of("studio:$4");
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        app.filter = Some(crate::tui::input::Input::new(&name));
+        app.rebuild();
+        select(&mut app, "studio:$4");
+        let sel = app.sel;
+        list_session(&mut app, "newbie", false);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "the wait is over");
+        assert_eq!(app.sel, sel, "sel is as it was");
+    }
+
+    /// `n` on a machine's empty-machine row, then the cursor moves to another row that has no id: that is a
+    /// different row, and nothing is gone in to.
+    /// Mutation: `row_identity` answers `None` for the rows with no id.
+    #[test]
+    fn a_row_with_no_id_is_not_the_same_row_as_another_with_none() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        app.rows.rows.push(Row::NoSession(0));
+        let from = app.rows.rows.len() - 1;
+        app.rows.rows.push(Row::NoSession(1));
+        let to = app.rows.rows.len() - 1;
+        app.sel = from;
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        app.sel = to;
+        list_session(&mut app, "newbie", true);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "the wait is over");
+        assert_eq!(app.sel, to, "nothing was selected");
+    }
+
+    /// The happy path: the cursor stays on the row `n` was pressed on, the list shows the new row one settle
+    /// later, and the app selects it and goes in as Enter on it does.
+    #[test]
+    fn the_app_goes_in_to_the_new_row_when_it_shows_with_the_cursor_where_n_was_pressed() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        let before = app.sel;
+        list_session(&mut app, "newbie", true);
+        let routes = feed.remote.settle(&mut app);
+        let newest = app.snap.spaces.last().unwrap().session_id.clone();
+        assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { machine, target, .. } if machine == "studio" && target == newest.strip_prefix("studio:").unwrap()),
+            "{routes:?}"
+        );
+        assert_ne!(app.sel, before, "the cursor moved to the new row");
+        assert!(
+            matches!(app.current(), Some(Row::Session(s)) if app.snap.spaces[*s].session_id == newest)
+        );
+        assert!(feed.remote.awaiting.is_none());
     }
 
     /// This Mac's `pre_close` is asked for this Mac's row and never for a machine's.

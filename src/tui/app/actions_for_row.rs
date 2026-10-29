@@ -529,6 +529,25 @@ impl App<'_> {
         }
     }
 
+    /// What the cursor's row is, for the one question "is it still the same row": [`App::cursor_id`] for a row
+    /// that has an id, and for a row that has none (a machine's header or empty-machine row, a directory the
+    /// filter offers) a word that says which one, so two rows with no id never match each other.
+    pub(crate) fn row_identity(&self) -> Option<String> {
+        let machine = |at: &usize| {
+            self.snap
+                .machines
+                .get(*at)
+                .map_or("", |header| header.name.as_str())
+        };
+        self.cursor_id().or_else(|| match self.current()? {
+            Row::Machine(Some(at)) => Some(format!("header of {}", machine(at))),
+            Row::Machine(None) => Some("header of this machine".to_string()),
+            Row::NoSession(at) => Some(format!("empty row of {}", machine(at))),
+            Row::Project(at) => Some(format!("directory {at}")),
+            Row::Pane(_) | Row::Session(_) | Row::ClosedWorktree { .. } => None,
+        })
+    }
+
     /// The name the list gives the session `session` (the id the actions use), or the id when it is not listed.
     pub(crate) fn session_name_of(&self, session: &str) -> String {
         self.snap

@@ -159,29 +159,38 @@ restore after resurrect's own.
 
 ## How it compares
 
-✅ has it, ⚠️ in part, ❌ does not. Where taw is ahead first, then what both do.
+✅ has it, ⚠️ in part, ❌ does not. Where taw is ahead first, then what they all do.
 
-| | taw | herdr | tmux and its plugins |
-|---|---|---|---|
-| Runs in the tmux you already run | ✅ a TPM plugin, no restart; running agents show up at once | ❌ its own terminal workspace and config | ✅ |
-| Project picker (your project folders, open or not) | ✅ `n` in the popup, or `taw open` | ❌ a new workspace starts in the folder `new_cwd` names | ✅ with tmux-session-wizard (zoxide) |
-| An agent in a container | ✅ `taw sandbox`, through a profile you can read | ❌ no sandbox of its own | ❌ by hand |
-| An agent you start in Docker or Podman | ✅ recognised, with nothing set | ⚠️ only with `HERDR_AGENT` set | ❌ |
-| A command of yours on any event | ✅ one line under `[hooks]` | ⚠️ through a plugin or its socket | ⚠️ tmux's own hooks, for tmux's events |
-| Notifications on your phone | ✅ a one-line hook | ⚠️ through a plugin | ❌ |
-| Knows each agent's state | ✅ 22 agents, herdr's rules plus seven of taw's own | ✅ 22 agents | ❌ |
-| Takes you to what needs you | ✅ `Tab` in the popup, `prefix + O` anywhere | ✅ its sidebar and notification key | ❌ |
-| Agents back in their conversations after a reboot | ✅ 18 agents, once each one's hook is installed | ✅ the same 18 | ❌ tmux-resurrect: layouts, folders, some programs |
-| Agents always accessible | ✅ in a popup on a key, plus a count on the status line | ✅ in a sidebar | ❌ |
-| Updates live as agents change | ✅ the popup, the status line and the toasts, as it happens | ✅ the sidebar, and events on its socket | ❌ |
-| Supports herdr's plugins | ✅ in beta: herdr's CLI-driven plugins, beside your TPM ones | ✅ plugins and a marketplace | ❌ |
+| | taw | herdr | workmux | tmux and its plugins |
+|---|---|---|---|---|
+| Runs in the tmux you already run | ✅ a TPM plugin, no restart; running agents show up at once | ❌ its own terminal workspace and config | ⚠️ a CLI beside it; an agent shows up only once `workmux setup` has put hooks in its settings | ✅ |
+| Knows each agent's state | ✅ 22 agents, read from the screen with nothing installed: herdr's rules plus seven of taw's own | ✅ 22 agents | ⚠️ 9 agents, only through hooks it installs; 3 of them never show waiting | ❌ |
+| One key to the agent that needs you | ✅ `prefix + O` from any pane, bound for you, or `Tab` in the popup | ✅ its sidebar and notification key | ⚠️ only once you bind a key to `workmux last-done`, or `1` to `9` in its dashboard | ❌ |
+| Project picker (your project folders, open or not) | ✅ `n` in the popup, or `taw open` | ❌ a new workspace starts in the folder `new_cwd` names | ⚠️ `p` in its dashboard switches between projects' worktrees | ✅ with tmux-session-wizard (zoxide) |
+| Notifications on your phone | ✅ a one-line hook | ⚠️ through a plugin | ❌ | ❌ |
+| A command of yours on any event | ✅ one line under `[hooks]` | ⚠️ through a plugin or its socket | ⚠️ commands after a worktree is made, before a merge and before a removal | ⚠️ tmux's own hooks, for tmux's events |
+| An agent you start in Docker or Podman | ✅ recognised, with nothing set | ⚠️ only with `HERDR_AGENT` set | ⚠️ the ones its own sandbox starts; its docs do not cover one you start by hand | ❌ |
+| Agents on other machines, in the same list | ✅ over your ssh, one line in `config.toml` per machine | ✅ `herdr machine add` | ❌ | ❌ |
+| Agents back in their conversations after a reboot | ✅ 18 agents, once each one's hook is installed | ✅ the same 18 | ⚠️ `workmux resurrect`: one repo's worktree windows, each agent with its resume arguments | ❌ tmux-resurrect: layouts, folders, some programs |
+| Tells you the moment an agent needs you | ✅ a toast in tmux, your terminal or your desktop | ✅ toasts and a sound | ⚠️ an icon in the window's name | ⚠️ a bell or an activity flag |
+| Supports herdr's plugins | ✅ in beta: herdr's CLI-driven plugins, beside your TPM ones | ✅ plugins and a marketplace | ❌ | ❌ |
+| An agent in a container | ✅ `taw sandbox`, through a profile you can read | ❌ no sandbox of its own | ✅ Docker, Podman, Apple Container or a Lima VM | ❌ by hand |
+| Git worktrees, each in its own session | ✅ `w` in the popup, or `taw worktree create` | ✅ | ✅ `workmux add`, and `workmux merge` to finish | ❌ by hand |
+| Agents always accessible | ✅ in a popup on a key, plus a count on the status line | ✅ in a sidebar | ✅ a dashboard in a popup, a sidebar pane in every window | ❌ |
+| Updates live as agents change | ✅ the popup, the status line and the toasts, as it happens | ✅ the sidebar, and events on its socket | ✅ window names and its sidebar | ❌ |
 
-herdr as of v0.9.4, October 2026.
+herdr as of v0.9.4 and workmux as of v0.1.277, October 2026.
 
 taw is independent of herdr and uses herdr's Apache-2.0 detection engine and rules, with
 credit. herdr is its own terminal workspace, and a good one outside tmux; taw is for the people who
 stay in tmux. The [parity ledger](docs/PARITY.md) goes through herdr feature by feature, and
 [Beyond herdr](https://27medkamal.com/tmux-agent-wizard/beyond-herdr/) lists what taw does differently.
+
+workmux is a CLI for one task per git worktree: it makes the branch, the worktree, the window and the agent, and
+merges them back when you are done. Its agents show up once its hooks are in each agent's settings, nine kinds so
+far. taw asks for none of that: one TPM line, and every agent already running in your tmux, 22 kinds, shows up at
+once, with your other machines in the same list and your sessions back after a reboot. It makes worktrees too,
+one session each, and leaves merging to the git tools you already use.
 
 ## Footprint
 

@@ -12,6 +12,16 @@ in tmux: it brings herdr's detection engine and rules into the tmux you already 
 config, keys and plugins kept. [Coming from herdr](herdr.md) says what carries over, and the
 [parity ledger](PARITY.md) goes through herdr feature by feature.
 
+## How is it different from workmux?
+
+workmux is a CLI built around one task per git worktree: `workmux add` makes the branch, the worktree, the window
+and the agent, and `workmux merge` brings it back. It sees an agent only through the hooks `workmux setup` puts
+in that agent's settings, for nine kinds of agent. taw is one TPM line in the tmux you already run: it reads
+every pane, finds 22 kinds of agent with nothing installed, however they were started, takes you to the one that
+needs you, lists your other machines' agents beside your own, and brings your sessions back after a reboot. It
+makes worktrees too, one session each, and leaves merging to the git tools you already use.
+[How it compares](index.md#how-it-compares)
+
 ## Claude Code has its own agent view. Why this?
 
 `claude agents` opens Claude Code's agent view of its own background sessions, which run under

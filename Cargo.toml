@@ -6,7 +6,7 @@ repository = "https://github.com/27medkamal/tmux-agent-wizard"
 readme = "README.md"
 keywords = ["tmux", "ai-agents", "cli", "notifications", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]

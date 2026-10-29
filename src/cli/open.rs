@@ -16,7 +16,9 @@
 //!
 //! It is for people, so it prints nothing when it works, and a plain line on stderr when it
 //! does not. `--json` is for scripts: the envelope `session open` prints, and nothing
-//! attached.
+//! attached; its `dir` is the folder that was opened, absolute. `--no-switch` makes or finds
+//! the session and moves no client and attaches no terminal, with or without `--json`: for a
+//! caller that is not the one looking at this machine (another machine's app, over ssh).
 
 use std::ffi::OsString;
 use std::io::IsTerminal as _;
@@ -106,9 +108,14 @@ impl Surroundings {
 /// `taw open`: see the module comment. `Some` is the envelope for `--json`, `None` means
 /// there is nothing to print. Returns only when the terminal did not have to be attached:
 /// attaching replaces the process, and only its failure comes back.
-pub(crate) fn run(ctx: &Ctx, terms: &[String], json: bool) -> anyhow::Result<Option<Value>> {
+pub(crate) fn run(
+    ctx: &Ctx,
+    terms: &[String],
+    json: bool,
+    no_switch: bool,
+) -> anyhow::Result<Option<Value>> {
     let here = Surroundings::from_env()?;
-    match open(ctx, terms, json, &here)? {
+    match open_with(ctx, terms, json, no_switch, &here)? {
         Done::Quiet => Ok(None),
         Done::Envelope(envelope) => Ok(Some(envelope)),
         Done::Attach(command) => Err(attach(command)),
@@ -123,13 +130,31 @@ pub(crate) fn open(
     json: bool,
     here: &Surroundings,
 ) -> anyhow::Result<Done> {
+    open_with(ctx, terms, json, false, here)
+}
+
+/// [`open`], with `no_switch` for a run that makes or finds the session and moves no client
+/// and attaches no terminal: nothing is printed without `--json`, and the envelope says
+/// `switched: false`.
+pub(crate) fn open_with(
+    ctx: &Ctx,
+    terms: &[String],
+    json: bool,
+    no_switch: bool,
+    here: &Surroundings,
+) -> anyhow::Result<Done> {
     if typed(terms).trim().is_empty() {
+        if no_switch {
+            return Err(CliError::invalid_argument(
+                "--no-switch needs a directory or a zoxide term",
+            ));
+        }
         return picker(ctx, json, here.in_tmux);
     }
     // Outside tmux the open ends by attaching this terminal, which needs one. That is asked
     // before anything is looked up or made, so a run that cannot attach leaves no session
     // behind.
-    if !json && !here.in_tmux && !here.terminal {
+    if !json && !no_switch && !here.in_tmux && !here.terminal {
         return Err(CliError::invalid_argument(
             "this is not a terminal, use --json to open without attaching",
         ));
@@ -146,10 +171,17 @@ pub(crate) fn open(
         .with_context(|| format!("{} is not valid UTF-8", dir.display()))?;
 
     if json {
-        return session::open_at(ctx, path, &here.home, here.pane.as_deref()).map(Done::Envelope);
+        let mut envelope =
+            session::open_at(ctx, path, &here.home, here.pane.as_deref(), !no_switch)?;
+        // The folder the session is rooted at, as the open read it (symlinks resolved).
+        let opened = std::fs::canonicalize(&dir).unwrap_or(dir);
+        envelope["dir"] = Value::String(opened.to_string_lossy().into_owned());
+        return Ok(Done::Envelope(envelope));
     }
     let outcome = session::open_session(ctx, path, &here.home)?;
-    if here.in_tmux {
+    if no_switch {
+        Ok(Done::Quiet)
+    } else if here.in_tmux {
         switch(ctx, &outcome, here.pane.as_deref())?;
         Ok(Done::Quiet)
     } else {
@@ -1144,7 +1176,8 @@ mod tests {
         assert_eq!(made, ["new-session"], "made, and no client switched");
     }
 
-    /// `--json` prints what `session open` prints, and attaches nothing, inside tmux or not.
+    /// `--json` prints what `session open` prints plus the folder it opened, and attaches nothing,
+    /// inside tmux or not.
     #[test]
     fn json_gives_the_envelope_session_open_gives_and_attaches_nothing() {
         let w = world();
@@ -1157,8 +1190,15 @@ mod tests {
             let Done::Envelope(envelope) = done else {
                 panic!("no envelope")
             };
+            let dir = envelope["dir"].as_str().expect("dir").to_string();
+            assert!(
+                Path::new(&dir).is_absolute() && dir.ends_with("sub/dir"),
+                "{dir}"
+            );
+            let mut without = envelope.clone();
+            without.as_object_mut().unwrap().remove("dir");
             assert_eq!(
-                envelope,
+                without,
                 serde_json::json!({
                     "session": "dir",
                     "created": true,

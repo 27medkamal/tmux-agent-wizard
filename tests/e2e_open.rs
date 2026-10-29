@@ -695,6 +695,131 @@ fn a_pane_nobody_is_looking_at_moves_no_client_that_someone_is() {
     assert_eq!(w.terminal_session(&second), "one");
 }
 
+// ------------------------------------------------------------- --no-switch and dir
+
+/// `--no-switch` makes the session and moves nobody: the one client stays where it was, with
+/// or without `--json`, while the same open without the flag moves that client (a lone client
+/// is the one a run with no pane moves). The envelope says `switched: false` and names the
+/// folder it opened.
+#[test]
+fn no_switch_makes_the_session_and_the_client_stays_where_it_was() {
+    let mut w = World::new();
+    w.attach("one");
+    let plain = w.dir("code/stays-plain");
+    let scripted = w.dir("code/stays-json");
+    let moved = w.dir("code/moves-it");
+
+    let ran = w.run(&w.root, &["open", "--no-switch", s(&plain)], true);
+
+    assert_eq!(
+        (ran.code, ran.stdout.as_str(), ran.stderr.as_str()),
+        (0, "", ""),
+        "{ran:?}"
+    );
+    assert_eq!(w.client_session(), "one", "the client moved");
+    assert_eq!(
+        w.server.display("stays-plain", "#{session_path}"),
+        s(&plain)
+    );
+
+    let (code, envelope) = w.envelope(
+        &w.root,
+        &["open", "--json", "--no-switch", "--", s(&scripted)],
+        true,
+    );
+
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(envelope["result"]["session"], "stays-json", "{envelope}");
+    assert_eq!(envelope["result"]["created"], true, "{envelope}");
+    assert_eq!(envelope["result"]["switched"], false, "{envelope}");
+    assert_eq!(envelope["result"]["dir"], s(&scripted), "{envelope}");
+    assert_eq!(w.client_session(), "one", "the client moved");
+
+    // Without the flag the same open still moves that client.
+    let (_, envelope) = w.envelope(&w.root, &["open", "--json", s(&moved)], true);
+    assert_eq!(envelope["result"]["switched"], true, "{envelope}");
+    assert_eq!(w.client_session(), "moves-it");
+}
+
+/// `--no-switch` on a directory that already has its session finds that session, makes no
+/// other and switches nothing.
+#[test]
+fn no_switch_on_a_session_that_exists_reuses_it_and_switches_nothing() {
+    let mut w = World::new();
+    w.attach("one");
+    let project = w.dir("code/already-there");
+    w.run(&w.root, &["open", s(&project)], true);
+    assert_eq!(w.client_session(), "already-there");
+    w.move_client_to("one");
+
+    let (code, envelope) = w.envelope(
+        &w.root,
+        &["open", "--json", "--no-switch", s(&project)],
+        true,
+    );
+
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(envelope["result"]["session"], "already-there", "{envelope}");
+    assert_eq!(envelope["result"]["created"], false, "{envelope}");
+    assert_eq!(envelope["result"]["switched"], false, "{envelope}");
+    assert_eq!(envelope["result"]["dir"], s(&project), "{envelope}");
+    assert_eq!(w.client_session(), "one", "the client moved");
+    assert_eq!(
+        w.sessions()
+            .iter()
+            .filter(|n| *n == "already-there")
+            .count(),
+        1,
+        "{:?}",
+        w.sessions()
+    );
+}
+
+/// `dir` is the folder that was opened, absolute, after `~`, a relative path and a zoxide
+/// term are resolved; it is there with and without `--no-switch`.
+#[test]
+fn json_names_the_folder_for_a_path_a_tilde_and_a_zoxide_term() {
+    let mut w = World::new();
+    w.attach("one");
+    let near = w.dir("code/near");
+    let under_home = w.dir("home/code/under-home");
+    let found = w.dir("elsewhere/found-by-zoxide");
+    w.zoxide_says(&[&found]);
+
+    for (args, want, label) in [
+        (
+            vec!["open", "--json", s(&near)],
+            s(&near),
+            "an absolute path",
+        ),
+        (
+            vec!["open", "--json", "code/near"],
+            s(&near),
+            "a relative path",
+        ),
+        (
+            vec!["open", "--json", "~"],
+            s(&w.home),
+            "the home directory",
+        ),
+        (
+            vec!["open", "--json", "~/code/under-home"],
+            s(&under_home),
+            "a path under ~",
+        ),
+        (vec!["open", "--json", "zed"], s(&found), "a zoxide term"),
+        (
+            vec!["open", "--json", "--no-switch", "zed"],
+            s(&found),
+            "a zoxide term, no switch",
+        ),
+    ] {
+        let (code, envelope) = w.envelope(&w.root, &args, true);
+        assert_eq!(code, 0, "{label}: {envelope}");
+        assert_eq!(envelope["result"]["dir"], want, "{label}: {envelope}");
+    }
+}
+
 // ----------------------------------------------------------- the home directory
 
 /// The home directory's session is called `~`, which tmux reads as the marked pane unless it
@@ -1277,6 +1402,7 @@ fn json_prints_the_envelope_session_open_prints() {
             "created": true,
             "collision": null,
             "switched": true,
+            "dir": s(&project),
         })
     );
     assert_eq!(w.client_session(), "scripted");
@@ -1290,17 +1416,22 @@ fn json_prints_the_envelope_session_open_prints() {
         .as_object()
         .unwrap()
         .keys()
+        .filter(|key| *key != "dir")
         .cloned()
         .collect();
     let mut want: Vec<_> = opened["result"]
         .as_object()
         .unwrap()
         .keys()
+        .filter(|key| *key != "dir")
         .cloned()
         .collect();
     keys.sort();
     want.sort();
-    assert_eq!(keys, want, "the same fields");
+    assert_eq!(
+        keys, want,
+        "the same fields, bar the folder only open names"
+    );
 }
 
 /// Outside tmux `--json` opens the session and attaches nothing: a script has no terminal to

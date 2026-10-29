@@ -294,17 +294,25 @@ fn autosave(ctx: &Ctx, on_close: bool) -> anyhow::Result<Value> {
 /// ([`session::create::open_or_create`]), then switches the current client to it.
 fn open(ctx: &Ctx, path: &str) -> anyhow::Result<Value> {
     let home = dirs::home_dir().context("resolving the home directory")?;
-    open_at(ctx, path, &home, common::current_pane().ok().as_deref())
+    open_at(
+        ctx,
+        path,
+        &home,
+        common::current_pane().ok().as_deref(),
+        true,
+    )
 }
 
-/// [`open`] with the home directory and the pane this runs in chosen by the caller. `taw
-/// open --json` prints this envelope for the directory it found, so a script gets the same
-/// answer from either.
+/// [`open`] with the home directory and the pane this runs in chosen by the caller, and
+/// with `switch` false for a run that moves no client (`taw open --no-switch`: `switched` is
+/// then false). `taw open --json` prints this envelope for the directory it found, so a
+/// script gets the same answer from either.
 pub(crate) fn open_at(
     ctx: &Ctx,
     path: &str,
     home: &Path,
     pane: Option<&str>,
+    switch: bool,
 ) -> anyhow::Result<Value> {
     let outcome = open_session(ctx, path, home)?;
 
@@ -313,7 +321,7 @@ pub(crate) fn open_at(
     // ask tmux for "the current one") and reports `false` rather than erroring when it
     // can't: a plugin or headless caller may still want the session created/found even
     // with nothing to switch.
-    let switched = common::switch_client(&ctx.tmux, &outcome.session_name, pane)?;
+    let switched = switch && common::switch_client(&ctx.tmux, &outcome.session_name, pane)?;
 
     Ok(json!({
         "session": outcome.session_name,

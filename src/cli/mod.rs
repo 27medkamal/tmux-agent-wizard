@@ -251,6 +251,10 @@ enum Group {
         /// not attached to the session
         #[arg(long)]
         json: bool,
+        /// Make or find the session and switch no client: nothing is moved, and nothing is
+        /// attached
+        #[arg(long)]
+        no_switch: bool,
     },
     /// Open the agent popup
     Ui {
@@ -715,8 +719,12 @@ fn dispatch(ctx: &Ctx, command: Group) -> (&'static str, Sub, anyhow::Result<Out
                 .map(|(fields, code)| Output::EnvelopeExit(fields, code));
             return ("config", "check", output);
         }
-        Group::Open { terms, json } => {
-            let output = open::run(ctx, terms, *json).map(|printed| match printed {
+        Group::Open {
+            terms,
+            json,
+            no_switch,
+        } => {
+            let output = open::run(ctx, terms, *json, *no_switch).map(|printed| match printed {
                 Some(fields) => Output::Envelope(fields),
                 None => Output::Nothing,
             });
@@ -1474,7 +1482,7 @@ mod tests {
         for (argv, want_terms, want_json) in cases {
             let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
             match cli.command {
-                Group::Open { terms, json } => {
+                Group::Open { terms, json, .. } => {
                     assert_eq!(terms, want_terms, "{argv:?}");
                     assert_eq!(json, want_json, "{argv:?}");
                 }

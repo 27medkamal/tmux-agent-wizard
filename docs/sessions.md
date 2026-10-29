@@ -79,7 +79,9 @@ the popup at once, as it does in tmux-session-wizard's `t`. Outside tmux,
 `taw open` says `taw open: name a directory or a zoxide term (the picker needs tmux)` and
 exits 2. A term that nothing matches is said in one line, as in
 `taw open: no directory matches api`, and exits 1. `--json` is for scripts: it prints the
-envelope `taw session open` prints, and attaches nothing. Outside tmux, `taw open` attaches
+envelope `taw session open` prints, with a `dir` that names the folder it opened, and attaches
+nothing. `--no-switch` makes or finds the session and moves no client, for a caller that is not
+the one looking at this machine. Outside tmux, `taw open` attaches
 the terminal it was typed in, so with no terminal (piped, or run from a script) it says
 `taw open: this is not a terminal, use --json to open without attaching` and exits 2,
 before it has made anything.

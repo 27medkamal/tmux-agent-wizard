@@ -92,7 +92,7 @@ pub fn host_key(dest: &str) -> String {
 
 /// [`host_key`] for a header that has little room; `dest` is the same.
 pub fn host_key_short(dest: &str) -> String {
-    format!("unknown host key: run ssh {dest} once")
+    format!("unknown host key: run ssh {dest}, accept it")
 }
 
 /// `seen` is how many seconds ago the machine was last heard from, `retry` in how many seconds the
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(login_short(), "ssh could not log in: run ssh-add");
         assert_eq!(
             host_key_short("studio.local"),
-            "unknown host key: run ssh studio.local once"
+            "unknown host key: run ssh studio.local, accept it"
         );
         assert_eq!(garbage_header(), "sent something taw does not read");
         assert_eq!(NO_KEEPER, "not connected: run taw app outside tmux");

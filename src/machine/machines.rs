@@ -71,6 +71,8 @@ impl Slot {
             view.last_seen
                 .map(|seen| now_ms.saturating_sub(seen) / 1000),
         );
+        // The short form belongs to the words it was made with, which are gone.
+        view.short.clear();
         Slot {
             received_at: file.and_then(|file| file.received_at),
             taw_version: file.and_then(|file| file.taw_version.clone()),
@@ -774,6 +776,25 @@ mod tests {
         // once and not at each try is the unit test of `CannotKeep` below (a count would need a field of
         // production code for the sake of one test).
         assert!(machines.cannot_keep_was_said());
+    }
+
+    #[test]
+    fn a_slot_made_from_a_steady_file_keeps_no_short_form_beside_its_made_up_words() {
+        let now_ms = 200_000;
+        let file = MachineFile {
+            name: "build-box".to_string(),
+            last_seen: Some(1_000),
+            words: words::login(),
+            short: words::login_short(),
+            ..MachineFile::default()
+        };
+        // Positive half: the file does say a steady login problem and the slot is made from it.
+        assert_eq!(file.short, "ssh could not log in: run ssh-add");
+        let slot = Slot::from_file("build-box", Some(&file), now_ms);
+        assert_eq!(slot.view.words, "connecting, last seen 3m ago");
+        assert_eq!(slot.view.short, "", "the view");
+        assert_eq!(slot.file().short, "", "the file the slot writes");
+        assert_eq!(slot.file().words, "connecting, last seen 3m ago");
     }
 
     fn paths_ctx(tmp: &std::path::Path) -> ConnCtx {

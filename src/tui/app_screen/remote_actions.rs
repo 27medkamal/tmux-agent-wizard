@@ -613,20 +613,26 @@ impl Rows {
     /// as it was.
     fn go_in_to_awaited(&mut self, app: &mut App) -> Option<Route> {
         let waiting = self.awaiting.as_ref()?;
-        if waiting.at != app.row_identity()
+        let is_awaited = |space: &crate::tui::data::SpaceRow| {
+            space.session_name == waiting.name
+                && space
+                    .machine
+                    .and_then(|at| app.snap.machines.get(at))
+                    .is_some_and(|header| header.name == waiting.machine)
+        };
+        // The empty-machine row is replaced by the new session's row on that machine, so the cursor that was
+        // on it and is now on the awaited session's row is where it was.
+        let empty_row = format!("empty row of {}", waiting.machine);
+        let on_new_row = waiting.at.as_deref() == Some(empty_row.as_str())
+            && matches!(app.current(), Some(crate::tui::tree::Row::Session(s)) if is_awaited(&app.snap.spaces[*s]));
+        if (waiting.at != app.row_identity() && !on_new_row)
             || app.overlay.is_open()
             || waiting.since.elapsed() >= SESSION_WAIT
         {
             self.awaiting = None;
             return None;
         }
-        let space = app.snap.spaces.iter().position(|space| {
-            space.session_name == waiting.name
-                && space
-                    .machine
-                    .and_then(|at| app.snap.machines.get(at))
-                    .is_some_and(|header| header.name == waiting.machine)
-        })?;
+        let space = app.snap.spaces.iter().position(is_awaited)?;
         let shown = app
             .rows
             .rows
@@ -2351,6 +2357,37 @@ mod rows_tests {
         assert!(feed.remote.settle(&mut app).is_empty());
         assert!(feed.remote.awaiting.is_none(), "the wait is over");
         assert_eq!(app.sel, to, "nothing was selected");
+    }
+
+    /// `n` on a machine's empty-machine row: the new session's row replaces it on the same machine, and the
+    /// cursor, which stays at that index, is on the awaited row. That is where it was: the app goes in.
+    /// Mutation: `go_in_to_awaited` stops counting the awaited session's row as the empty row's place.
+    #[test]
+    fn the_app_goes_in_when_the_new_row_replaces_the_empty_machine_row_under_the_cursor() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        let studio = app
+            .snap
+            .machines
+            .iter()
+            .position(|header| header.name == "studio")
+            .expect("studio's header");
+        app.rows.rows.push(Row::NoSession(studio));
+        let at = app.rows.rows.len() - 1;
+        app.sel = at;
+        assert_eq!(app.row_identity().as_deref(), Some("empty row of studio"));
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        list_session(&mut app, "newbie", false);
+        let newest = app.snap.spaces.len() - 1;
+        app.rows.rows[at] = Row::Session(newest);
+        let routes = feed.remote.settle(&mut app);
+        assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { machine, .. } if machine == "studio"),
+            "{routes:?}"
+        );
+        assert_eq!(app.sel, at, "the cursor is on the new row");
+        assert!(feed.remote.awaiting.is_none());
     }
 
     /// The happy path: the cursor stays on the row `n` was pressed on, the list shows the new row one settle

@@ -19,7 +19,7 @@ hidden keys, which move the stand-ins along). The agents and the sandbox are sta
   and the live part at the bottom (a permission or approval prompt, the spinner over the input
   box, or the idle input box and its footer), in the words, glyphs and dark-theme colours of the
   real programs. Gemini CLI's and OpenCode's short screens are in `screens/`.
-  Every word they draw fits the popup's preview (44 columns at the recording's 110), so the preview
+  Every word they draw fits the popup's preview (84 columns at the recording's 150), so the preview
   never wraps a stand-in's line: short sentences, commands and diff lines, a longer sentence wrapped
   at a word the way the real programs wrap in a narrow terminal (`python3 scripts/demo/screen.py
   check` lists any line that does not fit). The stand-ins draw on the terminal's alternate screen,
@@ -64,11 +64,11 @@ PATH=/opt/homebrew/bin:$PATH python3 scripts/demo/make-gif.py
 The GIF is told by a storyboard, `story.txt`: one line per step, with the keys pressed, the caption (the key,
 then what it does in plain words), how long the step lasts, a still to take, and what the step's highlight goes
 around. `make-gif.py` writes `dist/demo.tape` from it and runs vhs on it, which writes every frame as a PNG into
-`dist/frames/` (no video codec in between, so coloured text stays sharp). It is recorded at about twice the size
-GitHub shows it: 1736 px wide, 110 columns by 34 rows of JetBrainsMono at 24 px, wide enough for the popup to draw
-the preview beside the tree (taw does from 100 columns), Catppuccin Mocha on its darkest base (`#11111b`), 15 frames
-a second. GitHub draws a README image at most as wide as its column (about 830 to 880 px), so every column more
-makes the text smaller there. Edit the storyboard, never the tape.
+`dist/frames/` (no video codec in between, so coloured text stays sharp). It is recorded 2350 px wide, 150 columns
+by 34 rows of JetBrainsMono at 24 px, Catppuccin Mocha on its darkest base (`#11111b`), 15 frames a second: a wide
+screen, so the list keeps the width taw gives it and the preview beside it is big. GitHub draws a README image at
+most as wide as its column (about 830 to 880 px), so the README shows the text smaller than a 110-column recording
+would; the video in full size shows it large. Edit the storyboard, never the tape.
 
 The captions sit in a band under the terminal: each is a rounded dark pill with keycaps for the keys (`prefix + A`
 is a `prefix` key and an `A` key) and the words in Inter, drawn once as a transparent PNG by `magick` and laid over

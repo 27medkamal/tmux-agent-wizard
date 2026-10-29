@@ -14,7 +14,7 @@ Output dist/stills.mp4
 Set Shell "bash"
 Set FontFamily "JetBrainsMono Nerd Font"
 Set FontSize 24
-Set Width 1736
+Set Width 2350
 Set Height 1124
 Set Padding 24
 Set Framerate 15

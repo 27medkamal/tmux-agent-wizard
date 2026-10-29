@@ -62,10 +62,10 @@ CAPDIR = os.path.join(DIST, "captures")
 REPLAY = "taw-demo-replay"  # the private tmux server the client's output is played back into
 
 TYPING = 0.05  # seconds a key or a typed character costs in the tape (Set TypingSpeed)
-# The terminal: about twice the size the README shows it, 110 columns of 15 px cells (JetBrainsMono at 24 px) by
-# about 34 rows, wide enough for taw to draw the preview beside the tree (100 columns or more), narrow enough that
-# the text stays readable at the 830 to 880 px GitHub draws the README GIF at (every column more makes it smaller).
-WIDTH, HEIGHT, FONT_SIZE, PADDING = 1736, 1124, 24, 24
+# The terminal: 150 columns of 15 px cells (JetBrainsMono at 24 px) by about 34 rows, a wide screen so the list keeps
+# the width taw gives it and the preview beside it is big. The README draws the GIF at 830 to 880 px, so every
+# column more makes the text smaller there; 150 was chosen for a bigger preview over bigger README text.
+WIDTH, HEIGHT, FONT_SIZE, PADDING = 2350, 1124, 24, 24
 # The caption band under the terminal: the GIF is WIDTH by HEIGHT + BAND, the pill centred in the band.
 BAND = 104
 FPS = 15  # vhs records at this rate, and the GIF keeps it (lower it, never the size, if the GIF passes 8 MB)

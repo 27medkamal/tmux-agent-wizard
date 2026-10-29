@@ -1,7 +1,8 @@
 //! The app's top line: what it is and how many sessions and agents it lists on the left, the clock on
 //! the right. A toast takes the left's place. What needs you is on the list's border, and each machine
 //! that is away says so on its own header; only an away machine no header names (a flat list, a
-//! filter or a view that hides it) is named here, before the clock.
+//! filter or a view that hides it) is named here, before the clock; on a narrow line the clock goes
+//! first, then the left's counts are cut, and the away words stay.
 
 use super::*;
 
@@ -17,43 +18,72 @@ fn clock(app: &App) -> String {
     clock_text(ms, crate::session::restore::local_offset(ms / 1000))
 }
 
+/// The line's own name, the start of its left.
+const NAME: &str = " taw app";
+
 /// `1 session`, `2 sessions`.
 fn counted(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
-/// The line itself, `width` columns. The right is dropped when it would leave the left under half
-/// the line, and the left is cut with an ellipsis to what is left.
+/// The line itself, `width` columns. The right is the clock after any away machine words, and the
+/// clock goes first when the line is narrow (the right's priorities are below); the left is cut with
+/// an ellipsis to what is left.
 pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
     let theme = &app.theme;
     let fg = Style::default().fg(theme.fg);
     let dim = Style::default().fg(theme.dim);
     let counts = app.bar_counts();
 
-    // The right: the clock, after the away machines that no header of the list names (none in the
-    // plain tree, where every away machine has a header).
+    // The right, by priority: the away machines that no header of the list names (none in the plain
+    // tree, where every away machine has a header) with the clock, when they fit in half the line;
+    // else the away words alone when they fit in half; else, with no toast, the away words anyway,
+    // up to what the left's name leaves, cut with an ellipsis only when even that is too narrow. With
+    // none away it is the clock alone, shown while it fits. The clock goes before the away words,
+    // never the other way round, so a machine is named wherever the line has the room.
     let away = app.away_unheaded();
-    let mut right_spans = Vec::new();
-    if !away.is_empty() {
-        right_spans.push(Span::styled(
-            words::away_names(&away),
-            Style::default().fg(theme.yellow),
-        ));
-        right_spans.push(Span::styled("  \u{2502}  ", dim));
-    }
-    right_spans.push(Span::styled(clock(app), dim));
-    let right = Line::from(right_spans);
+    let toast = app.live_toast();
+    let half = width / 2;
+    let clock_span = Span::styled(clock(app), dim);
+    // The clock alone, or nothing when it would take more than half the line.
+    let clock_alone = Line::from(clock_span.clone());
+    let clock_alone = if line_width(&clock_alone) + 2 <= half {
+        clock_alone
+    } else {
+        Line::default()
+    };
+    let right = if away.is_empty() {
+        clock_alone
+    } else {
+        let words_span = Span::styled(words::away_names(&away), Style::default().fg(theme.yellow));
+        let words_only = Line::from(words_span.clone());
+        let both = Line::from(vec![
+            words_span,
+            Span::styled("  \u{2502}  ", dim),
+            clock_span,
+        ]);
+        if line_width(&both) + 2 <= half {
+            both
+        } else if line_width(&words_only) + 2 <= half {
+            words_only
+        } else if toast.is_none() {
+            let most = width.saturating_sub(line_width(&Line::from(NAME)) + 2);
+            truncate_line(words_only, most, theme.dim)
+        } else {
+            clock_alone
+        }
+    };
     let right_width = line_width(&right);
 
     // The left: a toast, or the name and the counts.
-    let left = if let Some(toast) = app.live_toast() {
+    let left = if let Some(toast) = toast {
         Line::from(Span::styled(
             format!(" {toast}"),
             Style::default().fg(theme.yellow),
         ))
     } else {
         let mut spans = vec![Span::styled(
-            " taw app",
+            NAME,
             Style::default()
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
@@ -67,7 +97,7 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
         Line::from(spans)
     };
 
-    let show_right = right_width + 2 <= width / 2;
+    let show_right = right_width > 0;
     let room = if show_right {
         width.saturating_sub(right_width + 1)
     } else {
@@ -321,6 +351,143 @@ mod tests {
         let line = text(&app_top_line(&a, 150));
         assert_eq!(named(&line), 1, "{line:?}");
         assert_eq!(a.bar_counts().away, ["pi"]);
+    }
+
+    fn flat_app<'a>(cfg: &'a mut Config, snap: Snapshot) -> App<'a> {
+        cfg.ui.layout = crate::config::Layout::Flat;
+        let mut a = app(cfg);
+        a.set_snapshot(snap);
+        a
+    }
+
+    /// The sample world with two machines that never answered, long names both.
+    fn two_long_away() -> Snapshot {
+        let mut snap = snapshot();
+        snap.machines = ["mac-studio", "raspberry-pi"]
+            .iter()
+            .map(|name| MachineHeader {
+                name: (*name).into(),
+                live: false,
+                words: "not answering, trying again in 30s".into(),
+                ..MachineHeader::default()
+            })
+            .collect();
+        snap
+    }
+
+    fn clock_of(a: &App) -> String {
+        clock_text(
+            a.wall_ms(),
+            crate::session::restore::local_offset(a.wall_ms() / 1000),
+        )
+    }
+
+    /// A narrow flat line still names the machine that never answered, once: at 60 columns beside the
+    /// clock, at 40 the clock has gone and the words stay.
+    #[test]
+    fn a_narrow_line_drops_the_clock_before_the_away_machines_name() {
+        let mut cfg = cfg();
+        let a = flat_app(&mut cfg, away_world(false));
+        let clock = clock_of(&a);
+        let sixty = text(&app_top_line(&a, 60));
+        assert_eq!(named(&sixty), 1, "{sixty:?}");
+        assert_eq!(sixty.chars().count(), 60, "{sixty:?}");
+        assert!(sixty.trim_end().ends_with(&clock), "{sixty:?}");
+        assert!(sixty.contains(" taw app"), "{sixty:?}");
+        let forty = text(&app_top_line(&a, 40));
+        assert_eq!(named(&forty), 1, "{forty:?}");
+        assert_eq!(forty.chars().count(), 40, "{forty:?}");
+        assert!(!forty.contains(&clock), "no clock at 40: {forty:?}");
+        assert!(forty.contains(" taw app"), "{forty:?}");
+    }
+
+    /// Two long names do not fit in half of 80 columns, even without the clock: both are still named,
+    /// and the clock gives way, not the names.
+    #[test]
+    fn two_long_away_names_at_eighty_columns_are_both_named() {
+        let mut cfg = cfg();
+        let a = flat_app(&mut cfg, two_long_away());
+        let line = text(&app_top_line(&a, 80));
+        assert_eq!(line.chars().count(), 80, "{line:?}");
+        assert!(
+            line.contains("mac-studio, raspberry-pi not connected"),
+            "{line:?}"
+        );
+        assert!(!line.contains(&clock_of(&a)), "{line:?}");
+        assert!(line.starts_with(" taw app"), "{line:?}");
+        assert!(line.contains(" agents"), "{line:?}");
+    }
+
+    /// One long name at 60 columns: the words and the clock do not fit in half, the words alone do, so
+    /// the clock goes and the name stays.
+    #[test]
+    fn a_long_away_name_at_sixty_columns_keeps_its_name_and_loses_the_clock() {
+        let mut cfg = cfg();
+        let mut snap = two_long_away();
+        snap.machines.truncate(1);
+        let a = flat_app(&mut cfg, snap);
+        let line = text(&app_top_line(&a, 60));
+        assert_eq!(line.chars().count(), 60, "{line:?}");
+        assert!(line.contains("mac-studio not connected"), "{line:?}");
+        assert!(!line.contains(&clock_of(&a)), "{line:?}");
+        // The left's counts are cut to make room, its name is not.
+        assert!(line.starts_with(" taw app"), "{line:?}");
+    }
+
+    /// Too narrow even for the words, they are cut with an ellipsis and the line keeps its width.
+    #[test]
+    fn away_words_wider_than_the_line_are_cut_with_an_ellipsis() {
+        let mut cfg = cfg();
+        let a = flat_app(&mut cfg, two_long_away());
+        let line = text(&app_top_line(&a, 40));
+        assert_eq!(line.chars().count(), 40, "{line:?}");
+        assert!(line.starts_with(" taw app"), "{line:?}");
+        assert!(line.contains("mac-studio, raspberry-"), "{line:?}");
+        assert!(line.trim_end().ends_with('\u{2026}'), "{line:?}");
+    }
+
+    /// The plain tree has a header for every away machine, so the narrow line is as it was: the clock alone.
+    #[test]
+    fn the_plain_tree_at_thirty_columns_keeps_the_clock_alone() {
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        a.set_snapshot(away_world(false));
+        assert!(a.rows.rows.contains(&Row::Machine(Some(1))));
+        let line = text(&app_top_line(&a, 30));
+        assert_eq!(line.chars().count(), 30, "{line:?}");
+        assert!(line.trim_end().ends_with(&clock_of(&a)), "{line:?}");
+        assert!(
+            !line.contains("not connected") && !line.contains("pi"),
+            "{line:?}"
+        );
+    }
+
+    /// A toast keeps the left whole; the away words sit beside it while they fit in half, and are back
+    /// once the toast has gone.
+    #[test]
+    fn a_toast_stays_whole_beside_the_away_words() {
+        let mut cfg = cfg();
+        let mut a = flat_app(&mut cfg, away_world(false));
+        a.toast("studio is read only");
+        let line = text(&app_top_line(&a, 60));
+        assert!(line.starts_with(" studio is read only "), "{line:?}");
+        assert_eq!(named(&line), 1, "{line:?}");
+        assert_eq!(line.chars().count(), 60, "{line:?}");
+        // Words that do not fit in half leave the toast the line, with the clock.
+        let mut cfg = crate::config::Config::default();
+        cfg.ui.depth = Depth::All;
+        let mut a = flat_app(&mut cfg, two_long_away());
+        a.toast("studio is read only");
+        let line = text(&app_top_line(&a, 60));
+        assert!(line.starts_with(" studio is read only "), "{line:?}");
+        assert!(!line.contains("not connected"), "{line:?}");
+        assert!(line.trim_end().ends_with(&clock_of(&a)), "{line:?}");
+        // The toast gone, the words are back.
+        let mut cfg = crate::config::Config::default();
+        cfg.ui.depth = Depth::All;
+        let a = flat_app(&mut cfg, two_long_away());
+        let line = text(&app_top_line(&a, 60));
+        assert!(line.contains("not connected"), "{line:?}");
     }
 
     /// A machine nobody keeps, or this tmux server's own, is never named as away.

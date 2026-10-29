@@ -11,6 +11,11 @@ function load(html, opts = {}) {
   let script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
   script = script.replace(/\}\)\(\);\s*$/, 'globalThis.__peek = () => ({ agentScreen, SCREENS, PREV, cols: () => COLS }); })();');
   let clock = 1_000_000; const errors = [];
+  // The page's timers: a callback waits in the queue until `flush` runs it, so a toast, a notice or a page note
+  // clears when the run says so and the drawing after it is checked like any other.
+  let timers = new Map(), timerId = 0;
+  const setTimeout = f => { timers.set(++timerId, f); return timerId; };
+  const clearTimeout = id => { timers.delete(id); };
   let measures = 0;
   const rect = () => (measures++, { top: 0, left: 0, bottom: opts.rectH || 0, right: 0, width: opts.rectW || 0, height: opts.rectH || 0 });
   class El {
@@ -46,7 +51,7 @@ function load(html, opts = {}) {
   class KeyboardEvent { constructor(t, e) { Object.assign(this, e); this.type = t; } }
   class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } }
   class ResizeObserver { constructor(f) { this.f = f; } observe() {} }
-  const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout: () => 0, clearTimeout: () => {}, Date: { now: () => clock }, console };
+  const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout, clearTimeout, Date: { now: () => clock }, console };
   ctx.globalThis = ctx;
   vm.runInNewContext(script, ctx, { filename: 'try-script.js' });
   const SHIFT = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZ?!@#$%^&*()"<>:'.split(''));
@@ -68,6 +73,7 @@ function load(html, opts = {}) {
     measures: () => measures,
     fontSize: () => term.style.fontSize,
     cols: () => ctx.__peek().cols(),
+    flush() { const due = [...timers]; for (const [id, f] of due) if (timers.delete(id)) f(); return due.length; },
   };
   return api;
 }
@@ -133,7 +139,10 @@ for (const cols of [160, 100, 99, 60]) {
       if (!step(p, cols, where, () => view(p))) continue;
       if (name !== 'the first view' && name !== 'the flat list' && name !== 'the away machine live') continue;
       step(p, cols, where, () => { for (let i = 0; i < 40; i++) p.key('j'); });
-      for (const sc of ['ask', 'finish', 'look', 'reset', 'rask']) step(p, cols, where + ', scenario ' + sc, () => p.scenario(sc));
+      for (const sc of ['ask', 'finish', 'look', 'reset', 'rask']) {
+        step(p, cols, where + ', scenario ' + sc, () => p.scenario(sc));
+        step(p, cols, where + ', scenario ' + sc + ' and its timers', () => p.flush());
+      }
     }
   }
 }
@@ -182,7 +191,8 @@ for (const cols of [160, 100, 99, 60]) {
       else if (x < 0.68) { const w = pick(WORDS); name = 'type ' + w; fn = () => p.type(w); }
       else if (x < 0.8) { const n = pick(Object.keys(RADIOS)), v = pick(RADIOS[n]); name = `radio ${n}=${v}`; fn = () => p.radio(n, v); }
       else if (x < 0.9) { const id = pick(CHECKS), on = r() < 0.5; name = `check ${id}=${on}`; fn = () => p.check(id, on); }
-      else if (x < 0.95) { const s = pick(SC); name = 'scenario ' + s; fn = () => p.scenario(s); }
+      else if (x < 0.93) { const s = pick(SC); name = 'scenario ' + s; fn = () => p.scenario(s); }
+      else if (x < 0.97) { name = 'the timers run'; fn = () => p.flush(); }
       else { const l = Math.floor(r() * ROWS); name = 'click ' + l; fn = () => p.click(l); }
       if (!step(p, cols, `fuzz run ${run} step ${i} (${name})`, fn)) break;
     }

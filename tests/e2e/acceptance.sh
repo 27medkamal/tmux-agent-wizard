@@ -4160,7 +4160,7 @@ rm_g_name="rmnew"; rm_g_hand=""   # short: the status line of studio's tmux cuts
 rm_g_hand_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_g_hand" '$1 == p { print $2 }'; }
 rm_g_app_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_g_hand" '$1 != p { print $2 }'; }
 rm_g_session_there() { rm_far_tm list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF "$rm_g_name"; }
-rm_g_asked() { local n=$(($1 + 1)) c=0 f; while [ "$n" -le "$(rm_calls)" ]; do f="$rm_dir/calls/$n"; tr '\0' ' ' < "$f" | grep -qF "'open' '--json' '--no-switch' '--' " && c=$((c+1)); n=$((n+1)); done; echo "$c"; }
+rm_g_asked() { local n=$(($1 + 1)) c=0 f; while [ "$n" -le "$(rm_calls)" ]; do f="$rm_dir/calls/$n"; tr '\0' ' ' < "$f" | grep -qF "'open' '--json' '--no-switch' '--' '~/$rm_g_name'" && c=$((c+1)); n=$((n+1)); done; echo "$c"; }
 rm_g_row_gone() { ! rm_has "$rm_g_name"; }
 if rm_live "(g) n on studio's row"; then
 mkdir -p "$rm_h/$rm_g_name"
@@ -4186,7 +4186,9 @@ if [ "$rm_dead" = 0 ]; then
   rm_press Enter
   rm_wait 15000 rm_g_session_there
   check "(g) studio's own server has the session" "1" "$(rm_g_session_there && echo 1 || echo 0)"
-  check "(g) studio's taw was asked as the app asks it: open --json --no-switch -- <the folder>" "1" "$(rm_g_asked "$rm_g_calls")"
+  check "(g) studio's taw was asked as the app asks it: open --json --no-switch -- ~/<the folder>" "1" "$(rm_g_asked "$rm_g_calls")"
+  # The session starts in the folder that was typed, studio's own ~/rmnew (its real path, as tmux records it).
+  check "(g) the new session's start directory is the folder that was typed" "$(unset CDPATH; cd "$rm_h/$rm_g_name" && pwd -P)" "$(rm_far_tm display-message -p -t "=$rm_g_name:" '#{session_path}' 2>/dev/null)"
   rm_see "(g) the app goes into the session: studio's tmux is on the screen, at it" "[$rm_g_name]"
 fi
 if [ "$rm_dead" = 0 ]; then

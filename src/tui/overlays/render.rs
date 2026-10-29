@@ -122,9 +122,14 @@ pub fn render(
             text_overlay(f, area, theme, " settings ", lines, scroll.0, [0.9, 0.9]);
         }
         Overlay::Project(picker) => {
-            let title = match chrome.app {
-                Some(AppLook { machines: true, .. }) => " new session on this Mac ",
-                _ => " new session ",
+            let far_title = picker
+                .far
+                .as_ref()
+                .map(|far| crate::machine::words::far_picker_title(&far.machine));
+            let title = match (&far_title, chrome.app) {
+                (Some(title), _) => title.as_str(),
+                (None, Some(AppLook { machines: true, .. })) => " new session on this Mac ",
+                (None, _) => " new session ",
             };
             render_project(f, area, theme, picker, title, hits);
         }
@@ -433,6 +438,40 @@ fn render_project(
             Style::default().fg(theme.red),
         )));
     }
+    // Another machine's picker says it is asking that machine until the answer comes, and shows the far
+    // error's own words when the ask failed.
+    if let Some(far) = &picker.far {
+        if far.asking {
+            tail.push(Line::from(Span::styled(
+                format!(
+                    " {}",
+                    crate::machine::words::asking_for_folders(&far.machine)
+                ),
+                Style::default().fg(theme.dim),
+            )));
+        }
+        if far.truncated {
+            tail.push(Line::from(Span::styled(
+                format!(" {}", crate::machine::words::folders_cut(&far.machine)),
+                Style::default().fg(theme.dim),
+            )));
+        }
+        if let Some(said) = &far.sessions_error {
+            tail.push(Line::from(Span::styled(
+                format!(
+                    " {}",
+                    crate::machine::words::far_sessions_error(&far.machine, said)
+                ),
+                Style::default().fg(theme.red),
+            )));
+        }
+        if let Some(said) = &far.said {
+            tail.push(Line::from(Span::styled(
+                format!(" {said}"),
+                Style::default().fg(theme.red),
+            )));
+        }
+    }
 
     let wanted = 1 + picker.candidates.len() + tail.len() + 2;
     let w = box_size(area.width * 4 / 5, 30, area.width);
@@ -516,6 +555,21 @@ fn outcome_line(picker: &ProjectPicker, theme: &Theme) -> Line<'static> {
         ));
     };
     let prefix = Span::styled(" Enter: ", dim);
+    if let Some(far) = &picker.far {
+        return Line::from(vec![
+            prefix,
+            match &outcome.running {
+                Some(name) => Span::styled(
+                    crate::machine::words::far_running(&far.machine, name),
+                    Style::default().fg(theme.green),
+                ),
+                None => Span::styled(
+                    crate::machine::words::far_open(&far.machine, &outcome.target),
+                    Style::default().fg(theme.fg),
+                ),
+            },
+        ]);
+    }
     match (&outcome.running, outcome.exists) {
         (Some(name), _) => Line::from(vec![
             prefix,
@@ -712,6 +766,68 @@ mod render_tests {
             letters_work: true,
             machines: false,
         }
+    }
+
+    /// Another machine's picker is titled for it and says it is asking it until the answer comes; the answer's
+    /// folders are listed with their tags, Enter says it opens there, and a far error shows its own words.
+    /// Mutation: the far title is left out (the picker keeps `new session`).
+    #[test]
+    fn another_machines_picker_says_whose_it_is_and_that_it_is_asking() {
+        use crate::tui::picker::FarFolder;
+        let home = tempfile::tempdir().unwrap();
+        let mut picker = ProjectPicker::far(
+            &Config::default(),
+            home.path(),
+            "studio",
+            Default::default(),
+        );
+        let text = drawn(&Overlay::Project(Box::new(picker.clone())), 100, 14);
+        assert!(text.contains(" new session on studio "), "{text}");
+        assert!(!text.contains("this Mac"), "{text}");
+        assert!(text.contains("asking studio for its folders"), "{text}");
+        picker.set_far_answer(Ok(crate::tui::picker::FarList {
+            folders: vec![
+                FarFolder {
+                    kind: "session".into(),
+                    name: "~/code/garden".into(),
+                    dir: "/home/studio/code/garden".into(),
+                    session: Some("garden".into()),
+                },
+                FarFolder {
+                    kind: "zoxide".into(),
+                    name: "~/web".into(),
+                    dir: "/home/studio/web".into(),
+                    session: None,
+                },
+            ],
+            truncated: true,
+            sessions_error: Some("server exited unexpectedly".into()),
+        }));
+        let text = drawn(&Overlay::Project(Box::new(picker.clone())), 100, 14);
+        assert!(!text.contains("asking studio"), "{text}");
+        assert!(
+            text.contains("studio has more folders than it listed"),
+            "{text}"
+        );
+        assert!(
+            text.contains("studio: tmux could not list its sessions: server exited unexpectedly"),
+            "{text}"
+        );
+        assert!(text.contains("~/code/garden"), "{text}");
+        assert!(text.contains("running"), "{text}");
+        assert!(text.contains("~/web"), "{text}");
+        assert!(
+            text.contains("go to running session \"garden\" on studio"),
+            "{text}"
+        );
+        picker.move_by(1);
+        picker.refresh(&Snapshot::default(), &Config::default(), home.path(), &[]);
+        let text = drawn(&Overlay::Project(Box::new(picker.clone())), 100, 14);
+        assert!(text.contains("open ~/web on studio"), "{text}");
+        picker.set_far_answer(Err("studio: permission denied".into()));
+        let text = drawn(&Overlay::Project(Box::new(picker)), 100, 14);
+        assert!(text.contains("studio: permission denied"), "{text}");
+        assert!(text.contains("~/web"), "the list it had stays: {text}");
     }
 
     /// Everything `render` draws, as text, for a `w`x`h` popup.

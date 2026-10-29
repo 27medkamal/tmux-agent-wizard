@@ -329,6 +329,11 @@ pub struct App<'a> {
     /// zoxide's directories, queried once by the run loop for the project picker and for the
     /// filter's directories ([`App::set_zoxide`]).
     pub zoxide: Vec<String>,
+    /// The last folders each other machine gave its picker in this run of the app, by the machine's name: `n`
+    /// there shows them at once while it asks again.
+    pub far_folders: std::collections::HashMap<String, crate::tui::picker::FarList>,
+    /// The machine whose folders `n` asked for, until the screen sends the ask ([`App::take_far_ask`]).
+    pub far_ask: Option<String>,
     /// The directories the `/` filter lists under the sessions while it is open and
     /// `[ui] projects_in_filter` is on: what the project picker would list for the query,
     /// at most [`FILTER_PROJECTS`], with its tags. The [`Row::Project`] rows index it.
@@ -406,6 +411,8 @@ impl<'a> App<'a> {
             clock_ms: None,
             settings,
             zoxide: Vec::new(),
+            far_folders: std::collections::HashMap::new(),
+            far_ask: None,
             projects: Vec::new(),
             projects_scroll: 0,
             home: dirs::home_dir().unwrap_or_default(),

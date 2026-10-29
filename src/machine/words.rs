@@ -350,6 +350,42 @@ pub fn new_session_prompt(machine: &str) -> String {
     format!("new session on {machine}: a folder or a zoxide term")
 }
 
+/// The title of the picker `n` opens on a row of `machine` in the app, filled from that machine's taw.
+pub fn far_picker_title(machine: &str) -> String {
+    format!(" new session on {machine} ")
+}
+
+/// What the picker for `machine` says until that machine has told its folders.
+pub fn asking_for_folders(machine: &str) -> String {
+    format!("asking {machine} for its folders")
+}
+
+/// What Enter does in the picker for `machine`: `target`, a folder it listed or the typed text, is opened there.
+pub fn far_open(machine: &str, target: &str) -> String {
+    format!("open {target} on {machine}")
+}
+
+/// What Enter does in the picker for `machine` on a folder with the session `name` running in it.
+pub fn far_running(machine: &str, name: &str) -> String {
+    format!("go to running session \"{name}\" on {machine}")
+}
+
+/// What the picker for `machine` says when that machine cut its list short (it has more folders than it tells).
+pub fn folders_cut(machine: &str) -> String {
+    format!("{machine} has more folders than it listed")
+}
+
+/// What the picker for `machine` says when tmux there could not list its sessions (`said`, tmux's own words):
+/// the folders are listed, none as running.
+pub fn far_sessions_error(machine: &str, said: &str) -> String {
+    format!("{machine}: tmux could not list its sessions: {said}")
+}
+
+/// What the picker for `machine` says when its answer was not a list of folders taw can read.
+pub fn folders_unreadable(machine: &str) -> String {
+    format!("{machine} answered with folders taw cannot read")
+}
+
 /// What the app says when `machine` made a session for `dir` (`created`), or already had one there.
 pub fn session_made(machine: &str, name: &str, dir: &str, created: bool) -> String {
     if created {

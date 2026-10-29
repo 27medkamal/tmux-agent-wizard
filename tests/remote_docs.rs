@@ -723,3 +723,29 @@ fn the_docs_say_taw_opens_no_switch_and_dir_and_the_far_ns_limits() {
         "the --json help never names `dir`"
     );
 }
+
+/// The docs say what `n` on another machine's row does in the app now (that machine's picker, filled from its taw,
+/// kept per run, filtered here) and what an older taw there gets instead, in the words the app shows.
+#[test]
+fn the_docs_say_the_far_n_opens_that_machines_picker_and_an_older_taw_gets_the_prompt() {
+    let machines = flat(&read("docs/machines.md"));
+    for needle in [
+        "opens that machine's picker at once, titled `new session on studio`",
+        "`asking studio for its folders`",
+        "`taw session candidates --json`",
+        "a later `n` there shows it at once and asks again",
+        "nothing typed is completed over ssh",
+        "`studio has more folders than it listed`",
+        "A taw there older than `taw session candidates` turns the picker into the prompt `new session on studio: a folder or a zoxide term`",
+    ] {
+        assert!(
+            machines.contains(needle),
+            "docs/machines.md never says {needle:?}"
+        );
+    }
+    let keys = flat(&read("docs/keys.md"));
+    assert!(
+        keys.contains("the app opens that machine's picker, filled from that machine's taw"),
+        "docs/keys.md never says what n does on another machine's row"
+    );
+}

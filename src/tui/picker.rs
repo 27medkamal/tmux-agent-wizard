@@ -120,6 +120,59 @@ pub struct ProjectPicker {
     home: PathBuf,
     mode: NameMode,
     sessions: Vec<Running>,
+    /// Set for the picker of another machine ([`ProjectPicker::far`]): its list is that machine's answer,
+    /// filtered here, and Enter makes the session there. `None` for this machine's own picker.
+    pub far: Option<Far>,
+}
+
+/// A folder another machine's taw offered (`taw session candidates --json`), for that machine's picker.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FarFolder {
+    /// `session`, `zoxide` or `project`, as [`Offered::kind`].
+    pub kind: String,
+    /// The folder in tilde form, as that machine shows it.
+    pub name: String,
+    /// The folder, absolute on that machine: what Enter sends.
+    pub dir: String,
+    /// The session running in the folder there, when there is one.
+    pub session: Option<String>,
+}
+
+/// What another machine's taw listed for its picker: the folders, whether the list was cut (`truncated`), and
+/// tmux's own words when tmux there failed for a reason other than no server (the folders are still listed).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FarList {
+    pub folders: Vec<FarFolder>,
+    pub truncated: bool,
+    pub sessions_error: Option<String>,
+}
+
+/// What another machine answered when its picker asked for its folders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FarAnswer {
+    Folders(FarList),
+    /// The taw there is older than `session candidates`: the app asks for a folder or a term instead.
+    OldTaw,
+    /// Any other failure, in the words to show.
+    Said(String),
+}
+
+/// What the picker of another machine knows: whose it is, the list it was given, and whether it waits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Far {
+    pub machine: String,
+    /// The last list the machine gave in this run of the app; empty until one came.
+    pub folders: Vec<FarFolder>,
+    /// That list was cut short over there.
+    pub truncated: bool,
+    /// tmux's own words on that machine, when it could not list the sessions there.
+    pub sessions_error: Option<String>,
+    /// The machine has been asked and has not answered yet.
+    pub asking: bool,
+    /// The far error's own words, when the last ask failed.
+    pub said: Option<String>,
+    /// The index in `folders` of each candidate, in the candidates' order.
+    shown: Vec<usize>,
 }
 
 /// `Input` has no `PartialEq` (it wraps `tui_input`'s, which has none either), so the
@@ -136,6 +189,7 @@ impl PartialEq for ProjectPicker {
             && self.home == other.home
             && self.mode == other.mode
             && self.sessions == other.sessions
+            && self.far == other.far
     }
 }
 
@@ -156,7 +210,144 @@ impl ProjectPicker {
             home: home.to_path_buf(),
             mode: cfg.sessions.name,
             sessions: Vec::new(),
+            far: None,
         }
+    }
+
+    /// The picker of `machine`, another machine: it shows `kept`, the list that machine gave last in this run
+    /// of the app (none the first time), and says it is asking; [`Self::set_far_answer`] fills it.
+    pub fn far(cfg: &Config, home: &Path, machine: &str, kept: FarList) -> ProjectPicker {
+        let mut picker = ProjectPicker::new(cfg, home);
+        picker.far = Some(Far {
+            machine: machine.to_string(),
+            folders: kept.folders,
+            truncated: kept.truncated,
+            sessions_error: kept.sessions_error,
+            asking: true,
+            said: None,
+            shown: Vec::new(),
+        });
+        picker.refresh_far();
+        picker
+    }
+
+    /// The machine's answer: its folders replace the list (what is typed stays, and the cursor stays on the same
+    /// folder when it is still listed), or its error is shown over the list it had.
+    pub fn set_far_answer(&mut self, folders: Result<FarList, String>) {
+        let Some(far) = self.far.as_mut() else {
+            return;
+        };
+        let was = far
+            .shown
+            .get(self.sel)
+            .and_then(|at| far.folders.get(*at))
+            .map(|folder| folder.dir.clone());
+        far.asking = false;
+        match folders {
+            Ok(list) => {
+                far.folders = list.folders;
+                far.truncated = list.truncated;
+                far.sessions_error = list.sessions_error;
+                far.said = None;
+            }
+            Err(said) => far.said = Some(said),
+        }
+        self.refresh_far();
+        if let (Some(was), Some(far)) = (was, self.far.as_ref()) {
+            self.sel = far
+                .shown
+                .iter()
+                .position(|at| far.folders[*at].dir == was)
+                .unwrap_or(0);
+        }
+    }
+
+    /// [`Self::refresh`] for another machine's picker: its folders, fuzzy-ranked against what is typed by the
+    /// picker's own matcher, and nothing read here (what is typed is never completed over ssh).
+    fn refresh_far(&mut self) {
+        let typed = self.input.value().trim().to_string();
+        let Some(far) = self.far.as_mut() else {
+            return;
+        };
+        let query = Query {
+            text: typed.clone(),
+        };
+        let mut scored: Vec<(i64, usize)> = far
+            .folders
+            .iter()
+            .enumerate()
+            .filter_map(|(at, folder)| {
+                if typed.is_empty() {
+                    Some((0, at))
+                } else {
+                    tree::score(&query, &folder.name).map(|(score, _)| (score, at))
+                }
+            })
+            .collect();
+        scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        far.shown = scored
+            .into_iter()
+            .take(MAX_CANDIDATES)
+            .map(|(_, at)| at)
+            .collect();
+        self.candidates = far
+            .shown
+            .iter()
+            .map(|at| Candidate {
+                path: far.folders[*at].name.clone(),
+                source: Source::Zoxide,
+                is_dir_prefix: false,
+            })
+            .collect();
+        self.tags = far
+            .shown
+            .iter()
+            .map(|at| match far.folders[*at].kind.as_str() {
+                "session" => Some(Tag::Running),
+                "zoxide" => Some(Tag::Zoxide),
+                "project" => Some(Tag::ProjectDir),
+                _ => None,
+            })
+            .collect();
+        if self.sel >= self.candidates.len() {
+            self.sel = 0;
+        }
+        let picked = far.shown.get(self.sel).map(|at| &far.folders[*at]);
+        self.outcome = match picked {
+            Some(folder) => Some(Outcome {
+                target: folder.name.clone(),
+                running: folder.session.clone(),
+                name: None,
+                collision: None,
+                exists: true,
+            }),
+            None => (!typed.is_empty()).then(|| Outcome {
+                target: typed.clone(),
+                running: None,
+                name: None,
+                collision: None,
+                exists: true,
+            }),
+        };
+    }
+
+    /// Enter in another machine's picker: the session is made there for the highlighted folder's own path, or for
+    /// what is typed when nothing matches.
+    fn activate_far(&mut self) -> Response {
+        let Some(far) = self.far.as_ref() else {
+            return Response::Stay;
+        };
+        let term = match far.shown.get(self.sel) {
+            Some(at) => far.folders[*at].dir.clone(),
+            None => self.input.value().trim().to_string(),
+        };
+        if term.is_empty() {
+            return Response::Stay;
+        }
+        Response::Run(Action::NewRemoteSession {
+            machine: far.machine.clone(),
+            term,
+        })
     }
 
     /// The tag for the candidate at `index`, for the renderer.
@@ -169,6 +360,10 @@ impl ProjectPicker {
     /// `zoxide` is its directories in tilde form, queried once when the picker opened —
     /// never per keystroke, which is why this takes them rather than running anything.
     pub fn refresh(&mut self, snap: &Snapshot, cfg: &Config, home: &Path, zoxide: &[String]) {
+        if self.far.is_some() {
+            self.refresh_far();
+            return;
+        }
         self.home = home.to_path_buf();
         self.mode = cfg.sessions.name;
         self.sessions = running_sessions(snap, home);
@@ -258,6 +453,9 @@ impl ProjectPicker {
     /// The outcome is recomputed here rather than read off `self.outcome`, so a key that
     /// moved the highlight cannot open the previous refresh's directory.
     fn activate(&mut self) -> Response {
+        if self.far.is_some() {
+            return self.activate_far();
+        }
         let target = self.target();
         if target.is_empty() {
             return Response::Stay;

@@ -219,7 +219,11 @@ pub fn classify(machine: &str, ran: Ran, bound: Duration) -> Reply {
             ..
         } => match error_of(&stdout) {
             Some((code, message)) => by_code(machine, &code, &message),
-            None if code == Some(2) && clap_refused_open(&stderr) => Reply::OldTaw,
+            None if code == Some(2)
+                && (clap_refused_open(&stderr) || clap_refused_candidates(&stderr)) =>
+            {
+                Reply::OldTaw
+            }
             None if code == Some(2) => Reply::Usage(first_line(&stderr)),
             None => Reply::Refused(words::refused(
                 machine,
@@ -287,6 +291,15 @@ fn clap_refused_open(stderr: &[u8]) -> bool {
         })
 }
 
+/// Whether `stderr` is a taw's own clap refusing `session candidates` (`error: unrecognized subcommand
+/// 'candidates'`): what a taw older than that verb says when another machine's picker asks it for its folders.
+fn clap_refused_candidates(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("error:"))
+        .any(|said| said.contains("unrecognized subcommand 'candidates'"))
+}
+
 /// The first non-empty line of `stderr`, cleaned (the far side's text reaches a toast only through the cleaner).
 fn first_line(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
@@ -303,6 +316,42 @@ pub fn usage_words(machine: &str, said: &str) -> String {
         return words::refused(machine, "it ended with status 2 and no answer taw can read");
     }
     words::refused(machine, &format!("it ended with status 2 and said: {said}"))
+}
+
+/// The far verb another machine's picker asks with: what the picker there would list, as JSON.
+pub fn candidates_argv() -> Vec<String> {
+    args(&["session", "candidates", "--json"])
+}
+
+/// The folders `session candidates --json` listed, as its envelope's `result.candidates` names them, in its order,
+/// with its optional `truncated` (a missing key is false) and `sessions_error` (tmux's own words there). Text from
+/// the far side is cleaned here; a row with no name or no folder is left out. `None` when the answer is not that
+/// envelope.
+pub fn candidates_offered(stdout: &[u8]) -> Option<crate::tui::picker::FarList> {
+    let result = result_of(stdout)?;
+    let rows = result["candidates"].as_array()?;
+    let folders = Some(
+        rows.iter()
+            .filter_map(|row| {
+                let name = plain(row["name"].as_str()?);
+                let dir = plain(row["dir"].as_str()?);
+                (!name.is_empty() && !dir.is_empty()).then(|| crate::tui::picker::FarFolder {
+                    kind: plain(row["kind"].as_str().unwrap_or_default()),
+                    name,
+                    dir,
+                    session: row["session"].as_str().map(plain),
+                })
+            })
+            .collect(),
+    )?;
+    Some(crate::tui::picker::FarList {
+        folders,
+        truncated: result["truncated"].as_bool().unwrap_or(false),
+        sessions_error: result["sessions_error"]
+            .as_str()
+            .map(plain)
+            .filter(|said| !said.trim().is_empty()),
+    })
 }
 
 /// The session `open --json` made or found, as its envelope names it: the name, whether it was made, and the
@@ -898,6 +947,54 @@ mod reply_tests {
             },
             VERB_BOUND,
         )
+    }
+
+    /// taw 0.1.2's own clap error for `session candidates --json` (master's release build under `env -i` with a
+    /// scratch HOME: exit 2, nothing on stdout) is an old taw; a wrapper naming the word is not.
+    /// Mutation: `clap_refused_candidates` answers false.
+    #[test]
+    fn an_old_taws_own_error_for_session_candidates_is_an_old_taw() {
+        let said = "error: unrecognized subcommand 'candidates'\n\nUsage: taw session [OPTIONS] <COMMAND>\n\nFor more information, try '--help'.\n";
+        assert_eq!(ended_with(2, said), Reply::OldTaw);
+        assert_eq!(
+            ended_with(2, "wrapper: candidates is not allowed\n"),
+            Reply::Usage("wrapper: candidates is not allowed".into())
+        );
+        assert_eq!(candidates_argv(), ["session", "candidates", "--json"]);
+    }
+
+    /// The far list reads its folders in order, and the optional `truncated` and `sessions_error` when present;
+    /// missing keys are false and none, and an answer that is not the envelope is none.
+    #[test]
+    fn the_far_list_reads_its_folders_and_its_optional_keys() {
+        let plain = br#"{"id":"cli:session:candidates","result":{"type":"session_candidates","candidates":[{"kind":"session","name":"~/api","dir":"/home/me/api","session":"api"},{"kind":"zoxide","name":"~/web","dir":"/home/me/web"},{"kind":"zoxide","name":"","dir":"/x"}]}}"#;
+        let list = candidates_offered(plain).expect("the envelope");
+        assert_eq!(
+            list.folders
+                .iter()
+                .map(|f| (
+                    f.kind.as_str(),
+                    f.name.as_str(),
+                    f.dir.as_str(),
+                    f.session.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("session", "~/api", "/home/me/api", Some("api")),
+                ("zoxide", "~/web", "/home/me/web", None)
+            ]
+        );
+        assert!(!list.truncated);
+        assert_eq!(list.sessions_error, None);
+        let both = br#"{"id":"cli:session:candidates","result":{"type":"session_candidates","candidates":[{"kind":"zoxide","name":"~/web","dir":"/home/me/web"}],"truncated":true,"sessions_error":"error connecting to /tmp/tmux-501/default (Permission denied)"}}"#;
+        let list = candidates_offered(both).expect("the envelope");
+        assert!(list.truncated);
+        assert_eq!(
+            list.sessions_error.as_deref(),
+            Some("error connecting to /tmp/tmux-501/default (Permission denied)")
+        );
+        assert_eq!(candidates_offered(b"not json"), None);
+        assert_eq!(candidates_offered(br#"{"result":{"type":"ok"}}"#), None);
     }
 
     #[test]

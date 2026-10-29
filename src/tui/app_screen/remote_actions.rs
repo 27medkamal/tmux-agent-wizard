@@ -34,6 +34,7 @@ use crate::paths::Paths;
 use crate::tui::Lending;
 use crate::tui::actions::Action;
 use crate::tui::app::App;
+use crate::tui::picker::FarAnswer;
 
 /// How long a verb has been running when the hint line starts to say `waiting for <machine>`.
 pub(super) const HINT_AFTER: Duration = Duration::from_secs(2);
@@ -64,13 +65,21 @@ pub(super) fn command(
     if argv.is_empty() {
         return None;
     }
+    Some(command_of(ssh, paths, machine, &argv))
+}
+
+/// The ssh command that runs the far taw with `argv` on `machine` (a test's seam in its place).
+fn command_of(ssh: &Ssh, paths: &Paths, machine: &Machine, argv: &[String]) -> Command {
     #[cfg(test)]
-    if let Some(command) = seam::command(&argv) {
-        return Some(command);
+    if let Some(command) = seam::command(argv) {
+        return command;
     }
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
-    Some(ssh::command(ssh, paths, machine, Mode::Command, &words))
+    ssh::command(ssh, paths, machine, Mode::Command, &words)
 }
+
+/// How long a machine's picker waits for its folders: a verb's bound.
+const FOLDERS_BOUND: Duration = Duration::from_secs(20);
 
 /// How much of a verb's standard error is kept for [`classify`] when it asks for it (about 2 KiB).
 const STDERR_TAIL: usize = 2048;
@@ -414,6 +423,9 @@ struct Pending {
 #[derive(Default)]
 pub(super) struct Rows {
     worker: RemoteActions,
+    /// The asks of the machines' pickers for their folders, one per machine, apart from the verbs so that a
+    /// list on its way never makes Enter wait or refuse.
+    lists: RemoteActions,
     pending: HashMap<String, Pending>,
     next_token: u64,
     /// A session just made on a machine, whose row the list has not shown yet: the app goes in when it does.
@@ -498,6 +510,7 @@ impl Rows {
     /// worktree) a route to go in by, which the screen follows. An answer that comes when the token is not the
     /// one sent, or the cursor has left the row it was for, or something else is open, says only its toast.
     pub(super) fn settle(&mut self, app: &mut App) -> Vec<Route> {
+        self.settle_lists(app);
         let now = app.wall_ms();
         let finished = self.worker.poll(Instant::now());
         let mut routes = Vec::new();
@@ -606,6 +619,42 @@ impl Rows {
 }
 
 impl Rows {
+    /// Whether a machine's picker is still waiting for its folders.
+    #[cfg(test)]
+    pub(super) fn listing(&self, machine: &str) -> bool {
+        self.lists.busy(machine)
+    }
+
+    /// What the machines answered their pickers' asks for folders, handed to the app ([`App::far_answered`]).
+    fn settle_lists(&mut self, app: &mut App) {
+        for done in self.lists.poll(Instant::now()) {
+            let machine = done.machine.as_str();
+            let answer = match done.reply {
+                Reply::Done => match crate::machine::actions::candidates_offered(&done.stdout) {
+                    Some(folders) => FarAnswer::Folders(folders),
+                    None => FarAnswer::Said(words::folders_unreadable(machine)),
+                },
+                Reply::OldTaw => FarAnswer::OldTaw,
+                Reply::Usage(said) => {
+                    FarAnswer::Said(crate::machine::actions::usage_words(machine, &said))
+                }
+                Reply::Refused(said) => FarAnswer::Said(said),
+                Reply::HookRefused { label, why } => {
+                    FarAnswer::Said(words::hook_refused(machine, &label, &why))
+                }
+                Reply::Gone | Reply::GroupCloseRequired | Reply::Dirty => {
+                    FarAnswer::Said(words::refused(
+                        machine,
+                        &crate::machine::actions::error_message(&done.stdout).unwrap_or_default(),
+                    ))
+                }
+                Reply::NoAnswer => FarAnswer::Said(words::no_answer(machine)),
+                Reply::TimedOut { secs } => FarAnswer::Said(words::timed_out(machine, secs)),
+            };
+            app.far_answered(machine, answer);
+        }
+    }
+
     /// The route into the session a machine made for `n`, when the list shows its row: the row is selected and
     /// the route is the one Enter on it takes. The wait ends with no route, before the list is looked at, when
     /// the cursor has left the row `n` was pressed on, something is open over the list, or [`SESSION_WAIT`]
@@ -720,12 +769,44 @@ impl Feed<'_> {
             .send(app, machine, command, action, bound(raw, sessions));
     }
 
+    /// Sends the ask of the picker `n` opened for another machine ([`App::take_far_ask`]): `session candidates
+    /// --json` there, over its own worker, never on this thread. An ask still on its way answers this one too.
+    /// What could not be sent is said in the picker.
+    pub(super) fn ask_for_folders(&mut self, app: &mut App) {
+        let Some(machine) = app.take_far_ask() else {
+            return;
+        };
+        if self.remote.lists.busy(&machine) {
+            return;
+        }
+        let Some(found) = self.machines.iter().find(|m| m.name == machine).cloned() else {
+            app.far_answered(&machine, FarAnswer::Said(words::no_such_machine(&machine)));
+            return;
+        };
+        let argv = crate::machine::actions::candidates_argv();
+        let command = command_of(&self.ssh, self.paths, &found, &argv);
+        let begun = self.remote.lists.begin_keeping_stderr(
+            &machine,
+            0,
+            command,
+            FOLDERS_BOUND,
+            app.wall_ms(),
+        );
+        if let Err(Refusal::NotRun(why)) = begun {
+            app.far_answered(
+                &machine,
+                FarAnswer::Said(words::ssh_not_run(&machine, &why)),
+            );
+        }
+    }
+
     /// Takes what the machines answered to the actions sent them, and goes in where an answer says to.
     pub(super) fn settle_remote(
         &mut self,
         app: &mut App,
         screen: &mut impl Lending,
     ) -> anyhow::Result<()> {
+        self.ask_for_folders(app);
         for route in self.remote.settle(app) {
             self.go_by_route(app, screen, route)?;
         }
@@ -1937,25 +2018,67 @@ mod rows_tests {
     const OPENED: &str = r#"{"id":"cli:open","result":{"type":"session_open","session":"garden","created":true,"collision":null,"switched":false,"dir":"/home/studio/code/garden"}}"#;
     const NO_DIR: &str = r#"{"id":"cli:open","error":{"code":"not_found","message":"no directory matches nothing-like-it"}}"#;
 
-    /// `n` on a session row of studio: a prompt titled for the machine; Esc closes it, Enter on an empty line does
-    /// nothing, and Enter on a term gives the action for studio.
-    /// Mutation: `n` opens this Mac's picker for a machine's row (`new_session` goes straight to the picker).
+    const FOLDERS: &str = r#"{"id":"cli:session:candidates","result":{"type":"session_candidates","candidates":[{"kind":"session","name":"~/code/garden","dir":"/home/studio/code/garden","session":"garden"},{"kind":"zoxide","name":"~/web","dir":"/home/studio/web"},{"kind":"project","name":"~/proj/app","dir":"/home/studio/proj/app"}]}}"#;
+    const FOLDERS_LATER: &str = r#"{"id":"cli:session:candidates","result":{"type":"session_candidates","candidates":[{"kind":"zoxide","name":"~/notes","dir":"/home/studio/notes"},{"kind":"project","name":"~/proj/apple","dir":"/home/studio/proj/apple"},{"kind":"zoxide","name":"~/web","dir":"/home/studio/web"}]}}"#;
+    /// What taw 0.1.2 (master's release build, run under `env -i` with a scratch HOME) prints on its standard
+    /// error for `session candidates --json`, with exit status 2 and nothing on its standard output.
+    const OLD_TAW_CANDIDATES_STDERR: &str = "error: unrecognized subcommand 'candidates'\n\nUsage: taw session [OPTIONS] <COMMAND>\n\nFor more information, try '--help'.\n";
+
+    /// The open picker's far state: whose it is, the names it lists, whether it is asking, its far error.
+    fn far_state(app: &App) -> (String, Vec<String>, bool, Option<String>) {
+        match &app.overlay {
+            Overlay::Project(picker) => {
+                let far = picker.far.as_ref().expect("another machine's picker");
+                (
+                    far.machine.clone(),
+                    picker.candidates.iter().map(|c| c.path.clone()).collect(),
+                    far.asking,
+                    far.said.clone(),
+                )
+            }
+            other => panic!("no picker: {other:?}; toast {:?}", toast_of(app)),
+        }
+    }
+
+    /// Sends the ask `n` made and settles until studio's picker has its answer.
+    fn folders_answered(feed: &mut Feed, app: &mut App) {
+        feed.ask_for_folders(app);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while feed.remote.listing("studio") {
+            assert!(Instant::now() < deadline, "no folders in 20 s");
+            let _ = feed.remote.settle(app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = feed.remote.settle(app);
+    }
+
+    /// `n` on a session row of studio, its header line and its empty-machine row: studio's picker at once, asking
+    /// studio, with nothing sent from the key itself; the answer, `session candidates --json` asked over the
+    /// worker, fills it. Esc closes it.
+    /// Mutation: `n` opens the prompt for a machine's row (`new_session` as step 1 had it).
     #[test]
-    fn n_on_a_machines_row_asks_for_a_folder_on_that_machine() {
+    fn n_on_a_machines_row_opens_that_machines_picker_and_its_answer_fills_it() {
         let rig = Rig::new(None);
-        let mut app = rig.app();
+        let _fake = rig.fake(FOLDERS, 0, false);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
         select(&mut app, "studio:$4");
         assert!(press(&mut app, KeyCode::Char('n')).is_none());
-        match &app.overlay {
-            Overlay::Prompt(p) => {
-                assert_eq!(p.title, "new session on studio: a folder or a zoxide term")
-            }
-            other => panic!("not the prompt: {other:?}"),
-        }
-        assert!(press(&mut app, KeyCode::Enter).is_none());
-        assert!(
-            matches!(app.overlay, Overlay::Prompt(_)),
-            "an empty line does nothing"
+        assert_eq!(
+            far_state(&app),
+            ("studio".to_string(), Vec::new(), true, None),
+            "at once, asking"
+        );
+        assert!(rig.sent().is_empty(), "the key sends nothing itself");
+        folders_answered(&mut feed, &mut app);
+        assert_eq!(rig.sent(), ["session", "candidates", "--json"]);
+        assert_eq!(
+            far_state(&app),
+            (
+                "studio".to_string(),
+                vec!["~/code/garden".into(), "~/web".into(), "~/proj/app".into()],
+                false,
+                None
+            )
         );
         let _ = press(&mut app, KeyCode::Esc);
         assert!(matches!(app.overlay, Overlay::None), "Esc closes it");
@@ -1964,21 +2087,158 @@ mod rows_tests {
             app.rows.rows.push(row);
             app.sel = app.rows.rows.len() - 1;
             let _ = press(&mut app, KeyCode::Char('n'));
-            assert!(
-                matches!(&app.overlay, Overlay::Prompt(p) if p.title.contains("on studio")),
+            assert_eq!(
+                far_picker_of(&app).as_deref(),
+                Some("studio"),
                 "{:?}",
                 toast_of(&app)
             );
             let _ = press(&mut app, KeyCode::Esc);
         }
+    }
+
+    /// A second `n` shows the list kept from the first answer at once, still asking, and the next answer replaces
+    /// it: what is typed stays, and the cursor stays on the same folder.
+    /// Mutation: the kept list is not shown (`open_far_picker` gives the picker no folders).
+    #[test]
+    fn a_second_n_shows_the_kept_list_at_once_and_the_next_answer_replaces_it() {
+        let rig = Rig::new(None);
+        let first = rig.fake(FOLDERS, 0, false);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
         select(&mut app, "studio:$4");
         let _ = press(&mut app, KeyCode::Char('n'));
-        type_in(&mut app, "-odd");
+        folders_answered(&mut feed, &mut app);
+        let _ = press(&mut app, KeyCode::Esc);
+        drop(first);
+        let _later = rig.fake(FOLDERS_LATER, 0, false);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        let (_, kept, asking, _) = far_state(&app);
+        assert_eq!(
+            kept,
+            ["~/code/garden", "~/web", "~/proj/app"],
+            "kept, at once"
+        );
+        assert!(asking, "and asking again");
+        type_in(&mut app, "ap");
+        app.refresh_project_picker();
+        let (_, filtered, _, _) = far_state(&app);
+        assert_eq!(
+            filtered,
+            ["~/proj/app"],
+            "the picker's own filter, on the far list"
+        );
+        let _ = press(&mut app, KeyCode::Backspace);
+        let _ = press(&mut app, KeyCode::Backspace);
+        app.refresh_project_picker();
+        let _ = press(&mut app, KeyCode::Down);
+        folders_answered(&mut feed, &mut app);
+        let (_, replaced, asking, _) = far_state(&app);
+        assert!(!asking);
+        assert_eq!(replaced, ["~/notes", "~/proj/apple", "~/web"], "replaced");
+        match &app.overlay {
+            Overlay::Project(picker) => {
+                assert_eq!(picker.sel, 2, "the cursor stays on ~/web");
+            }
+            other => panic!("{other:?}"),
+        }
+        // What is typed stays when the answer comes, and filters the new list.
+        let _ = press(&mut app, KeyCode::Esc);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        type_in(&mut app, "ot");
+        folders_answered(&mut feed, &mut app);
+        match &app.overlay {
+            Overlay::Project(picker) => {
+                assert_eq!(picker.input.value(), "ot", "the typed filter stays");
+                assert_eq!(far_state(&app).1, ["~/notes"]);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Enter on a listed folder gives step 1's action with that folder's own path, and the far argv is `open
+    /// --json --no-switch -- <dir>`; Enter on typed text that matches none gives the text as the term.
+    /// Mutation: Enter sends the folder's tilde name, not its dir.
+    #[test]
+    fn enter_in_the_far_picker_sends_the_folder_or_the_typed_term() {
+        let rig = Rig::new(None);
+        let lists = rig.fake(FOLDERS, 0, false);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        folders_answered(&mut feed, &mut app);
+        let _ = press(&mut app, KeyCode::Down);
+        let action = press(&mut app, KeyCode::Enter).expect("Enter on ~/web");
+        assert_eq!(
+            action,
+            Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "/home/studio/web".into()
+            }
+        );
+        drop(lists);
+        let _open = rig.fake(OPENED, 0, false);
+        send(&mut feed, &mut app, &action);
+        let _ = answered(&mut feed, &mut app);
+        assert_eq!(
+            rig.sent()[3..],
+            ["open", "--json", "--no-switch", "--", "/home/studio/web"]
+        );
+        let _ = press(&mut app, KeyCode::Char('n'));
+        type_in(&mut app, "zzqq");
+        app.refresh_project_picker();
+        assert!(far_state(&app).1.is_empty(), "nothing matches");
         assert_eq!(
             press(&mut app, KeyCode::Enter),
             Some(Action::NewRemoteSession {
                 machine: "studio".into(),
-                term: "-odd".into()
+                term: "zzqq".into()
+            })
+        );
+    }
+
+    /// An older taw there (its own clap's error for `session candidates`) turns the picker into step 1's prompt,
+    /// keeping what was typed; any other far error is shown in the picker in its own words, and Enter on typed
+    /// text still works.
+    /// Mutation: the old taw's error is not recognised (`clap_refused_candidates` answers false).
+    #[test]
+    fn an_old_taw_falls_back_to_the_prompt_and_a_far_error_shows_its_words() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        {
+            let _old = rig.fake_saying(OLD_TAW_CANDIDATES_STDERR, 2);
+            let _ = press(&mut app, KeyCode::Char('n'));
+            type_in(&mut app, "web");
+            folders_answered(&mut feed, &mut app);
+        }
+        match &app.overlay {
+            Overlay::Prompt(p) => {
+                assert_eq!(p.title, words::new_session_prompt("studio"));
+                assert_eq!(p.input.value(), "web", "what was typed stays");
+            }
+            other => panic!("not the prompt: {other:?}"),
+        }
+        let _ = press(&mut app, KeyCode::Esc);
+        let _refused = rig.fake(
+            r#"{"id":"cli:session:candidates","error":{"code":"internal","message":"zoxide database is locked"}}"#,
+            1,
+            false,
+        );
+        let _ = press(&mut app, KeyCode::Char('n'));
+        folders_answered(&mut feed, &mut app);
+        let (_, _, asking, said) = far_state(&app);
+        assert!(!asking);
+        assert_eq!(
+            said.as_deref(),
+            Some(words::refused("studio", "zoxide database is locked").as_str())
+        );
+        type_in(&mut app, "~/new");
+        app.refresh_project_picker();
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            Some(Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "~/new".into()
             })
         );
     }
@@ -1998,8 +2258,9 @@ mod rows_tests {
             .expect("a local pane");
         app.sel = local;
         let _ = press(&mut app, KeyCode::Char('n'));
+        assert!(app.far_ask.is_none(), "nothing is asked of a machine");
         assert!(
-            matches!(app.overlay, Overlay::Project(_)),
+            matches!(&app.overlay, Overlay::Project(p) if p.far.is_none()),
             "{:?}",
             toast_of(&app)
         );
@@ -2552,9 +2813,10 @@ mod rows_tests {
         );
     }
 
-    fn prompt_title(app: &App) -> Option<String> {
+    /// The machine whose picker is open, when one is.
+    fn far_picker_of(app: &App) -> Option<String> {
         match &app.overlay {
-            Overlay::Prompt(prompt) => Some(prompt.title.clone()),
+            Overlay::Project(picker) => picker.far.as_ref().map(|far| far.machine.clone()),
             _ => None,
         }
     }
@@ -2587,8 +2849,8 @@ mod rows_tests {
         select(&mut app, "studio:%8");
         let _ = press(&mut app, KeyCode::Char('n'));
         assert_eq!(
-            prompt_title(&app).as_deref(),
-            Some(words::new_session_prompt("studio").as_str()),
+            far_picker_of(&app).as_deref(),
+            Some("studio"),
             "{:?}",
             toast_of(&app)
         );
@@ -2601,7 +2863,7 @@ mod rows_tests {
             .expect("a pane of this machine");
         let _ = press(&mut app, KeyCode::Char('n'));
         assert!(
-            matches!(app.overlay, Overlay::Project(_)),
+            matches!(&app.overlay, Overlay::Project(p) if p.far.is_none()),
             "{:?}",
             toast_of(&app)
         );
@@ -2618,8 +2880,8 @@ mod rows_tests {
         select(&mut app, "studio:%8");
         let _ = press(&mut app, KeyCode::Char('n'));
         assert_eq!(
-            prompt_title(&app).as_deref(),
-            Some(words::new_session_prompt("studio").as_str()),
+            far_picker_of(&app).as_deref(),
+            Some("studio"),
             "{:?}",
             toast_of(&app)
         );
@@ -2637,7 +2899,7 @@ mod rows_tests {
         app.sel = local_session_row(&app);
         let _ = press(&mut app, KeyCode::Char('n'));
         assert!(
-            matches!(app.overlay, Overlay::Project(_)),
+            matches!(&app.overlay, Overlay::Project(p) if p.far.is_none()),
             "{:?}",
             toast_of(&app)
         );
@@ -2660,8 +2922,8 @@ mod rows_tests {
         app.sel = header_of(&app, "studio");
         let _ = press(&mut app, KeyCode::Char('n'));
         assert_eq!(
-            prompt_title(&app).as_deref(),
-            Some(words::new_session_prompt("studio").as_str()),
+            far_picker_of(&app).as_deref(),
+            Some("studio"),
             "{:?}",
             toast_of(&app)
         );

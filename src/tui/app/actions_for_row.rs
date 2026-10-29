@@ -18,7 +18,7 @@ use crate::tui::data::{AgentRow, MachineHeader, SpaceRow};
 use crate::tui::keys::Action as KeyAction;
 use crate::tui::overlays::state::PASTE_IMAGE_ENTRY;
 use crate::tui::overlays::{Confirm, Item, Menu, Overlay, Prompt, PromptKind, RowAction, Scroll};
-use crate::tui::picker::ProjectPicker;
+use crate::tui::picker::{FarAnswer, ProjectPicker};
 use crate::tui::tree::{self, Row};
 
 /// What one pane row needs to name a tmux target, lifted out of the snapshot so the
@@ -797,8 +797,9 @@ impl App<'_> {
         }
     }
 
-    /// `n`: on a row of another machine, a session is made on that machine: the app asks for a folder or a
-    /// zoxide term (the far taw reads it, with its own settings), and the popup, which has no connection
+    /// `n`: on a row of another machine, a session is made on that machine: the app opens that machine's picker,
+    /// filled from its taw ([`Self::open_far_picker`]; an older taw there gets the prompt for a folder or a zoxide
+    /// term instead, [`Self::far_answered`]), and the popup, which has no connection
     /// to a machine, says the row is read only, as it does for `r`, `x` and `w`. A machine that is not
     /// connected says why, in the app too. Everywhere else it is this machine's picker ([`Self::open_project_picker`]).
     pub(super) fn new_session(&mut self) {
@@ -812,13 +813,53 @@ impl App<'_> {
             return;
         }
         let machine = header.name.clone();
-        self.overlay = Overlay::Prompt(Prompt::new(
-            PromptKind::NewSessionOn {
-                machine: machine.clone(),
-            },
-            words::new_session_prompt(&machine),
-            String::new(),
-        ));
+        self.open_far_picker(&machine);
+    }
+
+    /// `n` on a row of `machine`, another machine, in the app: that machine's picker, at once, with the folders
+    /// it gave last in this run (none the first time) while the screen asks it again ([`Self::take_far_ask`]).
+    fn open_far_picker(&mut self, machine: &str) {
+        let kept = self.far_folders.get(machine).cloned().unwrap_or_default();
+        self.overlay = Overlay::Project(Box::new(ProjectPicker::far(
+            self.cfg, &self.home, machine, kept,
+        )));
+        self.far_ask = Some(machine.to_string());
+    }
+
+    /// The machine whose folders `n` asked for, taken: the screen sends the ask over that machine's worker.
+    pub(crate) fn take_far_ask(&mut self) -> Option<String> {
+        self.far_ask.take()
+    }
+
+    /// What `machine` answered when its picker asked for its folders. A list is kept for the next `n` there and
+    /// fills its picker when that is open; an older taw (no `session candidates`) turns the open picker into
+    /// the prompt for a folder or a zoxide term, with what was typed; any other failure is shown in the
+    /// picker in the far error's own words. A picker that is closed, or another machine's, is left alone.
+    pub(crate) fn far_answered(&mut self, machine: &str, answer: FarAnswer) {
+        if let FarAnswer::Folders(folders) = &answer {
+            self.far_folders
+                .insert(machine.to_string(), folders.clone());
+        }
+        let Overlay::Project(picker) = &mut self.overlay else {
+            return;
+        };
+        if !matches!(&picker.far, Some(far) if far.machine == machine) {
+            return;
+        }
+        match answer {
+            FarAnswer::Folders(folders) => picker.set_far_answer(Ok(folders)),
+            FarAnswer::Said(said) => picker.set_far_answer(Err(said)),
+            FarAnswer::OldTaw => {
+                let typed = picker.input.value().to_string();
+                self.overlay = Overlay::Prompt(Prompt::new(
+                    PromptKind::NewSessionOn {
+                        machine: machine.to_string(),
+                    },
+                    words::new_session_prompt(machine),
+                    typed,
+                ));
+            }
+        }
     }
 
     /// `n`: the project picker, already filled in for what is typed (`~/`).
@@ -834,7 +875,7 @@ impl App<'_> {
     /// children, and the canonical path of each session's directory and of each candidate.
     /// The filter's directories read it the same ways ([`App::refresh_projects`] and
     /// [`App::retag_projects`]).
-    pub(super) fn refresh_project_picker(&mut self) {
+    pub(crate) fn refresh_project_picker(&mut self) {
         if !matches!(self.overlay, Overlay::Project(_)) {
             return;
         }

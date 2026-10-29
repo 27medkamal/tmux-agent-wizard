@@ -819,6 +819,19 @@ impl App<'_> {
     /// `n` on a row of `machine`, another machine, in the app: that machine's picker, at once, with the folders
     /// it gave last in this run (none the first time) while the screen asks it again ([`Self::take_far_ask`]).
     fn open_far_picker(&mut self, machine: &str) {
+        // A taw that answered "older" this run goes straight to step 1's prompt; the ask still goes, so a taw
+        // updated meanwhile gets the picker at the next `n`.
+        if self.far_old.contains(machine) {
+            self.overlay = Overlay::Prompt(Prompt::new(
+                PromptKind::NewSessionOn {
+                    machine: machine.to_string(),
+                },
+                words::new_session_prompt(machine),
+                String::new(),
+            ));
+            self.far_ask = Some(machine.to_string());
+            return;
+        }
         let kept = self.far_folders.get(machine).cloned().unwrap_or_default();
         self.overlay = Overlay::Project(Box::new(ProjectPicker::far(
             self.cfg, &self.home, machine, kept,
@@ -836,9 +849,16 @@ impl App<'_> {
     /// the prompt for a folder or a zoxide term, with what was typed; any other failure is shown in the
     /// picker in the far error's own words. A picker that is closed, or another machine's, is left alone.
     pub(crate) fn far_answered(&mut self, machine: &str, answer: FarAnswer) {
-        if let FarAnswer::Folders(folders) = &answer {
-            self.far_folders
-                .insert(machine.to_string(), folders.clone());
+        match &answer {
+            FarAnswer::Folders(folders) => {
+                self.far_old.remove(machine);
+                self.far_folders
+                    .insert(machine.to_string(), folders.clone());
+            }
+            FarAnswer::OldTaw => {
+                self.far_old.insert(machine.to_string());
+            }
+            FarAnswer::Said(_) => {}
         }
         let Overlay::Project(picker) = &mut self.overlay else {
             return;

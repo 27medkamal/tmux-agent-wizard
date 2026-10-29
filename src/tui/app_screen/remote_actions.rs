@@ -2278,6 +2278,8 @@ mod rows_tests {
             other => panic!("not the prompt: {other:?}"),
         }
         let _ = press(&mut app, KeyCode::Esc);
+        // The mark of an older taw is kept for the run (a test of its own): this part asks a taw that answers.
+        app.far_old.clear();
         let _refused = rig.fake(
             r#"{"id":"cli:session:candidates","error":{"code":"internal","message":"zoxide database is locked"}}"#,
             1,
@@ -2300,6 +2302,52 @@ mod rows_tests {
                 term: "~/new".into(),
                 exact: false,
             })
+        );
+    }
+
+    /// An older taw's answer is kept for the run: the next `n` there is step 1's prompt at once (no settle), and
+    /// still asks; a later list from that machine (taw updated) gives the picker at the `n` after.
+    /// Mutation: `far_answered` does not keep the mark (`far_old.insert` removed).
+    #[test]
+    fn an_old_taws_answer_is_kept_so_the_next_n_is_the_prompt_at_once() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        {
+            let _old = rig.fake_saying(OLD_TAW_CANDIDATES_STDERR, 2);
+            let _ = press(&mut app, KeyCode::Char('n'));
+            folders_answered(&mut feed, &mut app);
+            assert!(
+                matches!(app.overlay, Overlay::Prompt(_)),
+                "the first answer"
+            );
+            let _ = press(&mut app, KeyCode::Esc);
+            let _ = press(&mut app, KeyCode::Char('n'));
+            match &app.overlay {
+                Overlay::Prompt(p) => assert_eq!(p.title, words::new_session_prompt("studio")),
+                other => panic!("the second n is not the prompt at once: {other:?}"),
+            }
+            assert_eq!(app.far_ask.as_deref(), Some("studio"), "it still asks");
+            folders_answered(&mut feed, &mut app);
+            assert!(
+                matches!(app.overlay, Overlay::Prompt(_)),
+                "and stays the prompt"
+            );
+            let _ = press(&mut app, KeyCode::Esc);
+        }
+        let _new = rig.fake(FOLDERS, 0, false);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert!(
+            matches!(app.overlay, Overlay::Prompt(_)),
+            "still the mark at this n"
+        );
+        folders_answered(&mut feed, &mut app);
+        let _ = press(&mut app, KeyCode::Esc);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            far_picker_of(&app).as_deref(),
+            Some("studio"),
+            "the taw was updated"
         );
     }
 

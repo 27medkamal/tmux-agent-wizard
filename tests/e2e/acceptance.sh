@@ -4210,6 +4210,87 @@ rm_wait 8000 rm_far_clients_are 0
 check "(g) studio's server has no client left" "0" "$(rm_far_clients)"
 fi
 
+# --- (h) n on studio's row opens studio's own picker, and Enter on a folder of studio's makes the session there.
+# Studio is given what a picker lists on a machine: a project folder (its `[sessions] project_dirs`, a config of its
+# own) and a zoxide entry (a stand-in `zoxide` in front on studio's PATH, which prints one folder). The app asks studio's
+# taw for them (`session candidates --json`, over the stand-in), lists them under studio's title, typed letters
+# filter them, and Enter opens the project folder on studio itself, with a client of studio's own attached by hand to
+# garden meanwhile (as in (g)): it must not move. Ended as (g) is, and studio's config and zoxide are taken away.
+rm_h_name="rmpick"; rm_h_hand=""; rm_h_zox="rmzoxfar"   # short names: the status line cuts a session's name at 10 characters
+rm_h_hand_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_h_hand" '$1 == p { print $2 }'; }
+rm_h_app_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_h_hand" '$1 != p { print $2 }'; }
+rm_h_session_there() { rm_far_tm list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF "$rm_h_name"; }
+rm_h_session_dir() { rm_far_tm list-sessions -F '#{session_name} #{session_path}' 2>/dev/null | awk -v n="$rm_h_name" '$1 == n { print $2 }'; }
+# How many of the stand-in's calls after the first $1 hold the words $2 (the argv, its words in quotes).
+rm_h_asked() { local n=$(($1 + 1)) c=0 f; while [ "$n" -le "$(rm_calls)" ]; do f="$rm_dir/calls/$n"; tr '\0' ' ' < "$f" | grep -qF -- "$2" && c=$((c+1)); n=$((n+1)); done; echo "$c"; }
+# studio's folders as the picker shows them: a tilde, studio's own home
+rm_h_proj_shown='~'"/projects/$rm_h_name"; rm_h_zox_shown='~'"/$rm_h_zox"
+rm_h_zox_gone() { ! rm_has "$rm_h_zox_shown"; }
+rm_h_row_gone() { ! rm_has "$rm_h_name"; }
+if rm_live "(h) n on studio's row opens studio's picker"; then
+mkdir -p "$rm_h/projects/$rm_h_name" "$rm_h/$rm_h_zox"
+printf '[sessions]\nproject_dirs = ["%s/projects"]\n' "$rm_h" > "$rm_dir/studio/config/config.toml"
+# shellcheck disable=SC2016  # the stand-in's own $1, expanded when it runs
+printf '#!/bin/sh\ncase "$1" in query) echo %s ;; esac\nexit 0\n' "$(rm_q "$rm_h/$rm_h_zox")" > "$rm_dir/far-bin/zoxide"; chmod +x "$rm_dir/far-bin/zoxide"
+rm_h_cmd="exec env -i"
+for rm_w in "${rm_far_env[@]}"; do rm_h_cmd="$rm_h_cmd $(rm_q "$rm_w")"; done
+rm_h_cmd="$rm_h_cmd $(rm_q "PATH=$rm_far_path") TERM=xterm-256color $(rm_q "$rm_dir/tmux-quiet") -L $rm_far attach-session -t '=garden'"
+outer new-session -d -s "$rm_far_hand_s" -x 160 -y 40 "$rm_h_cmd"
+rm_wait 8000 rm_far_clients_are 1
+rm_h_hand=$(rm_far_tm list-clients -F '#{client_pid}' 2>/dev/null | head -1)
+[ -z "$rm_h_hand" ] || rm_track hand "$rm_h_hand"
+check "(h) a client of studio's own is attached by hand, to garden" "garden" "$(rm_h_hand_at)"
+[ "$(rm_h_hand_at)" = garden ] || rm_dead=1
+if [ "$rm_dead" = 0 ]; then
+  rm_tab_to gardener 4
+  check "(h) the cursor is on a live row of studio" "gardener" "$(rm_selected | grep -o gardener)"
+  rm_h_calls=$(rm_calls)
+  rm_press n
+  rm_see "(h) n on a row of studio opens a picker titled for studio" "new session on studio"
+fi
+if [ "$rm_dead" = 0 ]; then
+  # Studio's folders, in studio's own tilde form: its project folder and its zoxide entry. Nothing is typed yet.
+  rm_see "(h) the picker lists studio's project folder" "$rm_h_proj_shown"
+  rm_see "(h) ... and studio's zoxide folder" "$rm_h_zox_shown"
+  check "(h) studio's taw was asked for its folders: session candidates --json" "1" "$(rm_h_asked "$rm_h_calls" "'session' 'candidates' '--json'")"
+fi
+if [ "$rm_dead" = 0 ]; then
+  rm_press -l "rmpi"
+  rm_wait 8000 rm_h_zox_gone
+  check "(h) typing a few letters filters the list: the zoxide folder is gone" "1" "$(rm_h_zox_gone && echo 1 || echo 0)"
+  check "(h) ... and the project folder is still listed" "1" "$(rm_has "$rm_h_proj_shown" && echo 1 || echo 0)"
+fi
+if [ "$rm_dead" = 0 ]; then
+  rm_press Enter
+  rm_wait 15000 rm_h_session_there
+  check "(h) studio's own server has the session" "1" "$(rm_h_session_there && echo 1 || echo 0)"
+  case "$(rm_h_session_dir)" in */studio/home/projects/"$rm_h_name") rm_h_dir_ok=1 ;; *) rm_h_dir_ok=0 ;; esac
+  check "(h) ... started in the project folder: $(rm_h_session_dir)" "1" "$rm_h_dir_ok"
+  check "(h) studio's taw was asked as the app asks it: open --json --no-switch -- <the folder>" "1" "$(rm_h_asked "$rm_h_calls" "'open' '--json' '--no-switch' '--' '$rm_h/projects/$rm_h_name'")"
+  rm_see "(h) the app goes into the session: studio's tmux is on the screen, at it" "[$rm_h_name]"
+fi
+if [ "$rm_dead" = 0 ]; then
+  rm_wait 10000 rm_far_clients_are 2
+  check "(h) studio's server has two clients: the one attached by hand and the app's" "2" "$(rm_far_clients)"
+  check "(h) the client attached by hand has not moved: it is still on garden" "garden" "$(rm_h_hand_at)"
+  check "(h) the app's client is on the new session" "$rm_h_name" "$(rm_h_app_at)"
+  rm_far_tm detach-client -s "$rm_h_name"
+  rm_see "(h) with the app's client gone, the app's list is back" " taw app"
+fi
+if [ "$rm_dead" = 0 ]; then
+  rm_wait 5000 rm_selected_has "$rm_h_name"
+  check "(h) the app's cursor is on the new row" "1" "$(rm_selected_has "$rm_h_name" && echo 1 || echo 0)"
+fi
+check "(h) the client attached by hand never moved, to the end" "garden" "$(rm_h_hand_at)"
+rm_far_tm kill-session -t "=$rm_h_name" 2>/dev/null
+outer kill-session -t "=$rm_far_hand_s" 2>/dev/null
+rm -f "$rm_dir/studio/config/config.toml" "$rm_dir/far-bin/zoxide"
+[ "$rm_dead" != 0 ] || rm_wait 12000 rm_h_row_gone
+[ "$rm_dead" != 0 ] || check "(h) studio's list no longer names the session" "1" "$(rm_h_row_gone && echo 1 || echo 0)"
+rm_wait 8000 rm_far_clients_are 0
+check "(h) studio's server has no client left" "0" "$(rm_far_clients)"
+fi
+
 # --- (f) the machine dropping off while the app's list is open. The feed of studio (the stand-in's call that runs
 # `machine feed`, by the pid it noted) is ended and the stand-in is told to refuse from then on, as a machine that
 # went away does: the connection ends at once and the first try again is refused, which is the faster of the two

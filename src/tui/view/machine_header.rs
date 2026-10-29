@@ -59,16 +59,30 @@ fn dot_of(app: &App, machine: Option<usize>) -> (&'static str, Color) {
     }
 }
 
-/// How many of the machine groups in the drawn list have agents: the headers whose tail is counts
-/// and has a state in it.
+/// How many of the machine groups in the drawn list have agents: a header whose tail is counts, and
+/// under which a drawn session shows at least one agent (a view hides agents from the list, and an
+/// agent it hides is not there to count).
 fn groups_with_agents(app: &App) -> usize {
-    app.rows
-        .rows
-        .iter()
-        .filter_map(|row| match row {
-            Row::Machine(machine) => Some(*machine),
-            _ => None,
-        })
+    let mut groups: Vec<Option<usize>> = Vec::new();
+    let mut with_agents: Vec<Option<usize>> = Vec::new();
+    for row in &app.rows.rows {
+        match row {
+            Row::Machine(machine) => groups.push(*machine),
+            Row::Session(space) => {
+                let Some(&machine) = groups.last() else {
+                    continue;
+                };
+                if !with_agents.contains(&machine)
+                    && !tree::shown_agents(&app.snap, *space).is_empty()
+                {
+                    with_agents.push(machine);
+                }
+            }
+            _ => {}
+        }
+    }
+    with_agents
+        .into_iter()
         .filter(|&machine| {
             matches!(
                 machines::header_tail(&app.snap, machine),
@@ -82,7 +96,7 @@ fn parts_of(app: &App, machine: Option<usize>) -> Parts {
     let indicators = app.cfg.ui.status_indicators;
     let (dot, dot_colour) = dot_of(app, machine);
     // The counts say where things are, so they show only when agents are in two groups or more;
-    // over one group (or none) they would only repeat the app's top line and the rows.
+    // over one group (or none) they would only repeat the rows.
     let counted = groups_with_agents(app) >= 2;
     let (words, counts) = match machines::header_tail(&app.snap, machine) {
         machines::HeaderTail::Counts(counts) => (
@@ -352,6 +366,57 @@ mod tests {
         let line = text(&drawn(&a, None, 80));
         assert!(line.contains(&format!("\u{25cf} {name}")), "{line:?}");
         assert!(!has_counts(&line), "no group: {line:?}");
+    }
+
+    /// The groups that count are those with agents in the drawn list: a view that hides every agent of one
+    /// group leaves one group with agents, and no header shows counts, though the hidden agents are
+    /// still in the snapshot.
+    #[test]
+    fn a_view_that_hides_one_groups_agents_leaves_one_group_with_agents() {
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        // Studio's session is web's (`$2`), with its agents; this machine keeps the rest.
+        let mut snap = world();
+        for agent in &mut snap.agents {
+            agent.machine = if agent.session_id == "$2" {
+                Some(0)
+            } else {
+                None
+            };
+        }
+        for pane in &mut snap.panes {
+            pane.machine = if pane.session_id == "$2" {
+                Some(0)
+            } else {
+                None
+            };
+        }
+        for space in &mut snap.spaces {
+            space.machine = if space.session_id == "$2" {
+                Some(0)
+            } else {
+                None
+            };
+        }
+        a.set_snapshot(snap.clone());
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(has_counts(&line), "no view, two groups: {line:?}");
+        }
+        // A view that keeps blocked agents only: the one blocked agent is this machine's, studio's are hidden.
+        snap.view = crate::tui::agent_view::parse(Some(
+            r#"{"source":"cli","filter":{"op":"eq","field":"status","value":"blocked"}}"#,
+        ))
+        .expect("a query taw would install");
+        assert!(snap.view.is_some());
+        a.set_snapshot(snap);
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(
+                !has_counts(&line),
+                "the view hides studio's agents: {line:?}"
+            );
+        }
     }
 
     #[test]

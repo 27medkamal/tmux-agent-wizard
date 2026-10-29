@@ -931,6 +931,7 @@ mod tests {
             &status_bar::BarCounts {
                 sessions: 1,
                 agents: 0,
+                away: Vec::new(),
             },
         )
     }

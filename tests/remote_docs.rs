@@ -182,6 +182,7 @@ fn every_string_of_the_header_and_row_words_is_in_the_section_with_the_sample_va
         words::not_connected("pi", ago),
         words::no_preview("pi"),
         words::capture_age(ago),
+        words::away_names(&["studio".to_string(), "pi".to_string()]),
         words::dropped_toast("pi"),
         words::gone("studio:%16"),
         words::no_such_machine("pi"),

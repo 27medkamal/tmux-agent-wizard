@@ -14,6 +14,7 @@ use crate::machine::{MachineView, this_machine_word, words};
 use crate::session::worktree::WorktreeRecord;
 use crate::store::AgentState;
 use crate::tui::data::{AgentRow, MachineHeader, PaneRow, Snapshot, SpaceRow};
+use crate::tui::tree::{Row, Rows};
 use crate::tui::view::COUNTS;
 
 /// `local` with every machine of `views` added, in the order given (the config's).
@@ -104,6 +105,29 @@ pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// The names of the machines that are away (of the config's table, not this tmux server, kept by an
+/// app, and not live) that no header of `drawn` names, in the config's order. The tree draws a
+/// header for an away machine while it has a row, or has none and nothing is being filtered; a flat
+/// list draws none, and a filter or a view can leave a machine without one. The top line of the app
+/// and the popup's bar name these ([`words::away_names`]), so that an away machine is named once
+/// and never zero times; with every away machine headed (the plain tree) the result is empty.
+pub fn away_unheaded(drawn: &Rows, snap: &Snapshot) -> Vec<String> {
+    snap.machines
+        .iter()
+        .enumerate()
+        .filter(|(at, machine)| {
+            !machine.this_server
+                && !machine.no_keeper
+                && !machine.live
+                && !drawn
+                    .rows
+                    .iter()
+                    .any(|row| matches!(row, Row::Machine(Some(shown)) if shown == at))
+        })
+        .map(|(_, machine)| machine.name.clone())
+        .collect()
 }
 
 /// What a machine's header line calls it: this machine's own is [`this_machine_word`].

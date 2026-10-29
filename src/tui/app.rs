@@ -966,7 +966,8 @@ impl<'a> App<'a> {
         self.hot_by_state().iter().map(|&(_, count)| count).sum()
     }
 
-    /// The bar's numbers: sessions on the server and agents.
+    /// The bar's numbers: sessions on the server and agents, and the away machines that no header of
+    /// the drawn list names.
     pub fn bar_counts(&self) -> crate::cli::status_bar::BarCounts {
         crate::cli::status_bar::BarCounts {
             sessions: self
@@ -981,7 +982,14 @@ impl<'a> App<'a> {
                 .iter()
                 .filter(|a| !self.snap.greyed(a.machine))
                 .count(),
+            away: self.away_unheaded(),
         }
+    }
+
+    /// The names of the away machines that no header of the drawn list names
+    /// ([`machines::away_unheaded`]).
+    pub fn away_unheaded(&self) -> Vec<String> {
+        crate::tui::machines::away_unheaded(&self.rows, &self.snap)
     }
 
     // ------------------------------------------------------------------ rows

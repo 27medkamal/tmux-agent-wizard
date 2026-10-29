@@ -156,6 +156,13 @@ pub fn capture_age(secs: u64) -> String {
     format!("({} ago)", header_age(secs))
 }
 
+/// What the top line of the app and the popup's bar say of the machines that are away while no header
+/// of the list names them (a flat list draws no headers; a filter or a view can leave a machine
+/// without a header): `studio, pi not connected`.
+pub fn away_names(names: &[String]) -> String {
+    format!("{} not connected", names.join(", "))
+}
+
 pub fn dropped_toast(name: &str) -> String {
     format!("{name} dropped off (last seen just now)")
 }
@@ -513,6 +520,11 @@ mod tests {
             not_connected("pi", 120),
             "pi is not connected (last seen 2 min ago)"
         );
+        assert_eq!(
+            away_names(&["studio".to_string(), "pi".to_string()]),
+            "studio, pi not connected"
+        );
+        assert_eq!(away_names(&["pi".to_string()]), "pi not connected");
         assert_eq!(dropped_toast("pi"), "pi dropped off (last seen just now)");
         assert_eq!(no_preview("pi"), "no preview: pi is not connected");
         assert_eq!(capture_age(5), "(5s ago)");

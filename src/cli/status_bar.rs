@@ -24,6 +24,7 @@ use anyhow::Context;
 use ratatui::style::Color;
 
 use crate::attention;
+use crate::machine::words;
 use crate::tmux::{PaneInfo, Tmux};
 use crate::tui::theme::Theme;
 
@@ -66,6 +67,10 @@ pub struct BarCounts {
     pub sessions: usize,
     /// Every pane with an agent in it ([`attention::is_agent`]).
     pub agents: usize,
+    /// Machines that are away and that no header of the list names, in the config's order
+    /// ([`crate::tui::machines::away_unheaded`]); empty in the launcher's first bar and in the
+    /// plain list, where every away machine has a header.
+    pub away: Vec<String>,
 }
 
 /// [`BarCounts`] from one `list-panes` and the number of sessions — the launcher's
@@ -74,6 +79,7 @@ pub fn counts(panes: &[PaneInfo], sessions: usize) -> BarCounts {
     BarCounts {
         sessions,
         agents: panes.iter().filter(|p| attention::is_agent(p)).count(),
+        away: Vec::new(),
     }
 }
 
@@ -110,10 +116,21 @@ fn plural(n: usize) -> &'static str {
 
 /// The bar as a `status-format` value: ` taw ` in the accent colour, bold; the session
 /// and agent counts; then, right-aligned, the clock. What needs you is not here: the list's
-/// border says it, and the rows and machine headers show the states.
+/// border says it, and the rows and machine headers show the states. Only the machines that are
+/// away and that no header names ([`BarCounts::away`]) are named, before the clock.
 pub fn bar_format(theme: &Theme, counts: &BarCounts) -> String {
+    // Names come from the config; `#` in one is tmux's format escape, so it is doubled.
+    let away = if counts.away.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "#[fg={}]{}#[default]  \u{2502}  ",
+            tmux_colour(theme.dim),
+            words::away_names(&counts.away).replace('#', "##"),
+        )
+    };
     format!(
-        "#[fg={},bold] taw #[default]#[fg={}]  {} session{}  \u{b7}  {} agent{}#[default]#[align=right]%H:%M ",
+        "#[fg={},bold] taw #[default]#[fg={}]  {} session{}  \u{b7}  {} agent{}#[default]#[align=right]{away}%H:%M ",
         tmux_colour(theme.accent),
         tmux_colour(theme.fg),
         counts.sessions,
@@ -302,6 +319,7 @@ mod tests {
             &BarCounts {
                 sessions: 7,
                 agents: 9,
+                away: Vec::new(),
             },
         );
         assert!(
@@ -315,6 +333,7 @@ mod tests {
             &BarCounts {
                 sessions: 1,
                 agents: 1,
+                away: Vec::new(),
             },
         );
         assert!(one.contains("1 session  \u{b7}  1 agent#"), "{one}");
@@ -326,12 +345,46 @@ mod tests {
     fn the_bar_holds_no_need_words_and_no_rail() {
         let t = theme::resolve("catppuccin", &Default::default()).theme;
         for (sessions, agents) in [(0, 0), (1, 1), (7, 9)] {
-            let bar = bar_format(&t, &BarCounts { sessions, agents });
+            let bar = bar_format(
+                &t,
+                &BarCounts {
+                    sessions,
+                    agents,
+                    away: Vec::new(),
+                },
+            );
             for word in ["need", "nothing", "you", "agent_wizard_status", "\u{2502}"] {
                 assert!(!bar.contains(word), "{word:?} in {bar}");
             }
             assert!(bar.contains(&format!("{agents} agent")), "{bar}");
         }
+    }
+
+    /// An away machine that no header names is named before the clock; with none away the bar has
+    /// no such words, and a `#` in a name is doubled for tmux's format.
+    #[test]
+    fn the_bar_names_the_away_machines_before_the_clock() {
+        let t = theme::resolve("catppuccin", &Default::default()).theme;
+        let plain = bar_format(&t, &BarCounts::default());
+        assert!(!plain.contains("not connected"), "{plain}");
+        let counts = BarCounts {
+            sessions: 2,
+            agents: 3,
+            away: vec!["studio".to_string(), "pi".to_string()],
+        };
+        let bar = bar_format(&t, &counts);
+        assert!(bar.contains("studio, pi not connected"), "{bar}");
+        assert!(bar.ends_with("%H:%M "), "{bar}");
+        assert!(
+            bar.find("agents").unwrap() < bar.find("studio, pi").unwrap()
+                && bar.find("studio, pi").unwrap() < bar.find("%H:%M").unwrap(),
+            "{bar}"
+        );
+        let hash = BarCounts {
+            away: vec!["a#b".to_string()],
+            ..BarCounts::default()
+        };
+        assert!(bar_format(&t, &hash).contains("a##b not connected"));
     }
 
     #[test]
@@ -360,6 +413,7 @@ mod tests {
             BarCounts {
                 sessions: 4,
                 agents: 2,
+                away: Vec::new(),
             }
         );
     }
@@ -652,6 +706,7 @@ mod tests {
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
+            away: Vec::new(),
         };
         let client = s.attach();
         let own = client.status_line_once(|l| l.starts_with("[s]"));
@@ -846,6 +901,7 @@ mod tests {
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
+            away: Vec::new(),
         };
         let mut last = None;
 
@@ -899,6 +955,7 @@ mod tests {
         let counts = BarCounts {
             sessions: 1,
             agents: 2,
+            away: Vec::new(),
         };
         let saved = swap(&s.tmux, &s.session, 1, &bar_format(&theme, &counts)).unwrap();
         let dir = tempfile::tempdir().unwrap();

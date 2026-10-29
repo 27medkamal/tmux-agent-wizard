@@ -174,7 +174,7 @@ pub fn position(p: &PaneInfo, session_order: &HashMap<String, usize>) -> Positio
 /// before done, and a state nothing needing you is in is not listed. `agents` is each
 /// agent's state and whether it has been looked at.
 ///
-/// The tree border and taw's bar count what needs you this way, each group in its state's
+/// The tree border counts what needs you this way, each group in its state's
 /// own glyph and colour, because a bare number cannot say which colour to be: a green row
 /// under a count drawn in the blocked colour would read as blocked.
 pub fn hot_by_state(

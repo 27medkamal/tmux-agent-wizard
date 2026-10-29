@@ -3836,6 +3836,8 @@ rm_selected_has() { rm_selected | grep -qF -- "$1"; }
 rm_row_name() { local r=${1#*│} w; for w in idle working blocked "done" unknown; do r=${r%%"$w"*}; done; printf '%s' "$r"; }
 rm_selected_is_not() { [ "$(rm_selected)" != "$1" ]; }
 rm_colours_are() { [ "$(rm_colours "$1")" = "$2" ]; }
+# A line of the list with studio's dot and name and the words of a machine that is not live.
+rm_studio_header_is_away() { rm_screen | grep -F -- '● studio' | grep -qE 'not answering|connecting'; }
 rm_dump() { rm_screen | grep -v '^ *$' | head -30; }
 # One line when a step is left out because an earlier one it stands on did not happen (a broken stand-in would
 # otherwise cost a wait at every step after it).
@@ -4176,7 +4178,10 @@ if rm_live "(f) the drop"; then
   [ "$(e2e_command_of "$rm_feed")" = "$rm_feed_cmd" ] && kill "$rm_feed" 2>/dev/null
   # At most 8 s: a feed that ended is dropped at once (src/machine/conn.rs, end of file), while one that only went
   # quiet is dropped after 15 s, so a drop that took the slow way fails here.
-  rm_see "(f) the bar says studio is offline" "studio offline" 8000
+  # The list's header of studio says it is away (its dot and name with the words of a machine that is not live):
+  # taw names no machine on the top line while a header names it.
+  if rm_wait 8000 rm_studio_header_is_away; then ok "(f) studio's header says it is away"; else bad "(f) studio's header says it is away" "never on the screen; the screen was:
+$(rm_dump)"; rm_dead=1; fi
   rm_wait 2000 rm_colours_are gardener 1
   check "(f) studio's rows are greyed: the row of the agent is drawn in one colour" "1" "$(rm_colours gardener)"
   # Tab skips them: from the cursor on a greyed row it goes to this Mac's agent, the one stop left.

@@ -61,7 +61,7 @@ Nothing is copied between machines: the app lists and shows, and taw on each mac
    (pi's sessions and panes)
 ```
 
-The top line says how many sessions and agents the list holds, and the clock; who needs you is on the list's border, and a machine that is away says so on its own header, so the top line names neither. A header carries the machine's state counts only when agents are in two machine groups or more (then they say where things are), and its own words when the machine is not connected (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once, in a toast. A machine that is away shows its last words and when it was last seen.
+The top line says how many sessions and agents the list holds, and the clock; who needs you is on the list's border, and a machine that is away says so on its own header. Where the list draws no header for an away machine (the flat layout, a filter or a view that leaves it no row), the top line names it before the clock, as `studio, pi not connected`, and the popup's bar does the same wherever the popup draws machine headers; with every away machine headed, which is the normal list, they name none. A header carries the machine's state counts only when agents are in two machine groups or more (then they say where things are), and its own words when the machine is not connected (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once, in a toast. A machine that is away shows its last words and when it was last seen.
 
 The numbers of a session count across machines, and a machine that appears or drops never moves a number of this machine's. A remote row's id is `studio:%16`, the machine and that machine's own tmux id, so it can never be one of this machine's.
 
@@ -155,6 +155,7 @@ A header says one of these. The first group is what the machine's header and `ta
 | `pi is not connected (last seen 3 min ago)` | a key on a row of a machine that is not connected |
 | `no preview: pi is not connected` | the preview of such a row |
 | `(3m ago)` | the age of the preview's last capture |
+| `studio, pi not connected` | the top line of the app and the popup's bar, before the clock: machines that are away and that no header of the list names (a flat list, a filter or a view that hides them) |
 | `pi dropped off (last seen just now)` | the toast when a connected machine goes |
 | `studio's rows are acted on from the app: Enter goes there` | a key in the popup on a connected machine's row |
 | `studio's rows are acted on from the app` | Enter in the popup on a machine's closed worktree |

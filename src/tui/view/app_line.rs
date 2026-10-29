@@ -1,6 +1,7 @@
 //! The app's top line: what it is and how many sessions and agents it lists on the left, the clock on
 //! the right. A toast takes the left's place. What needs you is on the list's border, and each machine
-//! that is away says so on its own header.
+//! that is away says so on its own header; only an away machine no header names (a flat list, a
+//! filter or a view that hides it) is named here, before the clock.
 
 use super::*;
 
@@ -29,8 +30,19 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
     let dim = Style::default().fg(theme.dim);
     let counts = app.bar_counts();
 
-    // The right: the clock alone.
-    let right = Line::from(Span::styled(clock(app), dim));
+    // The right: the clock, after the away machines that no header of the list names (none in the
+    // plain tree, where every away machine has a header).
+    let away = app.away_unheaded();
+    let mut right_spans = Vec::new();
+    if !away.is_empty() {
+        right_spans.push(Span::styled(
+            words::away_names(&away),
+            Style::default().fg(theme.yellow),
+        ));
+        right_spans.push(Span::styled("  \u{2502}  ", dim));
+    }
+    right_spans.push(Span::styled(clock(app), dim));
+    let right = Line::from(right_spans);
     let right_width = line_width(&right);
 
     // The left: a toast, or the name and the counts.
@@ -76,7 +88,7 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
 mod tests {
     use super::*;
     use crate::config::{Config, Depth};
-    use crate::tui::data::MachineHeader;
+    use crate::tui::data::{MachineHeader, Snapshot};
     use crate::tui::fixtures::{snapshot, worktrees};
     use crate::tui::theme;
 
@@ -172,6 +184,158 @@ mod tests {
             !line.contains("machine") && !line.contains("offline") && !line.contains("pi"),
             "{line:?}"
         );
+    }
+
+    /// The sample world with studio (live, no session) and pi, which is away: with `rows` its stale
+    /// rows are web's session, panes and agents; without, it never answered and has none.
+    fn away_world(rows: bool) -> Snapshot {
+        let mut snap = snapshot();
+        if rows {
+            snap.spaces[1].machine = Some(1);
+            for pane in snap.panes.iter_mut().filter(|p| p.session_id == "$2") {
+                pane.machine = Some(1);
+            }
+            for agent in snap.agents.iter_mut().filter(|a| a.session_id == "$2") {
+                agent.machine = Some(1);
+            }
+        }
+        snap.machines = vec![
+            MachineHeader {
+                name: "studio".into(),
+                live: true,
+                stated: true,
+                ..MachineHeader::default()
+            },
+            MachineHeader {
+                name: "pi".into(),
+                live: false,
+                words: "not answering, trying again in 30s".into(),
+                ..MachineHeader::default()
+            },
+        ];
+        snap
+    }
+
+    /// How often the line says `pi not connected`.
+    fn named(line: &str) -> usize {
+        line.matches("pi not connected").count()
+    }
+
+    /// An away machine is named once and never zero times: the plain tree names nothing, since pi's header
+    /// says it is away, with its rows or without.
+    #[test]
+    fn the_plain_tree_names_no_away_machine_on_the_line() {
+        let cfg = cfg();
+        for rows in [true, false] {
+            let mut a = app(&cfg);
+            a.set_snapshot(away_world(rows));
+            assert!(
+                a.rows.rows.contains(&Row::Machine(Some(1))),
+                "pi has its header (rows {rows})"
+            );
+            let line = text(&app_top_line(&a, 150));
+            assert!(
+                !line.contains("not connected") && !line.contains("pi"),
+                "{line:?}"
+            );
+            assert!(a.bar_counts().away.is_empty());
+        }
+    }
+
+    /// The flat layout draws no header, so a machine that never answered is named on the line, once.
+    #[test]
+    fn the_flat_layout_with_a_machine_that_never_answered_names_it_once() {
+        let mut cfg = cfg();
+        cfg.ui.layout = crate::config::Layout::Flat;
+        let mut a = app(&cfg);
+        a.set_snapshot(away_world(false));
+        assert!(
+            !a.rows.rows.iter().any(|r| matches!(r, Row::Machine(_))),
+            "a flat list has no header"
+        );
+        let line = text(&app_top_line(&a, 150));
+        assert_eq!(named(&line), 1, "{line:?}");
+        assert!(
+            !line.contains("studio"),
+            "a live machine is not named: {line:?}"
+        );
+        // Before the clock, which is last.
+        let clock = clock_text(
+            a.wall_ms(),
+            crate::session::restore::local_offset(a.wall_ms() / 1000),
+        );
+        assert!(line.trim_end().ends_with(&clock), "{line:?}");
+        assert!(
+            line.find("pi not connected") < line.find(&clock),
+            "{line:?}"
+        );
+        assert_eq!(a.bar_counts().away, ["pi"]);
+    }
+
+    /// A filter that leaves pi no row takes its header away, so the line names it.
+    #[test]
+    fn a_filter_that_hides_the_header_names_the_machine_on_the_line() {
+        let mut cfg = cfg();
+        cfg.keys.preset = crate::config::KeysPreset::Search;
+        let mut a = app(&cfg);
+        a.set_snapshot(away_world(false));
+        // Positive first: with nothing typed the header is there and the line names nothing.
+        assert!(a.rows.rows.contains(&Row::Machine(Some(1))));
+        assert_eq!(named(&text(&app_top_line(&a, 150))), 0);
+        for c in "zzzz".chars() {
+            a.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(a.query().map(|q| q.text), Some("zzzz".to_string()));
+        assert!(
+            !a.rows.rows.contains(&Row::Machine(Some(1))),
+            "the filter took the header"
+        );
+        let line = text(&app_top_line(&a, 150));
+        assert_eq!(named(&line), 1, "{line:?}");
+    }
+
+    /// A view that matches none of pi's agents leaves it no session, so the line names it.
+    #[test]
+    fn a_view_that_empties_the_machine_names_it_on_the_line() {
+        // The agents depth draws agent rows alone, so a view can leave a session with none.
+        let mut cfg = cfg();
+        cfg.ui.depth = Depth::Agents;
+        let mut a = app(&cfg);
+        a.set_snapshot(away_world(true));
+        assert!(a.rows.rows.contains(&Row::Machine(Some(1))));
+        assert_eq!(named(&text(&app_top_line(&a, 150))), 0);
+        let mut snap = away_world(true);
+        snap.view = crate::tui::agent_view::parse(Some(
+            r#"{"source":"cli","filter":{"op":"eq","field":"status","value":"blocked"}}"#,
+        ))
+        .expect("a query taw would install");
+        assert!(snap.view.is_some());
+        a.set_snapshot(snap);
+        assert!(
+            !a.rows.rows.contains(&Row::Machine(Some(1))),
+            "the view took the header"
+        );
+        let line = text(&app_top_line(&a, 150));
+        assert_eq!(named(&line), 1, "{line:?}");
+        assert_eq!(a.bar_counts().away, ["pi"]);
+    }
+
+    /// A machine nobody keeps, or this tmux server's own, is never named as away.
+    #[test]
+    fn a_machine_nobody_keeps_and_this_server_are_not_named() {
+        let mut cfg = cfg();
+        cfg.ui.layout = crate::config::Layout::Flat;
+        let mut a = app(&cfg);
+        let mut snap = away_world(false);
+        snap.machines[1].no_keeper = true;
+        snap.machines[0].live = false;
+        snap.machines[0].this_server = true;
+        a.set_snapshot(snap);
+        assert!(a.bar_counts().away.is_empty());
+        assert!(!text(&app_top_line(&a, 150)).contains("not connected"));
     }
 
     #[test]

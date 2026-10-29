@@ -941,7 +941,11 @@ fn taws_bar_uses_none_of_them() {
     let mut said = Said::default();
     let theme = theme::resolve("catppuccin", &BTreeMap::new()).theme;
     for (sessions, agents) in [(0, 0), (1, 1), (3, 5)] {
-        let counts = BarCounts { sessions, agents };
+        let counts = BarCounts {
+            sessions,
+            agents,
+            away: Vec::new(),
+        };
         said.add(
             format!("the bar, {sessions} and {agents}"),
             bar_format(&theme, &counts),

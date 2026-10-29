@@ -53,7 +53,9 @@ pane holds an agent.
 creates one: the picker's `Enter`, as a command. `taw open [terms]` is that for a person at
 a shell, taking a directory or zoxide terms and attaching the terminal outside tmux. It
 runs the create hooks as `session open` does, so a pre-create hook that refuses stops it
-with nothing created (`hook_refused` under `--json`). With no terms it runs
+with nothing created (`hook_refused` under `--json`). `--no-switch` makes or finds the session and
+moves no client and attaches no terminal, with or without `--json`; it needs a directory or a term. `--json` prints the
+envelope `session open` prints, plus `dir`, the absolute folder it opened. With no terms it runs
 `taw ui open --new-session`, which opens the popup on the new-session picker
 (`taw ui --new-session` does the same for the popup itself), and Esc closes it. The
 picker `n` opens inside the popup is different: Esc there goes back to the tree.

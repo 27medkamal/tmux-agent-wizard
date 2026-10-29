@@ -686,3 +686,39 @@ fn the_docs_say_what_a_machine_with_no_tmux_session_shows_and_the_way_back_on_at
         assert!(cli.contains(needle), "docs/cli.md never says {needle:?}");
     }
 }
+
+/// What `taw open` takes for the far `n`, and what the far `n` does and does not do, as the code does it.
+#[test]
+fn the_docs_say_taw_opens_no_switch_and_dir_and_the_far_ns_limits() {
+    let cli = flat(&read("docs/cli.md"));
+    for needle in [
+        "`--no-switch` makes or finds the session and moves no client and attaches no terminal",
+        "plus `dir`, the absolute folder it opened",
+    ] {
+        assert!(cli.contains(needle), "docs/cli.md never says {needle:?}");
+    }
+    let keys = flat(&read("docs/keys.md"));
+    assert!(
+        keys.contains("the popup says that row is read only, or, when that machine is not connected, that it is not connected"),
+        "docs/keys.md never says what the popup says of an away machine's row"
+    );
+    let machines = flat(&read("docs/machines.md"));
+    for needle in [
+        "only while the cursor stays on the row `n` was pressed on",
+        "it gives up after 5 s",
+    ] {
+        assert!(
+            machines.contains(needle),
+            "docs/machines.md never says {needle:?}"
+        );
+    }
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_taw"))
+        .args(["open", "--help"])
+        .env_clear()
+        .output()
+        .expect("taw open --help runs");
+    assert!(
+        flat(&String::from_utf8_lossy(&out.stdout)).contains("plus `dir`, the folder it opened"),
+        "the --json help never names `dir`"
+    );
+}

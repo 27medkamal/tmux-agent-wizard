@@ -247,8 +247,8 @@ enum Group {
         /// match. With none, the popup opens on its new-session picker
         #[arg(value_name = "TERMS")]
         terms: Vec<String>,
-        /// Print the JSON envelope `taw session open` prints, for scripts. This terminal is
-        /// not attached to the session
+        /// Print the JSON envelope `taw session open` prints, plus `dir`, the folder it
+        /// opened, for scripts. This terminal is not attached to the session
         #[arg(long)]
         json: bool,
         /// Make or find the session and switch no client: nothing is moved, and nothing is

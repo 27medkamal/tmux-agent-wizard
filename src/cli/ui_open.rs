@@ -519,7 +519,8 @@ fn put_up_bar(ctx: &Ctx, rows: usize) -> Option<(String, status_bar::Saved)> {
     let theme = theme::resolve(&ctx.cfg.theme.name, &ctx.cfg.theme.custom).theme;
     let sessions = ctx.tmux.list_sessions().map(|s| s.len()).unwrap_or(0);
     let panes = ctx.tmux.list_panes().unwrap_or_default();
-    let bar = status_bar::bar_format(&theme, &status_bar::counts(&panes, sessions));
+    let machines = crate::tui::machine_count(&ctx.paths);
+    let bar = status_bar::bar_format(&theme, &status_bar::counts(&panes, sessions, machines));
     match status_bar::swap(&ctx.tmux, &session, rows, &bar) {
         Ok(saved) => Some((session, saved)),
         Err(err) => {
@@ -981,6 +982,36 @@ mod tests {
         let (tmux, log) = stub(dir.path(), "on", 0);
         open(&stub_ctx(tmux), None, false).unwrap();
         assert_eq!(changes(&log), swap_popup_restore());
+    }
+
+    /// The launcher's first bar already counts the machines, from the config as the popup does, so
+    /// the counts do not jump right when the popup's first refresh adds them: this machine and the two
+    /// listed make three. With none listed there is one machine, which the bar does not say.
+    #[test]
+    fn the_launchers_first_bar_counts_the_machines_from_the_config() {
+        let bar_text = |config: Option<&str>| {
+            let dir = tempfile::tempdir().unwrap();
+            let (tmux, log) = stub(dir.path(), "on", 0);
+            let ctx = stub_ctx(tmux);
+            if let Some(text) = config {
+                std::fs::create_dir_all(ctx.paths.config_file.parent().unwrap()).unwrap();
+                std::fs::write(&ctx.paths.config_file, text).unwrap();
+            }
+            open(&ctx, None, false).unwrap();
+            let bar = changes(&log)
+                .into_iter()
+                .find(|argv| argv.get(3).map(String::as_str) == Some(status_bar::BAR_OPTION))
+                .expect("the bar's text was written");
+            bar[4].clone()
+        };
+        let three = bar_text(Some("[machines]\nstudio = \"studio\"\npi = \"pi\"\n"));
+        assert!(
+            three.contains("  3 machines  \u{b7}  1 session  \u{b7}  0 agents"),
+            "{three}"
+        );
+        let one = bar_text(None);
+        assert!(!one.contains("machines"), "{one}");
+        assert!(one.contains("  1 session  \u{b7}  0 agents"), "{one}");
     }
 
     /// `open --new-session` is the same launch, the same bar and the same restore, with the

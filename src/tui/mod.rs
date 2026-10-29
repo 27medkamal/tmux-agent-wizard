@@ -503,6 +503,18 @@ fn machine_views(paths: &Paths, machines: &[Machine]) -> Vec<MachineView> {
         .collect()
 }
 
+/// How many machines the list holds, as `App::bar_counts` counts them: this one and each of the config's
+/// `[machines]` that is not this machine's own tmux server ([`machine_views`]), connected or not. The launcher's
+/// first bar says it before the popup has read its first snapshot. Reads only the config and the files an app
+/// keeps (no connection, nothing slow), and writes nothing.
+pub(crate) fn machine_count(paths: &Paths) -> usize {
+    let machines = load_machines(paths).unwrap_or_default();
+    1 + machine_views(paths, &machines)
+        .iter()
+        .filter(|view| !view.this_server)
+        .count()
+}
+
 /// Whether the file an earlier app run left for `name` says that entry is this machine's own tmux server. That
 /// is all the popup takes from a file nobody keeps: what an entry is does not age as its rows and its `live`
 /// flag do, and with no app the popup has no other way to know ([`words::this_server`] is what the app says).

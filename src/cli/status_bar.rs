@@ -64,8 +64,7 @@ pub fn status_rows(status: Option<&str>) -> usize {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BarCounts {
     /// Every machine the list holds, this one included: the config's `[machines]` besides this
-    /// machine's own tmux server, connected or not. The bar counts them only from two up; the
-    /// launcher's first bar, made before the popup has a snapshot, leaves it at 0.
+    /// machine's own tmux server, connected or not. The bar counts them only from two up.
     pub machines: usize,
     /// Every session on the server.
     pub sessions: usize,
@@ -78,10 +77,11 @@ pub struct BarCounts {
 }
 
 /// [`BarCounts`] from one `list-panes` and the number of sessions — the launcher's
-/// numbers, before the popup has a snapshot of its own (`App::bar_counts` is the popup's).
-pub fn counts(panes: &[PaneInfo], sessions: usize) -> BarCounts {
+/// numbers, before the popup has a snapshot of its own (`App::bar_counts` is the popup's);
+/// `machines` is [`crate::tui::machine_count`], so the first bar already says what the popup's will.
+pub fn counts(panes: &[PaneInfo], sessions: usize, machines: usize) -> BarCounts {
     BarCounts {
-        machines: 0,
+        machines,
         sessions,
         agents: panes.iter().filter(|p| attention::is_agent(p)).count(),
         away: Vec::new(),
@@ -464,11 +464,11 @@ mod tests {
         let idle =
             crate::rail::tests_support::pane_with_state(Some(crate::store::AgentState::Idle));
         let shell = crate::rail::tests_support::pane_with_state(None);
-        let c = counts(&[agent, idle, shell], 4);
+        let c = counts(&[agent, idle, shell], 4, 3);
         assert_eq!(
             c,
             BarCounts {
-                machines: 0,
+                machines: 3,
                 sessions: 4,
                 agents: 2,
                 away: Vec::new(),

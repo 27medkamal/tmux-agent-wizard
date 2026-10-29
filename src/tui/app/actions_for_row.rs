@@ -768,6 +768,45 @@ impl App<'_> {
         ));
     }
 
+    /// The header of the machine the row `index` belongs to, for any row of a machine: its sessions, panes
+    /// and closed worktrees ([`Self::machine_at`]), its own header line and its empty-machine row. `None` for
+    /// a row of this machine's.
+    fn machine_of_row(&self, index: usize) -> Option<&MachineHeader> {
+        match self.rows.rows.get(index)? {
+            Row::Machine(Some(at)) | Row::NoSession(at) => self.snap.machines.get(*at),
+            _ => self.machine_at(index),
+        }
+    }
+
+    /// `n`: on a row of another machine, a session is made on that machine: the app asks for a folder or a
+    /// zoxide term (the far taw reads it, with its own settings), and the popup, which has no connection
+    /// to a machine, says the row is read only, as it does for `r`, `x` and `w`. A machine that is not
+    /// connected says why, in the app too. Everywhere else it is this machine's picker ([`Self::open_project_picker`]).
+    pub(super) fn new_session(&mut self) {
+        let Some(header) = self.machine_of_row(self.sel) else {
+            self.open_project_picker();
+            return;
+        };
+        // The popup has no connection to the machine: until it says so, it keeps this Mac's picker.
+        if !self.is_app() {
+            self.open_project_picker();
+            return;
+        }
+        if !header.live {
+            let said = self.refusal(header);
+            self.toast(said);
+            return;
+        }
+        let machine = header.name.clone();
+        self.overlay = Overlay::Prompt(Prompt::new(
+            PromptKind::NewSessionOn {
+                machine: machine.clone(),
+            },
+            words::new_session_prompt(&machine),
+            String::new(),
+        ));
+    }
+
     /// `n`: the project picker, already filled in for what is typed (`~/`).
     pub(super) fn open_project_picker(&mut self) {
         let mut picker = ProjectPicker::new(self.cfg, &self.home);
@@ -873,6 +912,12 @@ impl App<'_> {
             return None;
         };
         let result = match prompt.kind.clone() {
+            // An empty line does nothing: the prompt stays as it is.
+            PromptKind::NewSessionOn { .. } if text.trim().is_empty() => return None,
+            PromptKind::NewSessionOn { machine } => Ok(Action::NewRemoteSession {
+                machine,
+                term: text.trim().to_string(),
+            }),
             PromptKind::NewWorktree { workspace } => {
                 if text.is_empty() {
                     Err("enter a branch".to_string())

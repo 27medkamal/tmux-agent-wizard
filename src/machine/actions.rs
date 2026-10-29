@@ -73,6 +73,11 @@ pub fn remote_argv(action: &Action) -> Vec<String> {
             }
             argv
         }),
+        // `--json` for the envelope, `--no-switch` so no client over there moves (someone may be attached on
+        // that machine), and `--` so a term that starts with a dash stays a term.
+        Action::NewRemoteSession { term, .. } => word(term)
+            .filter(|term| !term.trim().is_empty())
+            .map(|term| args(&["open", "--json", "--no-switch", "--", term])),
         // No verb over there: going somewhere is the app's own business, and the rest are about
         // this machine's own tmux (there is no window-close action to send either).
         Action::Jump { .. }
@@ -157,6 +162,10 @@ pub enum Reply {
     Dirty,
     /// The target is not there any more (`not_found`).
     Gone,
+    /// The far taw ended with status 2 and no envelope: clap refused the command line, which is what a taw
+    /// that does not know an option of it does (the worker keeps no stderr). A taw that knows `open
+    /// --no-switch` answers every failure with an envelope.
+    Usage,
     /// Any other error the machine's taw reported: its own message, with the machine named
     /// ([`super::words::refused`]).
     Refused(String),
@@ -195,6 +204,7 @@ pub fn classify(machine: &str, ran: Ran, bound: Duration) -> Reply {
         } => Reply::NoAnswer,
         Ran::Done { code, stdout, .. } => match error_of(&stdout) {
             Some((code, message)) => by_code(machine, &code, &message),
+            None if code == Some(2) => Reply::Usage,
             None => Reply::Refused(words::refused(
                 machine,
                 &match code {
@@ -246,6 +256,26 @@ fn error_of(stdout: &[u8]) -> Option<(String, String)> {
             .unwrap_or_default()
             .to_string(),
     ))
+}
+
+/// What a [`Reply::Usage`] says of a verb that is not `open`: the far taw ended with status 2 and no answer.
+pub fn usage_words(machine: &str) -> String {
+    words::refused(machine, "it ended with status 2 and no answer taw can read")
+}
+
+/// The session `open --json` made or found, as its envelope names it: the name, whether it was made, and the
+/// folder. Text from the far side is cleaned here.
+pub fn session_opened(stdout: &[u8]) -> Option<(String, bool, String)> {
+    let result = result_of(stdout)?;
+    let name = plain(result["session"].as_str()?);
+    let created = result["created"].as_bool().unwrap_or(false);
+    let dir = plain(result["dir"].as_str().unwrap_or_default());
+    (!name.is_empty()).then_some((name, created, dir))
+}
+
+/// The message of the error envelope in `stdout`, cleaned: what a far verb said when it failed.
+pub fn error_message(stdout: &[u8]) -> Option<String> {
+    error_of(stdout).map(|(_, message)| plain(&message))
 }
 
 fn by_code(machine: &str, code: &str, message: &str) -> Reply {

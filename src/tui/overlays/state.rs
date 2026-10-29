@@ -227,6 +227,8 @@ impl Item {
 pub enum PromptKind {
     /// A branch for a new worktree cut from `workspace`'s repository.
     NewWorktree { workspace: String },
+    /// A folder or a zoxide term for a session made on `machine`, by that machine's own taw.
+    NewSessionOn { machine: String },
     /// herdr's agent label (`@agent_name`) on a pane.
     RenameAgent { pane: String },
     /// `rename-window` on a window id.

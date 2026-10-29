@@ -1966,7 +1966,7 @@ impl<'a> App<'a> {
             KeyAction::Shallower => self.step_depth(-1),
             KeyAction::Deeper => self.step_depth(1),
             KeyAction::ToggleFlat => self.toggle_flat(),
-            KeyAction::NewSession => self.open_project_picker(),
+            KeyAction::NewSession => self.new_session(),
             KeyAction::Help => self.overlay = Overlay::Help(Scroll::default()),
             KeyAction::Quit => {
                 if key.code == KeyCode::Esc

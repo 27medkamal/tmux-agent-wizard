@@ -81,6 +81,12 @@ pub enum Action {
     OpenWorktree {
         workspace: String,
     },
+    /// `n` in the app on a row of another machine: make (or find) the session for `term` on `machine`, with
+    /// that machine's own taw (`taw open --json --no-switch -- <term>` over ssh). Only the app sends it.
+    NewRemoteSession {
+        machine: String,
+        term: String,
+    },
     /// Enter on a live machine's row in the popup: the popup ends and the client goes into the app, which goes
     /// into the machine (`taw app --go machine:id`). `id` is the machine's own (`%16`, `$3` or `@5`), not
     /// namespaced. Leaves the popup. Not a landing: nothing here goes anywhere itself.
@@ -221,6 +227,9 @@ pub fn exec(
         Action::KillGroup { session } => kill_group(t, cfg, paths, taw_bin, session, client),
         Action::Doorway { machine, id } => doorway(t, client, taw_bin, machine, id),
         Action::OpenProject { path } => return Ok(open_project(t, cfg, client, path)),
+        Action::NewRemoteSession { machine, .. } => {
+            Outcome::toast(crate::machine::words::read_only(machine))
+        }
         Action::NewWorktree { workspace, branch } => {
             match worktree::create(
                 t, cfg, paths, taw_bin, workspace, branch, None, false, false,

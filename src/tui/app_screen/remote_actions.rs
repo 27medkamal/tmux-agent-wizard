@@ -43,6 +43,9 @@ pub(super) const HINT_AFTER: Duration = Duration::from_secs(2);
 /// and the machine's slot stays taken until it has.
 const GIVE_UP_AFTER: Duration = Duration::from_secs(5);
 
+/// How long after a session was made on a machine the list may take to show its row, for the app to go in.
+pub(super) const SESSION_WAIT: Duration = Duration::from_secs(5);
+
 /// How often a verb in flight is looked at by the thread that runs it.
 const LOOK: Duration = Duration::from_millis(30);
 
@@ -384,6 +387,15 @@ pub(super) struct Rows {
     worker: RemoteActions,
     pending: HashMap<String, Pending>,
     next_token: u64,
+    /// A session just made on a machine, whose row the list has not shown yet: the app goes in when it does.
+    pub(super) awaiting: Option<Awaiting>,
+}
+
+/// The session a machine made for the app's `n`, waited for in the list ([`SESSION_WAIT`]).
+pub(super) struct Awaiting {
+    machine: String,
+    name: String,
+    pub(super) since: Instant,
 }
 
 impl Rows {
@@ -461,6 +473,39 @@ impl Rows {
             let here =
                 current.is_some_and(|sent| sent.row == app.cursor_id() && !app.overlay.is_open());
             match (done.reply, current) {
+                // A session made over there: said, and when the cursor is still where `n` was pressed, gone
+                // in to once the list shows its row.
+                (Reply::Done, Some(sent))
+                    if matches!(sent.action, Action::NewRemoteSession { .. }) =>
+                {
+                    match crate::machine::actions::session_opened(&done.stdout) {
+                        Some((name, created, dir)) => {
+                            app.toast(words::session_made(machine, &name, &dir, created));
+                            if here {
+                                self.awaiting = Some(Awaiting {
+                                    machine: machine.to_string(),
+                                    name,
+                                    since: Instant::now(),
+                                });
+                            }
+                        }
+                        None => app.toast(words::session_made_unreadable(machine)),
+                    }
+                }
+                (Reply::Usage, Some(sent))
+                    if matches!(sent.action, Action::NewRemoteSession { .. }) =>
+                {
+                    app.toast(words::update_taw_to_make_sessions(machine));
+                }
+                // `open` says `not_found` for a folder or a term that is nowhere: the far words, not "row gone".
+                (Reply::Gone, Some(sent))
+                    if matches!(sent.action, Action::NewRemoteSession { .. }) =>
+                {
+                    let said =
+                        crate::machine::actions::error_message(&done.stdout).unwrap_or_default();
+                    app.toast(words::refused(machine, &said));
+                }
+                (Reply::Usage, _) => app.toast(crate::machine::actions::usage_words(machine)),
                 (Reply::Done, Some(sent)) if here => {
                     if matches!(sent.action, Action::NewWorktree { .. }) {
                         match created(&done.stdout) {
@@ -506,6 +551,7 @@ impl Rows {
                 (Reply::TimedOut { secs }, _) => app.toast(words::timed_out(machine, secs)),
             }
         }
+        routes.extend(self.go_in_to_awaited(app));
         // The hint is said once per verb, and never over another toast: it waits for an empty slot.
         if !answered
             && app.live_toast().is_none()
@@ -514,6 +560,46 @@ impl Rows {
             app.toast(hint);
         }
         routes
+    }
+}
+
+impl Rows {
+    /// The route into the session a machine made for `n`, when the list shows its row: the row is selected and
+    /// the route is the one Enter on it takes. Nothing after [`SESSION_WAIT`]: nothing is selected, the toast
+    /// stays, and the app waits for nothing.
+    fn go_in_to_awaited(&mut self, app: &mut App) -> Option<Route> {
+        let waiting = self.awaiting.as_ref()?;
+        let found = app.snap.spaces.iter().position(|space| {
+            space.session_name == waiting.name
+                && space
+                    .machine
+                    .and_then(|at| app.snap.machines.get(at))
+                    .is_some_and(|header| header.name == waiting.machine)
+        });
+        let Some(space) = found else {
+            if waiting.since.elapsed() >= SESSION_WAIT {
+                self.awaiting = None;
+            }
+            return None;
+        };
+        self.awaiting = None;
+        let session = app.snap.spaces[space].session_id.clone();
+        if let Some(at) = app
+            .rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, crate::tui::tree::Row::Session(s) if *s == space))
+        {
+            app.sel = at;
+        }
+        let active_pane_of = |id: &str| {
+            app.snap
+                .spaces
+                .iter()
+                .find(|space| space.session_id == id)
+                .and_then(|space| space.active_pane_id.clone())
+        };
+        super::machine::route(&Action::SwitchWorkspace { session }, active_pane_of)
     }
 }
 
@@ -1766,6 +1852,228 @@ mod rows_tests {
             toast_of(&app)
                 .unwrap()
                 .starts_with("studio: not_a_git_repo")
+        );
+    }
+
+    const OPENED: &str = r#"{"id":"cli:open","result":{"type":"session_open","session":"garden","created":true,"collision":null,"switched":false,"dir":"/home/studio/code/garden"}}"#;
+    const NO_DIR: &str = r#"{"id":"cli:open","error":{"code":"not_found","message":"no directory matches nothing-like-it"}}"#;
+
+    /// `n` on a session row of studio: a prompt titled for the machine; Esc closes it, Enter on an empty line does
+    /// nothing, and Enter on a term gives the action for studio.
+    /// Mutation: `n` opens this Mac's picker for a machine's row (`new_session` goes straight to the picker).
+    #[test]
+    fn n_on_a_machines_row_asks_for_a_folder_on_that_machine() {
+        let rig = Rig::new(None);
+        let mut app = rig.app();
+        select(&mut app, "studio:$4");
+        assert!(press(&mut app, KeyCode::Char('n')).is_none());
+        match &app.overlay {
+            Overlay::Prompt(p) => {
+                assert_eq!(p.title, "new session on studio: a folder or a zoxide term")
+            }
+            other => panic!("not the prompt: {other:?}"),
+        }
+        assert!(press(&mut app, KeyCode::Enter).is_none());
+        assert!(
+            matches!(app.overlay, Overlay::Prompt(_)),
+            "an empty line does nothing"
+        );
+        let _ = press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.overlay, Overlay::None), "Esc closes it");
+        // The header line and the empty-machine row of the machine aim at it too.
+        for row in [Row::Machine(Some(0)), Row::NoSession(0)] {
+            app.rows.rows.push(row);
+            app.sel = app.rows.rows.len() - 1;
+            let _ = press(&mut app, KeyCode::Char('n'));
+            assert!(
+                matches!(&app.overlay, Overlay::Prompt(p) if p.title.contains("on studio")),
+                "{:?}",
+                toast_of(&app)
+            );
+            let _ = press(&mut app, KeyCode::Esc);
+        }
+        select(&mut app, "studio:$4");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        type_in(&mut app, "-odd");
+        assert_eq!(
+            press(&mut app, KeyCode::Enter),
+            Some(Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "-odd".into()
+            })
+        );
+    }
+
+    /// A local row still opens this Mac's picker, a machine that is away says why, and the popup says the row is
+    /// read only.
+    /// Mutation: the away and popup checks go (`!header.live || !self.is_app()` becomes false).
+    #[test]
+    fn n_on_a_local_row_opens_the_picker_and_elsewhere_it_refuses() {
+        let rig = Rig::new(None);
+        let mut app = rig.app();
+        let local = app
+            .rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Pane(p) if app.snap.panes[*p].machine.is_none()))
+            .expect("a local pane");
+        app.sel = local;
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert!(
+            matches!(app.overlay, Overlay::Project(_)),
+            "{:?}",
+            toast_of(&app)
+        );
+
+        let mut away = app_over(&rig.cfg, five_and_two("idle", false));
+        away.enter_app_mode(None, None);
+        let pi = away
+            .rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Session(s) if away.snap.spaces[*s].session_id.starts_with("pi:")))
+            .expect("a session of pi, which is away");
+        away.sel = pi;
+        let _ = press(&mut away, KeyCode::Char('n'));
+        assert!(matches!(away.overlay, Overlay::None));
+        assert!(
+            toast_of(&away).unwrap().starts_with("pi is not connected"),
+            "{:?}",
+            toast_of(&away)
+        );
+    }
+
+    /// The far argv is exactly `open --json --no-switch -- <term>` (a dash term stays a term), a second press while
+    /// it runs sends nothing, a success says made or already there with the folder, and when the list shows the
+    /// session the row is selected and the route is Enter's.
+    /// Mutation: `remote_argv` drops `--no-switch` or the `--`.
+    #[test]
+    fn a_session_made_on_the_machine_is_said_and_gone_in_to() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        let name = app
+            .snap
+            .spaces
+            .iter()
+            .find(|s| s.session_id == "studio:$4")
+            .unwrap()
+            .session_name
+            .clone();
+        let opened = OPENED.replace(r#""session":"garden""#, &format!(r#""session":"{name}""#));
+        let guard = rig.fake(&opened, 0, false);
+        select(&mut app, "studio:$4");
+        let action = Action::NewRemoteSession {
+            machine: "studio".into(),
+            term: "-odd".into(),
+        };
+        send(&mut feed, &mut app, &action);
+        send(&mut feed, &mut app, &action);
+        assert_eq!(
+            toast_of(&app).as_deref(),
+            Some("studio is still answering the last action")
+        );
+        let routes = answered(&mut feed, &mut app);
+        assert_eq!(
+            rig.sent(),
+            ["open", "--json", "--no-switch", "--", "-odd"],
+            "sent once"
+        );
+        assert_eq!(
+            toast_of(&app),
+            Some(words::session_made(
+                "studio",
+                &name,
+                "/home/studio/code/garden",
+                true
+            ))
+        );
+        assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { machine, target, .. } if machine == "studio" && target == "$4"),
+            "{routes:?}"
+        );
+        assert!(
+            matches!(app.current(), Some(Row::Session(s)) if app.snap.spaces[*s].session_id == "studio:$4")
+        );
+        drop(guard);
+        // Already there says so.
+        let _again = rig.fake(&opened.replace("true", "false"), 0, false);
+        send(&mut feed, &mut app, &action);
+        let _ = answered(&mut feed, &mut app);
+        assert_eq!(
+            toast_of(&app),
+            Some(words::session_made(
+                "studio",
+                &name,
+                "/home/studio/code/garden",
+                false
+            ))
+        );
+    }
+
+    /// A row that never shows leaves nothing selected after the wait and nothing hangs.
+    /// Mutation: the wait never ends (`SESSION_WAIT` is not looked at).
+    #[test]
+    fn a_session_row_that_never_shows_selects_nothing_and_waits_for_nothing() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        let _fake = rig.fake(
+            &OPENED.replace("garden\",\"created", "nowhere-listed\",\"created"),
+            0,
+            false,
+        );
+        select(&mut app, "studio:$4");
+        let sel = app.sel;
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "garden".into(),
+            },
+        );
+        assert!(answered(&mut feed, &mut app).is_empty());
+        assert!(
+            feed.remote.awaiting.is_some(),
+            "still waiting inside the wait"
+        );
+        feed.remote.awaiting.as_mut().unwrap().since =
+            Instant::now() - SESSION_WAIT - Duration::from_secs(1);
+        assert!(feed.remote.settle(&mut app).is_empty());
+        assert!(feed.remote.awaiting.is_none(), "given up");
+        assert_eq!(app.sel, sel, "nothing selected");
+        assert!(
+            toast_of(&app)
+                .unwrap()
+                .starts_with("made session nowhere-listed on studio")
+        );
+    }
+
+    /// A far error is toasted in the far words, an old taw's usage error says to update it.
+    /// Mutation: `Reply::Usage` reads as the generic refusal.
+    #[test]
+    fn a_far_error_is_toasted_and_an_old_taw_is_told_to_update() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let action = Action::NewRemoteSession {
+            machine: "studio".into(),
+            term: "nothing-like-it".into(),
+        };
+        let guard = rig.fake(NO_DIR, 1, false);
+        send(&mut feed, &mut app, &action);
+        assert!(answered(&mut feed, &mut app).is_empty());
+        assert_eq!(
+            toast_of(&app).as_deref(),
+            Some("studio: no directory matches nothing-like-it")
+        );
+        drop(guard);
+        let _old = rig.fake("", 2, false);
+        send(&mut feed, &mut app, &action);
+        assert!(answered(&mut feed, &mut app).is_empty());
+        assert_eq!(
+            toast_of(&app),
+            Some("update taw on studio to make sessions there from here".to_string())
         );
     }
 

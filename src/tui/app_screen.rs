@@ -817,6 +817,11 @@ impl Feed<'_> {
             self.perform_remote(app, &machine, &raw, action);
             return Ok(());
         }
+        // A session made on a machine is that machine's taw's to make, over ssh: this Mac's is not asked.
+        if let actions::Action::NewRemoteSession { machine, .. } = action {
+            self.perform_remote(app, machine, action, action);
+            return Ok(());
+        }
         // The paste-image key runs in the background, here or on a machine (the image is sent over its ssh): the
         // screen keeps drawing and taking keys, and the toast comes when the paste ends ([`Feed::say_pasted`]).
         if let actions::Action::PasteImage { pane } = action {

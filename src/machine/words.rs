@@ -345,6 +345,30 @@ pub fn on_machine(machine: &str, target: &str) -> String {
     format!("{machine} \u{b7} {target}")
 }
 
+/// The title of the prompt `n` opens on a row of `machine`: the session is made there.
+pub fn new_session_prompt(machine: &str) -> String {
+    format!("new session on {machine}: a folder or a zoxide term")
+}
+
+/// What the app says when `machine` made a session for `dir` (`created`), or already had one there.
+pub fn session_made(machine: &str, name: &str, dir: &str, created: bool) -> String {
+    if created {
+        format!("made session {name} on {machine}: {dir}")
+    } else {
+        format!("session {name} is already on {machine}: {dir}")
+    }
+}
+
+/// What the app says when the taw on `machine` does not know `open --no-switch`.
+pub fn update_taw_to_make_sessions(machine: &str) -> String {
+    format!("update taw on {machine} to make sessions there from here")
+}
+
+/// What the app says when `machine` answered that it made the session but the answer holds no name to go in by.
+pub fn session_made_unreadable(machine: &str) -> String {
+    format!("{machine} answered, but the answer names no session")
+}
+
 /// What the app says of an action whose target is not an id it can send to a machine.
 pub fn no_id_to_send(machine: &str) -> String {
     format!("{machine}: that row has no id taw can send")

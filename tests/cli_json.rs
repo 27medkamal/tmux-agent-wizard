@@ -8421,6 +8421,47 @@ fn session_candidates_with_a_long_zoxide_history_still_lists_the_project_folders
     assert!(env["result"].get("truncated").is_none(), "{env}");
 }
 
+/// A folder that zoxide lists and that is also under `project_dirs` is one row, where zoxide lists it.
+#[test]
+fn session_candidates_lists_a_folder_in_both_sources_once() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, false);
+    std::fs::write(
+        f.config.path().join("config.toml"),
+        format!(
+            "[sessions]\nzoxide = true\nproject_dirs = [\"{}\"]\n",
+            c.home.path().join("proj").display()
+        ),
+    )
+    .unwrap();
+    write_hook(
+        &c.bin.path().join("zoxide"),
+        &format!(
+            "[ \"$1\" = add ] && exit 0\necho '{0}/web'\necho '{0}/proj/app'\n",
+            c.home.path().display()
+        ),
+    );
+    let args = ["session", "candidates", "--json"];
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    let rows: Vec<(&str, &str)> = env["result"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| (row["kind"].as_str().unwrap(), row["name"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("zoxide", "~/web"),
+            ("zoxide", "~/proj/app"),
+            ("project", "~/proj/lib")
+        ],
+        "{env}"
+    );
+}
+
 /// No zoxide, no project folders and no server are an empty answer, not an error.
 #[test]
 fn session_candidates_with_nothing_to_offer_is_an_empty_list() {
@@ -8660,7 +8701,14 @@ fn session_candidates_help_says_what_it_lists() {
     let f = Fixture::start();
     let (code, stdout, _) = f.run_raw(&["session", "candidates", "--help"]);
     assert_eq!(code, 0);
-    for word in ["picker", "zoxide", "project_dirs", "--json"] {
+    for word in [
+        "picker",
+        "zoxide",
+        "project_dirs",
+        "--json",
+        "1000",
+        "no tmux server still lists",
+    ] {
         assert!(stdout.contains(word), "no `{word}` in:\n{stdout}");
     }
 }

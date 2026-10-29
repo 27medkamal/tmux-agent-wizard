@@ -81,11 +81,13 @@ pub enum Cmd {
     ///
     /// What the picker lists before anything is typed, in its order: zoxide's folders, then the
     /// folders under `[sessions] project_dirs`, each told as `session` when a session is already
-    /// running there, else `zoxide` or `project`. Nothing is asked and nothing is switched, and a
-    /// machine with no zoxide, no project folders or no tmux server answers an empty list. Without
-    /// `--json` it prints one line for each folder.
+    /// running there, else `zoxide` or `project`; each source is cut at 1000 folders. Nothing is
+    /// asked and nothing is switched. With no zoxide history and no project folders it answers an
+    /// empty list; a machine with no tmux server still lists its folders, none of them as
+    /// `session`. Without `--json` it prints one line for each folder.
     Candidates {
-        /// Print the envelope: `{"candidates":[{"kind","name","dir","session"}]}`
+        /// Print the envelope: `{"candidates":[{"kind","name","dir","session"}]}`, and `truncated`
+        /// or `sessions_error` when they apply
         #[arg(long)]
         json: bool,
     },

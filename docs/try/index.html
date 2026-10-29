@@ -254,6 +254,7 @@
   'use strict';
   let COLS = 150; const EMBED = new URLSearchParams(window.location.search).get('embed') === '1'; document.documentElement.classList.toggle('embed', EMBED); const ROWS = EMBED ? 38 : 40; if (!EMBED && window.matchMedia('(max-width: 599px)').matches) COLS = 60;
   const WIDE_COLUMNS = 100, PREVIEW_MIN = 40;
+  const CALM = true;
   const now = () => 17 * 3600 + 58 * 60;
   const t = (h, m) => h * 3600 + m * 60;
   const baseSessions = () => [
@@ -591,7 +592,7 @@
   const winOf = (sid, idx) => S.windows.find(w => w.s === sid && w.idx === idx) || { name: 'zsh', cmds: ['zsh'] };
   const where = (sid, win, pidx) => { const w = winOf(sid, win); return `${win}:${w.name}` + (w.cmds.length > 1 ? `.${pidx}` : ''); };
   const whatOf = r => r.kind === 'agent' ? r.a.kind : r.kind === 'pane' ? (r.w.cmds[r.pidx - 1] || 'zsh') : '';
-  const ownText = r => (r.kind === 'session' ? `${r.s.name} ${headerGit(r.s)}`.trim() : r.kind === 'agent' ? `${r.s.name} ${r.a.kind} ${where(r.s.id, r.a.win, r.a.pidx)} ${r.a.state}` : r.kind === 'pane' ? `${r.s.name} ${whatOf(r)} ${where(r.s.id, r.win, r.pidx)}` : r.kind === 'worktree' ? `${r.s.name} ${r.wt.branch} worktree, closed` : '') + (r.s && r.s.machine ? ' ' + r.s.machine : '');
+  const ownText = r => (r.kind === 'session' ? `${r.s.name} ${headerGit(r.s)}`.trim() : r.kind === 'agent' ? (typeof CALM !== 'undefined' && CALM ? `${r.s.name} ${r.a.kind}` : `${r.s.name} ${r.a.kind} ${where(r.s.id, r.a.win, r.a.pidx)} ${r.a.state}`) : r.kind === 'pane' ? `${r.s.name} ${whatOf(r)} ${where(r.s.id, r.win, r.pidx)}` : r.kind === 'worktree' ? `${r.s.name} ${r.wt.branch} worktree, closed` : '') + (r.s && r.s.machine ? ' ' + r.s.machine : '');
   const headerGit = s => (S.git && s.branch ? [s.branch, s.git].filter(Boolean).join(' ') : '');
   const textParts = r => [ownText(r), r.kind === 'agent' || r.kind === 'pane' || r.kind === 'worktree' ? headerGit(r.s) : ''];
   const textOf = r => textParts(r).filter(Boolean).join(' ');
@@ -632,9 +633,9 @@
     const room = WHATW - after.cols; const cut = a.kind.length > room; const name = cut ? a.kind.slice(0, room - 1) + '…' : a.kind;
     return hl(name, cut ? cutHits(idx, room - 1) : idx.filter(i => i < name.length), c) + span(after.text, '') + ' '.repeat(Math.max(0, WHATW - name.length - after.cols));
   }
-  function titleCell(a, titleCls, hits) { const title = drawnTitle({ kind: 'agent', a }); if (!title) return ''; return hits && hits.length ? hlTitle(title, hits, titleCls) : span('  ' + title, titleCls); }
+  function titleCell(a, titleCls, hits, gap = '  ') { const title = drawnTitle({ kind: 'agent', a }); if (!title) return ''; return hits && hits.length ? hlTitle(title, hits, titleCls, gap) : span(gap + title, titleCls); }
   const segmentsOf = t => (SEGMENTER ? Array.from(SEGMENTER.segment(t), g => g.segment) : Array.from(t));
-  function hlTitle(title, hits, c) { const set = new Set(hits); let out = '  '; segmentsOf(title).forEach((g, k) => { out += set.has(k) ? `<span class="hl">${esc(g)}</span>` : esc(g); }); return `<span class="${c || ''}">${out}</span>`; }
+  function hlTitle(title, hits, c, gap = '  ') { const set = new Set(hits); let out = gap; segmentsOf(title).forEach((g, k) => { out += set.has(k) ? `<span class="hl">${esc(g)}</span>` : esc(g); }); return `<span class="${c || ''}">${out}</span>`; }
   function cutLit(r, html, n) { const hits = r && r.kind === 'agent' && r.m && r.m.title; if (!hits || !hits.length) return false; const plain = vis(html); if (plain.length <= n) return false; const title = drawnTitle(r); let u = plain.length - title.length; const at = segmentsOf(title).map(g => { const here = u; u += g.length; return here; }); return hits.some(k => at[k] >= n - 1); }
 
   const MACHINES = [{ name: 'studio', dest: 'studio.local' }, { name: 'build-box', dest: 'build-box.local' }, { name: 'pi', dest: 'pi' }];
@@ -684,9 +685,9 @@
   const offlineMachines = () => MACHINES.map(m => m.name).filter(m => !machineLive(m));
   const MACHINE_WORDS = { dropped: 'offline, last seen 2m ago', connecting: 'connecting', notaw: 'no taw there: install it as you did here', oldtaw: 'runs taw 0.1.0, which has no machines: update it there' };
   const MH_DOT = { live: ['●', 'mh-ok'], connecting: ['●', 'mh-wait'], dropped: ['●', 'mh-off'], notaw: ['●', 'mh-off'], oldtaw: ['●', 'mh-off'], none: ['○', 'mh-none'] };
-  function machineHeaderHtml(m, width) {
+  function machineHeaderHtml(m, width, withCounts = false) {
     const st = machineState(m); const live = st === 'live';
-    const counts = live ? ['blocked', 'done', 'working', 'idle', 'unknown'].map(k => [k, S.agents.filter(a => (a.machine || '') === m && a.state === k).length]).filter(([, n]) => n).map(([k, n]) => span(glyph(k) + n, cls(k))).join(' ') : '';
+    const counts = live && withCounts ? ['blocked', 'done', 'working', 'idle', 'unknown'].map(k => [k, S.agents.filter(a => (a.machine || '') === m && a.state === k).length]).filter(([, n]) => n).map(([k, n]) => span(glyph(k) + n, cls(k))).join(' ') : '';
     const [dot, dotCls] = MH_DOT[st];
     const left = span('━━ ', 'mh-rule') + span(dot, dotCls) + ' ' + span(m || thisName(), 'mh-name') + (live ? '' : span('  ' + MACHINE_WORDS[st], 'mh-words'));
     const right = counts ? ' ' + counts + ' ' + span('━━', 'mh-rule') : '';
@@ -695,7 +696,8 @@
   function withMachineHeaders(items) {
     if (!S.remote || (S.flat && S.depth !== 'sessions')) return items;
     const order = machineOrder(), out = [], filtering = !!(query().trim() ? query() : ''); let at = 0;
-    const head = m => out.push({ i: -3, m, html: machineHeaderHtml(m) });
+    const haveAgents = new Set(items.map(it => ROWS_CACHE[it.i]).filter(r => r && r.kind === 'agent' && (!r.s.machine || machineLive(r.s.machine))).map(r => r.s.machine || '')); const withCounts = haveAgents.size >= 2;
+    const head = m => out.push({ i: -3, m, counts: withCounts, html: machineHeaderHtml(m, 0, withCounts) });
     const flush = upto => { while (at < upto) { const m = order[at++]; if (!filtering) head(m); } };
     for (const it of items) { const r = ROWS_CACHE[it.i]; const k = order.indexOf((r && r.s && r.s.machine) || ''); if (k >= at) { flush(k); head(order[k]); at = k + 1; } out.push(it); }
     flush(order.length);
@@ -705,8 +707,7 @@
   const machinesOptions = () => [' [machines]', ' studio = "studio.local"         # connected, taw 0.4.0', ' build-box = "build-box.local"   # connected, taw 0.4.0', ` pi = "pi"                       # ${PI_OPTION[S.rmPi]}`];
   const pickerTitle = () => (S.remote ? ` new session on ${thisName()} ` : ' new session ');
   const enterHelp = () => (!S.remote ? 'go to the row under the cursor' : appMode() ? 'go into that tmux, in this terminal; the popup key comes back here' : 'go to the row under the cursor; on another machine, through the app');
-  const barCounts = () => { if (!S.remote) return `  ${S.sessions.length} sessions  ·  ${S.agents.length} agents  ·  `; const off = offlineMachines(); return `  ${MACHINES.length + 1} machines${off.length ? `, ${off.join(', ')} offline` : ''}  ·  ${S.sessions.filter(s => !s.machine || machineLive(s.machine)).length} sessions  ·  ${S.agents.filter(liveAgent).length} agents  ·  `; };
-  const offlineMark = () => { const off = S.remote ? offlineMachines() : []; return off.length ? span(` ${off.join(', ')} offline`, 'c-dim') : ''; };
+  const barCounts = () => { if (!S.remote) return `  ${S.sessions.length} sessions  ·  ${S.agents.length} agents`; return `  ${S.sessions.filter(s => !s.machine || machineLive(s.machine)).length} sessions  ·  ${S.agents.filter(liveAgent).length} agents`; };
   const remotePreview = r => (!r.s || !r.s.machine ? null : !machineLive(r.s.machine) ? [`no preview: ${r.s.machine} is not connected`] : null);
   const machineAt = (r, at) => (r && r.s && r.s.machine ? `${r.s.machine}:${at}` : at);
   const RMT = new Set();
@@ -881,7 +882,7 @@
   function wrapPreview(lines, r, width) { if (!S.wrap || fullScreenRow(r) || width < 8) return lines; const out = []; for (const l of lines) { let rest = l; while (rest.length > width) { out.push(rest.slice(0, width)); rest = rest.slice(width); } out.push(rest); } return out; }
   const previewTitle = r => { const at = machineAt(r, r ? (r.kind === 'project' ? r.path : r.kind === 'worktree' ? `~/.tmux-agent-wizard/worktrees/${wtFolder(r.s, r.wt.branch)}` : r.s.path) : ''); const box = r && r.kind === 'agent' ? boxOf(r.a) : null; return box ? `${at} · ${BOX} in a sandbox: ${boxWords(box)}` : at; };
 
-  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' ') + offlineMark(); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const need = needsBy(); const left = S.bar === 'taw' || appMode() ? span(appMode() ? ' taw app ' : ' taw ', 'c-acc bold') + span(barCounts(), 'c-fg') + (need.length ? need.map(p => span(glyph(p.st) + p.n, cls(p.st) + ' bold')).join(' ') + span(' ' + needWords(need), 'c-fg') : span('nothing needs you', 'c-dim')) : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
+  function statusLine(inner) { const cur = currentSession() || { name: '' }; if (S.notice) return `<span class="toast">${esc(pad(' ' + S.notice, inner + 2))}</span>`; const by = {}; S.agents.filter(liveAgent).forEach(a => by[a.state] = (by[a.state] || 0) + 1); const rail = ['blocked', 'working', 'done', 'idle', 'unknown'].filter(k => by[k]).map(k => span(glyph(k) + by[k], cls(k))).join(' '); const wins = S.windows.filter(w => w.s === cur.id).map(w => (w.idx === cur.cur ? span(`${w.idx}:${w.name}*`, 'c-fg bold') : span(`${w.idx}:${w.name}`, 'c-dim'))).join('  '); const ours = S.bar === 'taw' || appMode(); const left = ours ? span(appMode() ? ' taw app ' : ' taw ', 'c-acc bold') + span(barCounts(), 'c-fg') : span(` [${cur.name}] `, 'c-acc bold') + wins; const right = ours ? span(' 17:58 ', 'c-dim') : rail + span('  │  17:58 ', 'c-dim'); const gap = Math.max(1, inner + 2 - vis(left).length - vis(right).length); const line = left + ' '.repeat(gap) + right; return `<span class="b-status">${vis(line).length > inner + 2 ? clipHtml(line, inner + 2) : line}</span>`; }
 
   function draw() {
     const term = document.getElementById('term'); const inner = COLS; const lines = []; const popupRows = ROWS - 1;
@@ -944,13 +945,14 @@
     if (r.kind === 'project') return projectHtml(r, projectRoom(Infinity));
     const lab = labelOf(i);
     if (r.kind === 'session') {
-      const gitPart = S.git && r.s.branch ? '  ' + r.s.branch + (r.s.git ? ' ' + r.s.git : '') : '';
+      const gitPart = CALM ? (S.git && r.s.branch && r.s.branch !== 'main' ? '  ' + r.s.branch : '') : S.git && r.s.branch ? '  ' + r.s.branch + (r.s.git ? ' ' + r.s.git : '') : '';
       let counts = '', title = '';
-      if (S.depth === 'sessions' && !staleS(r.s)) { const by = {}; agentsOf(r.s).forEach(a => by[a.state] = (by[a.state] || 0) + 1); counts = ['blocked', 'done', 'working', 'idle', 'unknown'].filter(k => by[k]).map(k => '  ' + span(glyph(k) + by[k], cls(k))).join(''); const t = sessionTarget(r.s); if (S.titles && t && stripTitle(t.title)) title = span('  ' + stripTitle(t.title), 'c-dim'); }
+      if (!CALM && S.depth === 'sessions' && !staleS(r.s)) { const by = {}; agentsOf(r.s).forEach(a => by[a.state] = (by[a.state] || 0) + 1); counts = ['blocked', 'done', 'working', 'idle', 'unknown'].filter(k => by[k]).map(k => '  ' + span(glyph(k) + by[k], cls(k))).join(''); const t = sessionTarget(r.s); if (S.titles && t && stripTitle(t.title)) title = span('  ' + stripTitle(t.title), 'c-dim'); }
       return span(lab, lab !== ' ' && numbersWork() && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' + span(flagOf(r.s) || ' ', (appMode() ? r.s === currentSession() : r.s.attached) ? 'c-acc bold' : 'c-dim') + ' ' + hl(r.s.name, sub(r.m, 0, r.s.name.length), staleS(r.s) ? 'c-dim bold' : 'c-acc bold') + span(gitPart, 'c-dim') + counts + title;
     }
     const last = !S.flat && (i + 1 >= ROWS_CACHE.length || ROWS_CACHE[i + 1].kind === 'session' || ROWS_CACHE[i + 1].kind === 'project');
     const mine = r.s === currentSession(); const letter = ROW_LETTERS.get(i) || null; const keyed = LETTERED.includes(i) || letterHit(r, i); const grey = staleS(r.s); const lit = !grey && S.openMark && (r.kind === 'agent' ? r.a.win === r.s.cur : r.kind === 'pane' ? r.win === r.s.cur : false); const ind = S.flat ? span(lab, lab !== ' ' && numbersWork() && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' : '  ' + (letter ? span(letter, keyed && !S.overlay ? 'c-yel bold' : 'c-dim') + ' ' : '  ') + span(last ? '└' : '├', lit ? 'c-fg bold' : mine ? 'c-acc bold' : 'c-dim') + ' '; const off = r.s.name.length + 1;
+    if (r.kind === 'agent' && CALM) { const hot = grey ? null : hotCls(r.a.state, r.a.seen); const after = markAfter(r.a); return ind + span(glyph(r.a.state), hot || (grey ? 'c-dim' : cls(r.a.state))) + ' ' + hl(r.a.kind, sub(r.m, off, r.a.kind.length), hot || (lit ? 'c-fg bold' : grey ? 'c-dim' : 'c-fg')) + (after ? span(after.text, '') : '') + (S.flat ? flatSession(r, lit && !hot ? 'c-fg' : 'c-dim') : '') + titleCell(r.a, hot || (lit ? 'c-fg' : 'c-dim'), r.m && r.m.title, ' '); }
     if (r.kind === 'agent') { const wh = where(r.s.id, r.a.win, r.a.pidx); const hot = grey ? null : hotCls(r.a.state, r.a.seen); const nameC = hot || (lit ? 'c-fg bold' : grey ? 'c-dim' : 'c-fg'); return ind + span(glyph(r.a.state), hot || (grey ? 'c-dim' : cls(r.a.state))) + ' ' + kindCell(r.a, sub(r.m, off, r.a.kind.length), nameC) + ' ' + whereCell(wh, sub(r.m, off + r.a.kind.length + 1, wh.length), hot || (lit ? 'c-fg bold' : 'c-dim')) + ' ' + hl(pad(`${r.a.state} ${elapsed(r.a.since)}`, 12), sub(r.m, off + r.a.kind.length + 1 + wh.length + 1, r.a.state.length), hot || (lit ? 'c-fg' : 'c-dim')) + (S.flat ? flatSession(r, lit && !hot ? 'c-fg' : 'c-dim') : '') + titleCell(r.a, hot || (lit ? 'c-fg' : 'c-dim'), r.m && r.m.title); }
     if (r.kind === 'pane') { const what = whatOf(r), wh = where(r.s.id, r.win, r.pidx); return ind + span('▢', lit ? 'c-fg' : 'c-dim') + ' ' + cutCell(what, WHATW, sub(r.m, off, what.length), lit ? 'c-fg bold' : 'c-dim') + ' ' + whereCell(wh, sub(r.m, off + what.length + 1, wh.length), lit ? 'c-fg bold' : 'c-dim') + (S.flat ? flatSession(r, lit ? 'c-fg' : 'c-dim') : ''); }
     if (r.kind === 'worktree') return ind + span('◌', 'c-dim') + ' ' + cutCell(r.wt.branch, WHATW, sub(r.m, off, r.wt.branch.length), 'c-dim') + ' ' + span('worktree, closed', 'c-dim') + (S.flat ? flatSession(r, 'c-dim') : '');
@@ -985,7 +987,7 @@
     const rightCol = i => beside ? span('│', 'c-dim') + `<span class="b-panel">${esc(pad(' ' + (prevLines[i - (visibleH + qRow - prevLines.length)] ?? ''), prevW - 2))}</span>` + span('│', 'c-dim') : ' '.repeat(prevW);
     let li = 0;
     if (S.model === 'search') { const qline = ' ' + span('>', 'c-acc') + ' ' + span(S.q.slice(0, cursorAt(S.q, S.qc)), 'c-acc') + span('▏', 'c-acc') + (cursorAt(S.q, S.qc) < S.q.length ? span(S.q.slice(cursorAt(S.q, S.qc)), 'c-acc') : '') + span(S.q ? '' : 'search…', 'c-dim'); out.push(span('│', 'c-acc') + `<span class="b-panel">${padHtml(qline, sideW - 2)}</span>` + span('│', 'c-acc') + rightCol(li++)); }
-    for (let i = 0; i < visibleH; i++) { const it = shown[i]; const left = it ? `<span class="${it.i === S.sel ? 'b-sel' : 'b-panel'}">${padHtml(it.i === -3 ? machineHeaderHtml(it.m, sideW - 2) : it.html, sideW - 2, it.i >= 0 && cutLit(rows[it.i], it.html, sideW - 2))}</span>` : `<span class="b-panel">${' '.repeat(sideW - 2)}</span>`; out.push(span('│', 'c-acc') + left + span('│', 'c-acc') + rightCol(li++)); }
+    for (let i = 0; i < visibleH; i++) { const it = shown[i]; const left = it ? `<span class="${it.i === S.sel ? 'b-sel' : 'b-panel'}">${padHtml(it.i === -3 ? machineHeaderHtml(it.m, sideW - 2, it.counts) : it.html, sideW - 2, it.i >= 0 && cutLit(rows[it.i], it.html, sideW - 2))}</span>` : `<span class="b-panel">${' '.repeat(sideW - 2)}</span>`; out.push(span('│', 'c-acc') + left + span('│', 'c-acc') + rightCol(li++)); }
     const chipL = S.flat && S.depth !== 'sessions' ? ' flat ' : S.depth !== 'all' ? ` ${S.depth} ` : '';
     out.push(span('╰' + '─'.repeat(sideW - 2 - chipL.length) + chipL + '╯', 'c-acc') + (beside ? span('╰' + '─'.repeat(prevW - 2) + '╯', 'c-dim') : ' '.repeat(prevW)));
     if (!rows.length) { const msg = query() ? ` nothing matches "${query()}"` + (S.model === 'search' ? '' : '  ·  n creates a session') : ' no sessions'; out[1 + qRow] = span('│', 'c-acc') + `<span class="b-panel c-dim">${esc(pad(msg, sideW - 2))}</span>` + span('│', 'c-acc') + rightCol(0); }

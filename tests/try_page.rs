@@ -623,7 +623,7 @@ fn a_machine_header_is_one_full_width_rule_with_a_dot_the_name_and_the_counts() 
         "span('\u{2501}\u{2501} ', 'mh-rule')",
         "'\u{2501}'.repeat(",
         "dropped: 'offline, last seen 2m ago'",
-        "machineHeaderHtml(it.m, sideW - 2)",
+        "machineHeaderHtml(it.m, sideW - 2, it.counts)",
     ] {
         assert!(page.contains(part), "{PAGE} lacks {part:?}");
     }

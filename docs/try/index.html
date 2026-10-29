@@ -1295,7 +1295,7 @@
   onRadio('layout', v => { keepCursor(() => { S.flat = v === 'flat'; }); });
   onRadio('sort', v => { S.sort = v; });
   onRadio('bar', v => { S.bar = v; });
-  onRadio('width', v => { keepCursor(() => { COLS = +v; }); });
+  onRadio('width', v => { keepCursor(() => { COLS = +v; }); fitTerm(); });
   for (const [id, key] of CHECKS) { const el = document.getElementById(id); el.addEventListener('change', () => { S[key] = el.checked; ROWS_CACHE = buildRows(); syncControls(); draw(); term.focus(); }); }
   const RM_RADIOS = [['rmpi', 'rmPi'], ['rmwhere', 'rmWhere']];
   function syncRemote() { for (const [name, key] of RM_RADIOS) setRadio(name, S[key]); const el = document.getElementById('opt-remote'); el.checked = S.remote; el.parentElement.classList.toggle('on', S.remote); document.getElementById('rmopts').classList.toggle('off', !S.remote); document.getElementById('rmphone').textContent = PHONE[S.rmWhere]; }

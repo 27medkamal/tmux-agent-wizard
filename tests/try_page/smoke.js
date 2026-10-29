@@ -320,24 +320,30 @@ for (const cols of [160, 100, 60]) {
 
 // 9. The page's size is a real number: with the stand-in's sizes (a 1400 px frame, an advance of 0.6 em, a parent
 // 860 px tall) the fit code works out a font size, a row height and a frame height that are finite and sane at each
-// width the run uses, and a narrower terminal never gets a smaller font than a wider one.
+// width the run uses, and a narrower terminal never gets a smaller font than a wider one. The sizes are read right
+// after the radio alone (picking a width sizes the window), then again after a separate resize, which changes nothing (and settles the frame's height).
 {
   const ways = { 'the embedded page in a frame': { embed: true, frame: true }, 'the standalone page': {} };
   for (const [way, o] of Object.entries(ways)) {
-    let last = 0;
+    let last = 0; const fonts = {};
     for (const cols of [160, 100, 99, 60]) {
       const where = `${way} at ${cols} columns`;
       const p = loadPage(where, o, 160);
       if (!p) continue;
-      if (!step(p, cols, where, () => { p.radio('width', String(cols)); p.resize(); })) continue;
+      if (!step(p, cols, where, () => { p.radio('width', String(cols)); })) continue;
       const { font, row, frame } = p.sizes();
       const sane = (what, v, lo, hi) => { if (!Number.isFinite(v) || v < lo || v > hi) note(where, `the ${what} is ${v}, not a number from ${lo} to ${hi}`); };
       sane('font size', font, 6, 40);
       sane('row height', row, Math.floor(font), Math.floor(font * 1.35));
-      if (o.frame) sane('frame height', frame, ROWS * row, 3000);
       if (font < last) note(where, `the font size ${font} is smaller than ${last}, the size at a wider terminal`);
       last = Number.isFinite(font) ? font : last;
+      fonts[cols] = font;
+      if (!step(p, cols, where, () => { p.resize(); })) continue;
+      if (p.sizes().font !== font) note(where, `the font size went from ${font} to ${p.sizes().font} on a resize after the width was picked`);
+      // The frame follows its content through a ResizeObserver, which the stand-in fires on a resize.
+      if (o.frame) sane('frame height', p.sizes().frame, ROWS * row, 3000);
     }
+    if (!(fonts[100] > fonts[160])) note(way, `the font size at 100 columns (${fonts[100]}) is not larger than at 160 (${fonts[160]})`);
   }
 }
 

@@ -2,7 +2,8 @@
 // draws it. Run by tests/try_page.rs with `node tests/try_page/smoke.js docs/try/index.html`;
 // exit 0 and one summary line when every drawing is sound, exit 1 and the problems otherwise.
 // What it fails on: any exception, a row count other than 34, a row wider than the terminal,
-// `undefined` or `NaN` in a row, and a glyph a screen draws that is not one cell wide by class.
+// `undefined` or `NaN` in a row, a glyph the script can draw that is not one cell wide by class, and a font size,
+// row height or frame height that is not a finite, sane number.
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
@@ -17,16 +18,30 @@ function load(html, opts = {}) {
   const setTimeout = f => { timers.set(++timerId, f); return timerId; };
   const clearTimeout = id => { timers.delete(id); };
   let measures = 0;
-  const rect = () => (measures++, { top: 0, left: 0, bottom: opts.rectH || 0, right: 0, width: opts.rectW || 0, height: opts.rectH || 0 });
+  // The sizes the stand-in measures, so the page's fit code works with real numbers: a monospace advance of 0.6 em
+  // (the probe is 50 characters at 100 px), a text box 1.2 em tall, a window as wide as its parent (1400 px) and as
+  // tall as its rows, a `main` a little taller than that. `rectW` and `rectH` still force one size on every element.
+  const rect = el => {
+    measures++;
+    const size = parseFloat(el.style.fontSize || (el._parent && el._parent.style.fontSize)) || 0;
+    let width = el.clientWidth, height = 20, top = 0;
+    if ((el.style.cssText || '').includes('font:100px/1')) { width = 3000; height = 100; }
+    else if (el._parent && el._parent.style.cssText && el._parent.style.cssText.includes('font-family')) { width = size * 0.6; height = size * 1.2; }
+    else if (el.id === 'term') height = ROWS * (parseFloat(el.style.props['--lh']) || 17);
+    else if (el.tagName === 'MAIN') { height = ROWS * (parseFloat(term.style.props['--lh']) || 17) + 140; top = 0; }
+    if (opts.rectW) width = opts.rectW;
+    if (opts.rectH) height = opts.rectH;
+    return { top, left: 0, bottom: top + height, right: width, width, height };
+  };
   class El {
-    constructor(tag, attrs = {}) { this.tagName = tag.toUpperCase(); this.attrs = attrs; this.id = attrs.id || ''; this._html = ''; this.textContent = ''; this.value = attrs.value || ''; this.checked = !!attrs.checked; this.dataset = {}; this.listeners = {}; this.classSet = new Set(); this.parentElement = new Proxy({}, { get: (t, k) => k === 'classList' ? { toggle() {}, add() {}, remove() {}, contains: () => false } : undefined }); this.style = { setProperty() {} }; this.clientWidth = opts.clientWidth || 1400; this.offsetWidth = 100; this.offsetHeight = 20; }
+    constructor(tag, attrs = {}) { this.tagName = tag.toUpperCase(); this.attrs = attrs; this.id = attrs.id || ''; this._html = ''; this.textContent = ''; this.value = attrs.value || ''; this.checked = !!attrs.checked; this.dataset = {}; this.listeners = {}; this.classSet = new Set(); this.parentElement = new Proxy({}, { get: (t, k) => k === 'classList' ? { toggle() {}, add() {}, remove() {}, contains: () => false } : undefined }); this.style = { props: {}, setProperty(k, v) { this.props[k] = v; } }; this.clientWidth = opts.clientWidth || 1400; this.offsetWidth = 100; this.offsetHeight = 20; }
     addEventListener(t, f) { (this.listeners[t] = this.listeners[t] || []).push(f); }
     fire(t, ev) { for (const f of (this.listeners[t] || [])) f(ev); }
     get classList() { const s = this.classSet; return { toggle: (c, on) => { if (on === undefined) on = !s.has(c); if (on) s.add(c); else s.delete(c); }, add: c => s.add(c), remove: c => s.delete(c), contains: c => s.has(c) }; }
     focus() { this.fire('focus', {}); } closest() { return null; }
     set innerHTML(v) { this._html = v; } get innerHTML() { return this._html; }
-    get children() { return []; } querySelectorAll() { return []; } dispatchEvent() {} append() {} appendChild() {} setAttribute() {}
-    getBoundingClientRect() { return rect(); }
+    get children() { return []; } querySelectorAll() { return []; } dispatchEvent() {} append() {} appendChild(c) { c._parent = this; } setAttribute() {}
+    getBoundingClientRect() { return rect(this); }
   }
   class Row extends El { constructor(h) { super('div'); this._html = h; } closest(s) { return s === '.row' ? this : null; } }
   class Term extends El {
@@ -50,7 +65,8 @@ function load(html, opts = {}) {
   window.parent = parentWin || window;
   class KeyboardEvent { constructor(t, e) { Object.assign(this, e); this.type = t; } }
   class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } }
-  class ResizeObserver { constructor(f) { this.f = f; } observe() {} }
+  const sizeObservers = [];
+  class ResizeObserver { constructor(f) { this.f = f; } observe() { sizeObservers.push(this.f); this.f(); } }
   const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout, clearTimeout, Date: { now: () => clock }, console };
   ctx.globalThis = ctx;
   vm.runInNewContext(script, ctx, { filename: 'try-script.js' });
@@ -64,7 +80,7 @@ function load(html, opts = {}) {
     scenario(sc) { const b = buttons.find(x => x.dataset.sc === sc); if (!b) throw new Error('no scenario ' + sc); b.fire('click', {}); },
     click(line) { const row = term.rows[line]; term.fire('click', { target: { closest: s => (s === '.row' ? row : null) } }); },
     rightClick(line) { const row = term.rows[line]; term.fire('contextmenu', { preventDefault() {}, target: { closest: s => (s === '.row' ? row : null) } }); },
-    resize() { for (const f of (winListeners.resize || [])) f(); for (const f of (winListeners.presize || [])) f(); },
+    resize() { for (const f of (winListeners.resize || [])) f(); for (const f of (winListeners.presize || [])) f(); for (const f of sizeObservers) f(); },
     text() { return (term.rows || []).map(r => r.innerHTML.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&amp;/g, '&')); },
     rows() { return (term.rows || []).map(r => r.innerHTML); },
     raw() { return term._raw || ''; },
@@ -72,6 +88,8 @@ function load(html, opts = {}) {
     winListeners,
     measures: () => measures,
     fontSize: () => term.style.fontSize,
+    // What the page's fit code decided: the font size, the row height and the frame's height, in px.
+    sizes: () => ({ font: parseFloat(term.style.fontSize), row: parseFloat(term.style.props['--lh']), frame: opts.frame ? parseFloat(window.frameElement.style.height) : null }),
     cols: () => ctx.__peek().cols(),
     flush() { const due = [...timers]; for (const [id, f] of due) if (timers.delete(id)) f(); return due.length; },
   };
@@ -297,6 +315,29 @@ for (const cols of [160, 100, 60]) {
     const reads = p.measures();
     p.resize();
     if (p.measures() === reads) note(where, 'a resize does not size the window again');
+  }
+}
+
+// 9. The page's size is a real number: with the stand-in's sizes (a 1400 px frame, an advance of 0.6 em, a parent
+// 860 px tall) the fit code works out a font size, a row height and a frame height that are finite and sane at each
+// width the run uses, and a narrower terminal never gets a smaller font than a wider one.
+{
+  const ways = { 'the embedded page in a frame': { embed: true, frame: true }, 'the standalone page': {} };
+  for (const [way, o] of Object.entries(ways)) {
+    let last = 0;
+    for (const cols of [160, 100, 99, 60]) {
+      const where = `${way} at ${cols} columns`;
+      const p = loadPage(where, o, 160);
+      if (!p) continue;
+      if (!step(p, cols, where, () => { p.radio('width', String(cols)); p.resize(); })) continue;
+      const { font, row, frame } = p.sizes();
+      const sane = (what, v, lo, hi) => { if (!Number.isFinite(v) || v < lo || v > hi) note(where, `the ${what} is ${v}, not a number from ${lo} to ${hi}`); };
+      sane('font size', font, 6, 40);
+      sane('row height', row, Math.floor(font), Math.floor(font * 1.35));
+      if (o.frame) sane('frame height', frame, ROWS * row, 3000);
+      if (font < last) note(where, `the font size ${font} is smaller than ${last}, the size at a wider terminal`);
+      last = Number.isFinite(font) ? font : last;
+    }
   }
 }
 

@@ -8364,6 +8364,51 @@ fn session_candidates_lists_what_the_picker_lists() {
     );
 }
 
+/// A zoxide history longer than its cap does not push the project folders out: the two sources are
+/// capped apart, so the far picker can still find a project folder by typing, and `truncated` says
+/// that a row was cut. A short list has no `truncated` key.
+#[test]
+fn session_candidates_with_a_long_zoxide_history_still_lists_the_project_folders() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, false);
+    std::fs::write(
+        f.config.path().join("config.toml"),
+        format!(
+            "[sessions]\nzoxide = true\nproject_dirs = [\"{}\"]\n",
+            c.home.path().join("proj").display()
+        ),
+    )
+    .unwrap();
+    let list: String = (0..1100)
+        .map(|n| format!("echo '{}/old/z{n}'\n", c.home.path().display()))
+        .collect();
+    write_hook(
+        &c.bin.path().join("zoxide"),
+        &format!("[ \"$1\" = add ] && exit 0\n{list}"),
+    );
+
+    let args = ["session", "candidates", "--json"];
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    let rows = env["result"]["candidates"].as_array().unwrap();
+    let kind = |kind: &str| rows.iter().filter(|row| row["kind"] == kind).count();
+    assert_eq!(kind("zoxide"), 1000, "zoxide rows");
+    assert_eq!(kind("project"), 2, "project rows: {rows:?}");
+    assert_eq!(
+        env["result"]["truncated"], true,
+        "{}",
+        env["result"]["truncated"]
+    );
+
+    // Short lists carry no `truncated` key.
+    let short = Candidates::new(&f, true);
+    let (code, stdout, stderr) = short.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    assert!(env["result"].get("truncated").is_none(), "{env}");
+}
+
 /// No zoxide, no project folders and no server are an empty answer, not an error.
 #[test]
 fn session_candidates_with_nothing_to_offer_is_an_empty_list() {

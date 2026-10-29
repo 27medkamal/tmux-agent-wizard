@@ -108,11 +108,17 @@ pub(crate) fn run(ctx: &Ctx, cmd: Cmd) -> (Sub, anyhow::Result<Value>) {
 /// `taw session candidates`: what the new-session picker lists on this machine before anything is
 /// typed ([`picker::offered`]), as `{"candidates": [...]}`. Each has `kind`, `name` (the folder as the
 /// picker shows it), `dir` (absolute) and, for a folder with a session running in it, `session`.
+/// `truncated: true` is there when a source had more folders than the verb sends.
 fn candidates(ctx: &Ctx) -> anyhow::Result<Value> {
     let home = dirs::home_dir().context("resolving the home directory")?;
     let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
     let offered = offered_here(ctx, &home, &zoxide)?;
-    Ok(json!({ "candidates": offered.iter().map(candidate_json).collect::<Vec<_>>() }))
+    let mut result =
+        json!({ "candidates": offered.rows.iter().map(candidate_json).collect::<Vec<_>>() });
+    if offered.truncated {
+        result["truncated"] = json!(true);
+    }
+    Ok(result)
 }
 
 /// The picker's rows for this machine's own sessions.
@@ -120,7 +126,7 @@ pub(crate) fn offered_here(
     ctx: &Ctx,
     home: &Path,
     zoxide: &[String],
-) -> anyhow::Result<Vec<picker::Offered>> {
+) -> anyhow::Result<picker::OfferedList> {
     // A tmux that does not answer (no server, or a socket that is not there) has no sessions: the
     // folders are still this machine's, so this is not an error.
     let sessions = ctx.tmux.list_sessions().unwrap_or_else(|e| {
@@ -145,7 +151,7 @@ pub(crate) fn offered_here(
         &ctx.cfg,
         home,
         zoxide,
-        picker::OFFERED_MAX,
+        picker::OFFERED_CAPS,
     ))
 }
 
@@ -168,6 +174,7 @@ pub(crate) fn candidates_plain(ctx: &Ctx) -> anyhow::Result<String> {
     let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
     let offered = offered_here(ctx, &home, &zoxide)?;
     Ok(offered
+        .rows
         .iter()
         .map(|row| match &row.session {
             Some(session) => format!("{:<8} {} [{session}]\n", row.kind, row.name),

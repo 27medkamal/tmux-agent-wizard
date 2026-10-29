@@ -10,7 +10,8 @@ use crate::tui::data::{Snapshot, SpaceRow};
 use crate::tui::overlays::state::Response;
 
 use super::{
-    MAX_CANDIDATES, Offered, Project, ProjectPicker, Tag, looks_like_path, offered, projects, retag,
+    OFFERED_CAPS, Offered, OfferedCaps, Project, ProjectPicker, Tag, looks_like_path, offered,
+    projects, retag,
 };
 
 /// A temp `home` with `code/{mobile,web}`, `clients/infra`,
@@ -840,7 +841,7 @@ fn the_offered_list_is_the_pickers_list_for_the_same_machine() {
     let mut picker = ProjectPicker::new(&cfg, home.path());
     picker.refresh(&snap, &cfg, home.path(), &zoxide);
 
-    let rows = offered(&snap, &cfg, home.path(), &zoxide, MAX_CANDIDATES);
+    let rows = offered(&snap, &cfg, home.path(), &zoxide, OFFERED_CAPS).rows;
 
     let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
     assert_eq!(names, paths(&picker));
@@ -862,7 +863,7 @@ fn an_offered_folder_is_absolute_and_a_running_one_names_its_session() {
     let snap = snapshot(home.path());
     let zoxide = vec!["~/code/web".to_string(), "~/code/api".to_string()];
 
-    let rows = offered(&snap, &cfg, home.path(), &zoxide, 10);
+    let rows = offered(&snap, &cfg, home.path(), &zoxide, OFFERED_CAPS).rows;
 
     assert_eq!(
         rows,
@@ -895,5 +896,50 @@ fn nothing_to_offer_is_an_empty_list() {
     let cfg = config(false, &[]);
     let zoxide = vec!["~/code/web".to_string()];
 
-    assert!(offered(&Snapshot::default(), &cfg, home.path(), &zoxide, 10).is_empty());
+    let none = offered(
+        &Snapshot::default(),
+        &cfg,
+        home.path(),
+        &zoxide,
+        OFFERED_CAPS,
+    );
+    assert!(none.rows.is_empty());
+    assert!(!none.truncated);
+}
+
+/// Each source is cut to its own cap: a zoxide history longer than its cap leaves the project
+/// folders in, and `truncated` says that something was left out; within the caps it does not.
+#[test]
+fn each_source_has_its_own_cap_and_truncated_says_one_was_cut() {
+    let home = home_with_tree();
+    let cfg = config(true, &[home.path().join("code")]);
+    let zoxide: Vec<String> = (0..5).map(|n| format!("~/old/z{n}")).collect();
+    let caps = |zoxide, projects| OfferedCaps { zoxide, projects };
+    let listed = |caps| {
+        let list = offered(&Snapshot::default(), &cfg, home.path(), &zoxide, caps);
+        let names: Vec<String> = list.rows.into_iter().map(|row| row.name).collect();
+        (names, list.truncated)
+    };
+
+    let (names, truncated) = listed(caps(3, 3));
+    assert_eq!(
+        names,
+        [
+            "~/old/z0",
+            "~/old/z1",
+            "~/old/z2",
+            "~/code/api",
+            "~/code/mobile",
+            "~/code/web"
+        ]
+    );
+    assert!(truncated, "the history was cut");
+
+    let (names, truncated) = listed(caps(5, 2));
+    assert_eq!(names.len(), 7, "{names:?}");
+    assert!(truncated, "a project folder was cut");
+
+    let (names, truncated) = listed(caps(5, 3));
+    assert_eq!(names.len(), 8, "{names:?}");
+    assert!(!truncated, "nothing was cut");
 }

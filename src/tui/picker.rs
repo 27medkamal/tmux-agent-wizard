@@ -34,9 +34,20 @@ use crate::tui::tree::{self, Query};
 /// the overlay — off the bottom of a short popup.
 const MAX_CANDIDATES: usize = 10;
 
-/// How many folders `taw session candidates` tells at most: a whole zoxide history is hundreds
-/// of directories, and a machine's answer is read through ssh.
-pub const OFFERED_MAX: usize = 200;
+/// How many folders of each source `taw session candidates` tells at most: a whole zoxide history
+/// is hundreds of directories, and a machine's answer is read through ssh (1000 rows are about
+/// 80 KB). The two sources are capped apart, so a long history never pushes the project folders out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OfferedCaps {
+    pub zoxide: usize,
+    pub projects: usize,
+}
+
+/// What `taw session candidates` sends: 1000 folders from zoxide and 1000 from `project_dirs`.
+pub const OFFERED_CAPS: OfferedCaps = OfferedCaps {
+    zoxide: 1000,
+    projects: 1000,
+};
 
 /// What a candidate's row says about it on the right: where it came from, or that a
 /// session is already running there.
@@ -316,8 +327,21 @@ fn candidates(
     running: &[Running],
     limit: usize,
 ) -> Vec<Candidate> {
-    let zoxide = zoxide_in_use(cfg, zoxide);
     let project_dirs: Vec<String> = project_dir_candidates(&cfg.sessions.project_dirs, home);
+    candidates_from(typed, cfg, home, zoxide, &project_dirs, running, limit)
+}
+
+/// [`candidates`] with the project folders already read, for a caller that cuts them first.
+fn candidates_from(
+    typed: &str,
+    cfg: &Config,
+    home: &Path,
+    zoxide: &[String],
+    project_dirs: &[String],
+    running: &[Running],
+    limit: usize,
+) -> Vec<Candidate> {
+    let zoxide = zoxide_in_use(cfg, zoxide);
 
     // `complete_path` treats anything that is not a recognised path prefix as a
     // literal path relative to *this process's* cwd (see `expand_tilde`'s fallback):
@@ -395,14 +419,36 @@ pub fn projects(
     zoxide: &[String],
     limit: usize,
 ) -> Vec<Project> {
+    let project_dirs = project_dir_candidates(&cfg.sessions.project_dirs, home);
+    projects_from(typed, snap, cfg, home, zoxide, &project_dirs, limit)
+}
+
+/// [`projects`] with the project folders already read.
+fn projects_from(
+    typed: &str,
+    snap: &Snapshot,
+    cfg: &Config,
+    home: &Path,
+    zoxide: &[String],
+    project_dirs: &[String],
+    limit: usize,
+) -> Vec<Project> {
     let running = running_sessions(snap, home);
-    let mut list: Vec<Project> = candidates(typed.trim(), cfg, home, zoxide, &running, limit)
-        .into_iter()
-        .map(|candidate| Project {
-            path: candidate.path,
-            tag: None,
-        })
-        .collect();
+    let mut list: Vec<Project> = candidates_from(
+        typed.trim(),
+        cfg,
+        home,
+        zoxide,
+        project_dirs,
+        &running,
+        limit,
+    )
+    .into_iter()
+    .map(|candidate| Project {
+        path: candidate.path,
+        tag: None,
+    })
+    .collect();
     retag(&mut list, snap, cfg, home, zoxide);
     list
 }
@@ -421,33 +467,56 @@ pub struct Offered {
     pub session: Option<String>,
 }
 
-/// What the picker lists when nothing is typed, cut to `limit`: [`projects`] for the empty
-/// text, so the order, the dedupe and the tags are the picker's, with each folder made
-/// absolute and the session running in it named.
+/// What [`offered`] lists, and whether a source had more than its cap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferedList {
+    pub rows: Vec<Offered>,
+    /// A zoxide or project folder was left out because its source was longer than its cap.
+    pub truncated: bool,
+}
+
+/// What the picker lists when nothing is typed, with at most `caps.zoxide` folders from zoxide and
+/// `caps.projects` from `project_dirs`: [`projects`] for the empty text over the cut sources, so
+/// the order, the dedupe and the tags are the picker's, with each folder made absolute and the
+/// session running in it named.
 pub fn offered(
     snap: &Snapshot,
     cfg: &Config,
     home: &Path,
     zoxide: &[String],
-    limit: usize,
-) -> Vec<Offered> {
+    caps: OfferedCaps,
+) -> OfferedList {
     let running = running_sessions(snap, home);
-    projects("", snap, cfg, home, zoxide, limit)
-        .into_iter()
-        .map(|project| {
-            let dir = expand_tilde(&project.path, home);
-            Offered {
-                kind: match project.tag {
-                    Some(Tag::Running) => "session",
-                    Some(Tag::Zoxide) => "zoxide",
-                    Some(Tag::ProjectDir) | None => "project",
-                },
-                session: running_at(&running, &dir).map(|r| r.name.clone()),
-                name: project.path,
-                dir,
-            }
-        })
-        .collect()
+    let zoxide = zoxide_in_use(cfg, zoxide);
+    let mut project_dirs = project_dir_candidates(&cfg.sessions.project_dirs, home);
+    let truncated = zoxide.len() > caps.zoxide || project_dirs.len() > caps.projects;
+    let zoxide = &zoxide[..zoxide.len().min(caps.zoxide)];
+    project_dirs.truncate(caps.projects);
+    let rows = projects_from(
+        "",
+        snap,
+        cfg,
+        home,
+        zoxide,
+        &project_dirs,
+        caps.zoxide + caps.projects,
+    )
+    .into_iter()
+    .map(|project| {
+        let dir = expand_tilde(&project.path, home);
+        Offered {
+            kind: match project.tag {
+                Some(Tag::Running) => "session",
+                Some(Tag::Zoxide) => "zoxide",
+                Some(Tag::ProjectDir) | None => "project",
+            },
+            session: running_at(&running, &dir).map(|r| r.name.clone()),
+            name: project.path,
+            dir,
+        }
+    })
+    .collect();
+    OfferedList { rows, truncated }
 }
 
 /// Sets each project's tag from the sessions in `snap`, without listing anything again: a

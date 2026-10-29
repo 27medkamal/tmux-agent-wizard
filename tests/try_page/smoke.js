@@ -138,7 +138,7 @@ for (const cols of [160, 100, 99, 60]) {
   try { peeked = load(html, { embed: true, frame: true, peek: true }).ctx.__peek(); } catch (e) { note('the screens', `exception on load ${String(e).slice(0, 90)}`); }
   const { agentScreen, SCREENS } = peeked || { agentScreen: null, SCREENS: {} };
   for (const kind of Object.keys(SCREENS).concat(['unknown-kind'])) {
-    for (const state of ['working', 'blocked', 'done']) {
+    for (const state of ['working', 'blocked', 'done', 'idle', 'unknown']) {
       for (const w of [158, 98, 97, 58, 30, 3, 0, -3]) {
         const where = `${kind} ${state} screen at ${w}`;
         let lines;

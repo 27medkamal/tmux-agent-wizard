@@ -529,30 +529,40 @@ fn output_by(
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
     let status = loop {
-        match child.try_wait()? {
-            Some(status) => break Some(status),
-            None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            None => {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 break None;
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
             }
         }
     };
     let Some(status) = status else {
         return Ok(None);
     };
-    let left = deadline
-        .saturating_duration_since(Instant::now())
-        .max(Duration::from_millis(100));
-    match (stdout.recv_timeout(left), stderr.recv_timeout(left)) {
-        (Ok(stdout), Ok(stderr)) => Ok(Some(std::process::Output {
-            status,
-            stdout,
-            stderr,
-        })),
-        _ => Ok(None),
-    }
+    // One time left for both pipes: stderr waits only what stdout left.
+    let read_by = Instant::now()
+        + deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(100));
+    let Ok(stdout) = stdout.recv_timeout(read_by.saturating_duration_since(Instant::now())) else {
+        return Ok(None);
+    };
+    let Ok(stderr) = stderr.recv_timeout(read_by.saturating_duration_since(Instant::now())) else {
+        return Ok(None);
+    };
+    Ok(Some(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    }))
 }
 
 /// Whether `err` is tmux saying there is no server to talk to: `no server running on
@@ -1186,6 +1196,49 @@ mod tests {
             .collect();
         assert_eq!(ran, ["-L", "s", "-u", "list-sessions", "-F", "x"]);
         assert!(!tmux.command().get_args().any(|arg| arg == "-u"));
+    }
+
+    /// A tmux that exits at once but leaves a descendant holding its pipes is given up at the deadline
+    /// and one short read later, not at twice that: stderr waits only what stdout left. The stand-in
+    /// starts a `sleep` that keeps both pipes open, writes its pid and exits; the test kills that pid.
+    #[test]
+    fn a_bounded_call_keeps_its_deadline_when_a_descendant_holds_the_pipes() {
+        struct Kill(Option<i32>);
+        impl Drop for Kill {
+            fn drop(&mut self) {
+                if let Some(pid) = self.0 {
+                    // SAFETY: a pid this test's own stand-in recorded, signalled once.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("holder.pid");
+        let bin = dir.path().join("tmux");
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nsleep 20 &\necho $! > '{}'\nexit 0\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        crate::test_exec::make_executable(&bin);
+        let mut cmd = Command::new(&bin);
+        let started = Instant::now();
+        let answered = output_by(&mut cmd, started + Duration::from_secs(1)).unwrap();
+        let took = started.elapsed();
+        let holder = Kill(
+            std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|text| text.trim().parse().ok()),
+        );
+        assert!(holder.0.is_some(), "the stand-in never recorded its pid");
+        assert!(answered.is_none(), "the pipes were held, so no answer");
+        assert!(
+            took < Duration::from_millis(1500),
+            "the call took {took:?} for a 1 s deadline"
+        );
     }
 
     /// A tmux that ran and said no keeps how it ended and what it said, for a caller that has

@@ -181,7 +181,19 @@ for (const cols of [160, 100, 99, 60]) {
   }
 }
 
-// 5. The glyphs. Every non-ASCII glyph a screen draws is in the page's one-cell class, `esc`'s
+// 5. The inside view draws a pane as wide as the terminal: its rules reach the right edge, as a
+// full-width pane's would.
+for (const cols of [160, 100, 60]) {
+  const where = `the inside view at ${cols} columns`;
+  const p = loadPage(where, { embed: true, frame: true }, 160);
+  if (!p) continue;
+  if (!step(p, cols, where, () => { p.radio('width', String(cols)); p.key('Enter'); })) continue;
+  const rules = p.text().map(r => r.trimEnd()).filter(r => /^\u2500+$/.test(r));
+  if (!rules.length) note(where, 'no rule is drawn in the inside view');
+  else if (Math.max(...rules.map(r => r.length)) !== cols) note(where, `the inside view's rules are ${Math.max(...rules.map(r => r.length))} columns, not ${cols}`);
+}
+
+// 6. The glyphs. Every non-ASCII glyph a screen draws is in the page's one-cell class, `esc`'s
 // `.g` (or its two-cell class `.g2`), or is a no-break space or box drawing, which every monospace font draws in a cell.
 {
   const re = /replace\(\/\[([^\]]+)\]\/g, c => `<span class="g">/.exec(html);

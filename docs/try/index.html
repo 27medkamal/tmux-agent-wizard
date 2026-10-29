@@ -769,7 +769,7 @@
     const win = id.kind === 'agent' ? id.a.win : id.kind === 'pane' ? id.win : s.cur;
     const a = id.kind === 'agent' ? id.a : id.kind === 'session' ? S.agents.find(x => x.session === s.id && x.win === s.cur) : null;
     const w = winOf(s.id, win), cmd = id.kind === 'pane' ? (w.cmds[id.pidx - 1] || 'zsh') : (w.cmds[0] || 'zsh');
-    const screen = a ? agentScreen(a.kind, a.state, COLS - 2) : (PREV[cmd] || PREV.zsh);
+    const screen = a ? agentScreen(a.kind, a.state, COLS) : (PREV[cmd] || PREV.zsh);
     return { s, m, win, screen };
   }
   function insideStatus(inner) {

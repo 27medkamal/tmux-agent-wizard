@@ -272,7 +272,9 @@ pub(crate) fn zoxide_dirs(cfg: &Config) -> Vec<String> {
 const ZOXIDE_BOUND: Duration = Duration::from_secs(5);
 
 /// What `bin args` prints on stdout when it succeeds within `bound`; `None` when it fails, cannot
-/// start, or is still running at the end of `bound` (then it is killed: it is this function's own child).
+/// start, or is still running at the end of `bound` (then it is killed: it is this function's own
+/// child). The bound covers the whole answer: a `zoxide` that exits while something it started keeps
+/// its stdout open (a wrapper that forks) is cut off at the bound too, and gives `None`.
 fn zoxide_within(bin: &Path, args: &[&str], bound: Duration) -> Option<String> {
     use std::io::Read as _;
     use std::process::{Command, Stdio};
@@ -284,11 +286,13 @@ fn zoxide_within(bin: &Path, args: &[&str], bound: Duration) -> Option<String> {
         .spawn()
         .ok()?;
     let mut stdout = child.stdout.take()?;
-    // Read on a thread: a full pipe would otherwise stop the child before it could exit.
-    let reader = std::thread::spawn(move || {
+    // Read on a thread: a full pipe would otherwise stop the child before it could exit. The bytes
+    // come back on a channel, so waiting for them can be bounded too.
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut bytes = Vec::new();
         let _ = stdout.read_to_end(&mut bytes);
-        bytes
+        let _ = sent.send(bytes);
     });
     let deadline = Instant::now() + bound;
     let status = loop {
@@ -302,10 +306,23 @@ fn zoxide_within(bin: &Path, args: &[&str], bound: Duration) -> Option<String> {
             }
         }
     };
-    // Not joined when it was killed: a grandchild may still hold the pipe, and the thread ends with it.
-    status.filter(|status| status.success())?;
-    let bytes = reader.join().ok()?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let Some(status) = status else {
+        log::warn!(
+            "zoxide did not finish within {bound:?} and was stopped: the picker lists no history"
+        );
+        return None;
+    };
+    if !status.success() {
+        return None;
+    }
+    // Not joined: a grandchild may still hold the pipe, and the thread ends with it.
+    match received.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(_) => {
+            log::warn!("zoxide left its output open past {bound:?}: the picker lists no history");
+            None
+        }
+    }
 }
 
 /// Runs one action, reporting whether the popup should close.
@@ -879,6 +896,26 @@ mod tests {
             None
         );
         assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    /// A `zoxide` that exits 0 while something it started keeps stdout open (a wrapper script that
+    /// forks) is still cut off at the bound: it gives nothing, and the wait is not the grandchild's.
+    #[test]
+    fn a_zoxide_that_leaves_its_output_open_gives_nothing_at_the_bound() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        // The background sleep ends by itself after 5 s; it is not left for a kill.
+        let forks = script(dir.path(), "(sleep 5 &)\necho /a");
+        let started = Instant::now();
+        assert_eq!(
+            super::zoxide_within(&forks, &["query", "-l"], Duration::from_millis(300)),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "waited {:?}",
+            started.elapsed()
+        );
     }
 
     /// A log of what lending the terminal did, in order.

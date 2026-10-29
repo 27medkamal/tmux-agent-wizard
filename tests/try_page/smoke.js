@@ -237,7 +237,8 @@ for (const cols of [160, 100, 60]) {
 // `.g` (or its two-cell class `.g2`), or is a no-break space or box drawing, which every monospace font draws in a cell.
 // The same holds for every non-ASCII code point the script can draw at all, drawn in this run or not: a static pass
 // over the script's text (its `\uXXXX` escapes decoded) lists them. Two things are allowed without being in a class:
-// U+2733, the roster's title prefix, which `stripTitle` takes off before anything is drawn, and the lone surrogates
+// U+2733, the roster's title prefix, which `stripTitle` takes off before anything is drawn (only in a roster title
+// and in `stripTitle`'s class: anywhere else it is scanned like any other glyph), and the lone surrogates
 // of the regex in `cutAt`, which match halves of a pair and are never drawn.
 {
   const re = /replace\(\/\[([^\]]+)\]\/g, c => `<span class="g">/.exec(html);
@@ -250,13 +251,15 @@ for (const cols of [160, 100, 60]) {
     const inClass = g => { const cp = g.codePointAt(0); return cls.has(g) || twoSet.has(g) || g === '\u00a0' || (cp >= 0x2500 && cp <= 0x257f); };
     const hex = g => 'U+' + g.codePointAt(0).toString(16).toUpperCase().padStart(4, '0');
     for (const g of glyphs) if (!inClass(g)) note('glyphs', `the glyph ${g} (${hex(g)}) is drawn but not in esc's one-cell class`);
-    const source = decode(html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>')));
+    // U+2733 is taken out where it is allowed (the roster's titles and `stripTitle`'s class), so any other is scanned.
+    const source = decode(html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>')))
+      .replace(/title: '\u2733 /g, "title: '").replace(/replace\(\/\^\[\u2733/, 'replace(/^[');
     const seen = new Set();
     for (const g of source) {
       const cp = g.codePointAt(0);
       if (cp < 128 || seen.has(g)) continue;
       seen.add(g);
-      if (inClass(g) || cp === 0x2733 || (cp >= 0xd800 && cp <= 0xdfff && g.length === 1)) continue;
+      if (inClass(g) || (cp >= 0xd800 && cp <= 0xdfff && g.length === 1)) continue;
       note('the script', `the script can draw the glyph ${g} (${hex(g)}), which is not in esc's one-cell class`);
     }
     if (seen.size < 30) note('the script', `only ${seen.size} non-ASCII code points were found in the script: the scan reads nothing`);

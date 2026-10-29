@@ -146,7 +146,7 @@ fn puts_away(lent: bool, terminal: bool) -> bool {
 /// does, input waiting or not (tried on macOS: a closed master gives `POLLHUP`, an open one never). What no
 /// probe tells is a terminal that is there and is not read by anyone (a stopped emulator): that one is not
 /// gone, and stays the signals' business.
-fn terminal_is_there(fd: libc::c_int) -> bool {
+pub fn terminal_is_there(fd: libc::c_int) -> bool {
     // SAFETY: `isatty` takes a descriptor number and touches no memory.
     if unsafe { libc::isatty(fd) } != 1 {
         return false;
@@ -965,7 +965,11 @@ impl Feed<'_> {
             screen,
             || {
                 let ended = self.attach(command, "", Some(&mut client_output));
-                let ending = signalled() || self.record.orphaned();
+                let ending = is_ending(
+                    signalled(),
+                    self.record.orphaned(),
+                    terminal_is_there(libc::STDIN_FILENO),
+                );
                 if attach_again_plain(
                     through_came_from,
                     &ended,
@@ -1297,6 +1301,13 @@ struct ClientOutput {
     /// so that the flags of the one the program shares are not touched. Opened at the first write; closed with this.
     own: Option<std::os::fd::OwnedFd>,
     own_tried: bool,
+}
+
+/// Whether the app is ending as its first attach returns: it was signalled, its supervisor is gone, or its
+/// terminal is gone (a closed terminal can end the client before the app's own hang-up arrives, and a client
+/// started on it would attach for a moment before it read the hang-up).
+fn is_ending(signalled: bool, orphaned: bool, terminal_there: bool) -> bool {
+    signalled || orphaned || !terminal_there
 }
 
 /// Whether an attach that went in through the session the person came from is made again as a plain attach to the
@@ -2294,6 +2305,39 @@ mod tests {
         assert!(
             !attach_again_plain(true, &Err("could not attach".into()), false, never, never),
             "not started"
+        );
+    }
+
+    /// A gone terminal ends the app as a signal and a gone supervisor do: the decision to attach again then says no
+    /// even when the came-from is gone and the target is there.
+    #[test]
+    fn a_gone_terminal_means_the_app_is_ending_and_no_second_attach() {
+        use std::os::unix::process::ExitStatusExt;
+        assert!(!is_ending(false, false, true), "all well");
+        assert!(is_ending(true, false, true), "signalled");
+        assert!(is_ending(false, true, true), "supervisor gone");
+        assert!(is_ending(false, false, false), "terminal gone");
+        let failed: Result<std::process::ExitStatus, String> =
+            Ok(std::process::ExitStatus::from_raw(1 << 8));
+        assert!(
+            !attach_again_plain(
+                true,
+                &failed,
+                is_ending(false, false, false),
+                || true,
+                || true
+            ),
+            "failed, came-from gone, target there, terminal gone: no retry"
+        );
+        assert!(
+            attach_again_plain(
+                true,
+                &failed,
+                is_ending(false, false, true),
+                || true,
+                || true
+            ),
+            "the same on a live terminal retries"
         );
     }
 

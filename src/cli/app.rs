@@ -256,8 +256,9 @@ fn back_to_tmux(ctx: &Ctx, back: Option<&str>, last: Option<&str>, code: i32) ->
     let Some(session) = back else {
         return code;
     };
-    // SAFETY: `isatty` takes a descriptor number and touches no memory.
-    if unsafe { libc::isatty(0) } != 1 {
+    // `isatty` alone says yes on macOS for a terminal whose master closed: a client started there would attach
+    // for a moment before it read the hang-up. The screen's watchdog asks the same question.
+    if !crate::tui::terminal_is_there(libc::STDIN_FILENO) {
         return code;
     }
     let Some(mut command) = attach_back(&ctx.tmux, session, last) else {

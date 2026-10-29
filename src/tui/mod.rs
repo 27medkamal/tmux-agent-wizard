@@ -60,7 +60,7 @@ use crate::paths::Paths;
 use crate::session::worktree::WorktreeRecord;
 use crate::tmux::Tmux;
 use app::App;
-pub use app_screen::{CONFIG_UNCHANGED_LOG, GoTarget, run_app};
+pub use app_screen::{CONFIG_UNCHANGED_LOG, GoTarget, run_app, terminal_is_there};
 use prefix::Chord;
 
 /// How often the popup re-reads tmux and re-captures the preview.

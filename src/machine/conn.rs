@@ -210,6 +210,10 @@ pub enum ConnEvent {
         machine: usize,
         live: bool,
         words: String,
+        /// The short form of `words` ([`words::no_taw_short`] and the like) when they wait for the person to act,
+        /// so they never change until the person does; empty for words that change (`connecting`, `not
+        /// answering`). Set where the words are made.
+        short: String,
     },
     Toast {
         machine: usize,
@@ -617,6 +621,7 @@ impl Conn {
                                     machine: self.index,
                                     live: true,
                                     words: live_words,
+                                    short: String::new(),
                                 });
                                 if first {
                                     self.say_lease(&lines);
@@ -670,6 +675,7 @@ impl Conn {
                     machine: self.index,
                     live: false,
                     words,
+                    short: String::new(),
                 });
                 return if self.gone { Flow::Stop } else { Flow::Go };
             }
@@ -698,21 +704,29 @@ impl Conn {
         let now = Instant::now();
         self.live.on_drop(now, outcome, &self.ctx.timing);
         let retry = ceil_secs(self.live.next_try().saturating_duration_since(now));
-        let text = match outcome {
-            Outcome::NoTaw => words::no_taw(),
-            Outcome::NoMachines => words::no_machines(""),
-            Outcome::Newer { taw } => words::newer(taw, env!("CARGO_PKG_VERSION")),
-            Outcome::Login => words::login(),
-            Outcome::HostKey => words::host_key(&self.machine.ssh),
-            Outcome::Garbage => words::garbage_header(),
+        // The words, and their short form when they wait for the person to act (empty when they change).
+        let (text, short) = match outcome {
+            Outcome::NoTaw => (words::no_taw(), words::no_taw_short()),
+            Outcome::NoMachines => (words::no_machines(""), words::no_machines_short()),
+            Outcome::Newer { taw } => (
+                words::newer(taw, env!("CARGO_PKG_VERSION")),
+                words::newer_short(),
+            ),
+            Outcome::Login => (words::login(), words::login_short()),
+            Outcome::HostKey => (
+                words::host_key(&self.machine.ssh),
+                words::host_key_short(&self.machine.ssh),
+            ),
+            Outcome::Garbage => (words::garbage_header(), words::garbage_header()),
             Outcome::Connected { .. } | Outcome::NotAnswering => {
-                words::not_answering(self.seen_secs(), retry)
+                (words::not_answering(self.seen_secs(), retry), String::new())
             }
         };
         self.event(ConnEvent::Words {
             machine: self.index,
             live: false,
             words: text,
+            short,
         });
         if self.gone { Flow::Stop } else { Flow::Go }
     }

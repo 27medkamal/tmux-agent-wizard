@@ -40,6 +40,10 @@ pub struct MachineView {
     pub live: bool,
     /// What the header says of it (`connected: taw 0.1.0`, `no taw there: ...`).
     pub words: String,
+    /// The short form of `words` while they wait for the person to act (`no taw there: install it`), else empty:
+    /// words that change (`connecting`, `not answering`) have none. The list's width counts a short form and never
+    /// the words that change.
+    pub short: String,
     /// The last state its feed sent, kept while the machine is away.
     pub state: Option<wire::State>,
     /// Unix milliseconds of the last line of any kind heard from it.

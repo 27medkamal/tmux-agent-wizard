@@ -61,7 +61,7 @@ Nothing is copied between machines: the app lists and shows, and taw on each mac
    (pi's sessions and panes)
 ```
 
-The top line says how many sessions and agents the list holds, and the clock; who needs you is on the list's border, and a machine that is away says so on its own header. Where the list draws no header for an away machine (the flat layout, a filter or a view that leaves it no row), the top line names it before the clock, as `studio, pi not connected`, and the popup's bar does the same wherever the popup draws machine headers; with every away machine headed, which is the normal list, they name none. On a narrow line the clock goes first, then the counts on the left are cut: the words stay while the line has room for them. A header carries the machine's state counts only when agents are in two machine groups or more (then they say where things are), and its own words when the machine is not connected (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once, in a toast. A machine that is away shows its last words and when it was last seen. Its words never widen the list: the rows alone set the list's width. Where the header has too little room beside its rule, the words give up their clauses from the end, one at a time (a clause begins at a comma or a colon), so `not answering, last seen 2m ago, trying again in 30s` becomes `not answering, last seen 2m ago`, then `not answering`, and a machine no app keeps shows `not connected`; the rule stays. Only where the first clause alone does not fit beside the rule is the rule dropped, and then the words are cut.
+The top line says how many sessions and agents the list holds, and the clock; who needs you is on the list's border, and a machine that is away says so on its own header. Where the list draws no header for an away machine (the flat layout, a filter or a view that leaves it no row), the top line names it before the clock, as `studio, pi not connected`, and the popup's bar does the same wherever the popup draws machine headers; with every away machine headed, which is the normal list, they name none. On a narrow line the clock goes first, then the counts on the left are cut: the words stay while the line has room for them, and beside a toast they show only when they fit in half the line. A header carries the machine's state counts only when agents are in two machine groups or more (then they say where things are), and its own words when the machine is not connected (the table below). A row of a machine that is not connected stays in the list, dim, after every connected row: its state colours are gone, it counts for nothing in the numbers, and its preview says `no preview` and why. A machine that drops while you look says so once, in a toast. A machine that is away shows its last words and when it was last seen. Words that change never move the list: the rows alone set its width. Where the header has too little room beside its rule, those words give up their clauses from the end, one at a time (a clause begins at a comma), so `not answering, last seen 2m ago, trying again in 30s` becomes `not answering, last seen 2m ago`, then `not answering`; the rule stays. Only where the first clause alone does not fit beside the rule is the rule dropped, and then the words are cut. The sentences that wait for you to act (no taw there, a taw that is too old or too new, ssh that could not log in, an unknown host key, a machine no app keeps) never change until you act, so the list is made wide enough for their short form (up to its cap), and the header says the whole sentence when it fits beside the rule, else the short form beside the rule, and never cuts what to do off the end.
 
 The numbers of a session count across machines, and a machine that appears or drops never moves a number of this machine's. A remote row's id is `studio:%16`, the machine and that machine's own tmux id, so it can never be one of this machine's.
 
@@ -126,7 +126,7 @@ The phone is `[hooks]` and ntfy, as in "Notifications on your phone", and it fol
 
 ## What a header says
 
-A header says one of these. The first group is what the machine's header and `taw machine check` show; the second is what a row or a toast says. The samples are `studio`, `pi`, an age of 3 minutes and a retry of 30 seconds, and a version number, written 0.1.0 here.
+A header says one of these. The first group is what the machine's header and `taw machine check` show; the second is what a row or a toast says. The sentences that wait for you to act have a short form, which the header says when the whole sentence does not fit beside its rule; `taw machine check` always says the whole one. The samples are `studio`, `pi`, an age of 3 minutes and a retry of 30 seconds, and a version number, written 0.1.0 here.
 
 | Says | Means |
 |---|---|
@@ -137,11 +137,16 @@ A header says one of these. The first group is what the machine's header and `ta
 | `connecting, last seen 3m ago` | the first answer has not come yet; it was heard before |
 | `connecting` | the same, never heard |
 | `no taw there: install it as you did here` | ssh worked and there is no taw to run |
+| `no taw there: install it` | the short form, for a header with little room |
 | `runs a taw that has no machines: update it there` | the taw there is too old to feed a list |
 | `runs taw 0.1.0, which has no machines: update it there` | the same, with its version |
+| `old taw there: update it there` | the short form of the two before, for a header with little room |
 | `runs taw 9.0.0, which no longer speaks to this one (0.1.0): update taw here` | the taw there is newer than this protocol |
+| `newer taw there: update taw here` | the short form, for a header with little room |
 | `ssh could not log in without asking: add your key to ssh-agent (ssh-add)` | a prompt or a refused key; taw never answers a prompt |
+| `ssh could not log in: run ssh-add` | the short form, for a header with little room |
 | `its host key is not known here: run ssh studio once in a terminal and accept it` | the host key step of setting up |
+| `unknown host key: run ssh studio once` | the short form, for a header with little room |
 | `sent something taw does not read` | after the machine's name: a line of its feed was not one of taw's |
 | `no tmux session here: Enter starts one` | the dim row under a connected machine that has no tmux session: Enter starts one there |
 | `studio has no tmux session now: Enter on its row starts one` | the toast when the last session of a connected machine ended |

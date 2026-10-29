@@ -40,6 +40,7 @@ pub fn merge(mut local: Snapshot, views: &[MachineView], now_ms: u64) -> Snapsho
             name: view.name.clone(),
             live: view.live,
             words: header_words(view, now_ms),
+            short: view.short.clone(),
             last_seen: view.last_seen,
             this_server: view.this_server,
             no_keeper: view.no_keeper,

@@ -89,6 +89,7 @@ impl Slot {
             last_seen: self.view.last_seen,
             live: self.connected,
             words: self.view.words.clone(),
+            short: self.view.short.clone(),
             taw_version: self.taw_version.clone(),
             protocol: self.protocol,
             this_server: self.view.this_server,
@@ -351,6 +352,7 @@ impl Machines {
                 machine,
                 live,
                 words,
+                short,
             } => {
                 let Some(slot) = self.slots.get_mut(machine) else {
                     return false;
@@ -358,6 +360,7 @@ impl Machines {
                 slot.connected = live;
                 slot.view.live = live;
                 slot.view.words = words;
+                slot.view.short = short;
                 slot.dirty = true;
                 true
             }

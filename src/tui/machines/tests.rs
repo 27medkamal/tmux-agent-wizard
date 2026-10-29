@@ -23,6 +23,7 @@ fn machine_of(name: &str, snap: &Snapshot) -> MachineView {
         name: name.to_string(),
         live: true,
         words: String::new(),
+        short: String::new(),
         state: Some(State {
             spaces: snap.spaces.iter().map(WireSpace::from).collect(),
             panes: snap.panes.iter().map(WirePane::from).collect(),

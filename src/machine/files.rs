@@ -42,6 +42,8 @@ pub struct MachineFile {
     pub live: bool,
     /// What the header says of the machine (`connected: taw 0.1.0`, `unreachable: ...`).
     pub words: String,
+    /// The short form of `words` when they wait for the person to act, else empty ([`MachineView::short`]).
+    pub short: String,
     pub taw_version: Option<String>,
     pub protocol: Option<u32>,
     /// The machine turned out to be this machine's own tmux server.
@@ -168,10 +170,17 @@ pub fn view_of(file: Option<&MachineFile>, name: &str, keeper: bool, now_ms: u64
     } else {
         shown.to_string()
     };
+    // Only the words a keeper's file says: the `connecting` made up above has no short form.
+    let short = if shown.is_empty() {
+        String::new()
+    } else {
+        file.short.clone()
+    };
     MachineView {
         name: name.to_string(),
         live: is_live(file, keeper, now_ms),
         words,
+        short,
         state: file.state.clone(),
         last_seen: file.last_seen,
         this_server: file.this_server,
@@ -1240,6 +1249,7 @@ mod tests {
             last_seen: Some(7),
             live: true,
             words: "connected: taw 0.1.0".to_string(),
+            short: String::new(),
             taw_version: Some("0.1.0".to_string()),
             protocol: Some(1),
             this_server: false,
@@ -1252,6 +1262,23 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["studio.json"]);
+    }
+
+    #[test]
+    fn the_short_form_of_steady_words_reaches_the_view_only_while_a_keeper_keeps_the_file() {
+        let steady = MachineFile {
+            name: "pi".to_string(),
+            words: "no taw there: install it as you did here".to_string(),
+            short: "no taw there: install it".to_string(),
+            ..MachineFile::default()
+        };
+        let kept = view_of(Some(&steady), "pi", true, 0);
+        assert_eq!(kept.short, "no taw there: install it");
+        // A file nobody keeps says `connecting`, which changes: no short form.
+        let left = view_of(Some(&steady), "pi", false, 0);
+        assert!(left.words.starts_with("connecting"), "{:?}", left.words);
+        assert_eq!(left.short, "");
+        assert_eq!(view_of(None, "pi", true, 0).short, "");
     }
 
     #[test]

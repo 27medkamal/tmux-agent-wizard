@@ -116,6 +116,19 @@ impl Events {
         })
     }
 
+    /// The words and their short form of the next not-live words event.
+    fn words_and_short(&mut self) -> (String, String) {
+        self.wait("words", WAIT, |event| match event {
+            ConnEvent::Words {
+                live: false,
+                words,
+                short,
+                ..
+            } => Some((words.clone(), short.clone())),
+            _ => None,
+        })
+    }
+
     fn state(&mut self) -> wire::State {
         self.wait("state", WAIT, |event| match event {
             ConnEvent::State { state, .. } => Some(state.clone()),
@@ -490,11 +503,23 @@ fn a_kind_of_line_or_a_field_taw_does_not_know_is_skipped_and_the_connection_goe
 fn each_failure_that_needs_you_gives_its_words() {
     let far = FarSide::new("studio");
     let stand_in = StandIn::new(&[&far]);
-    for (how, want) in [
-        (Failure::NoTaw, words::no_taw()),
-        (Failure::OldTaw("0.0.9".to_string()), words::no_machines("")),
-        (Failure::PermissionDenied, words::login()),
-        (Failure::HostKey, words::host_key("studio")),
+    for (how, want, short) in [
+        (Failure::NoTaw, words::no_taw(), words::no_taw_short()),
+        (
+            Failure::OldTaw("0.0.9".to_string()),
+            words::no_machines(""),
+            words::no_machines_short(),
+        ),
+        (
+            Failure::PermissionDenied,
+            words::login(),
+            words::login_short(),
+        ),
+        (
+            Failure::HostKey,
+            words::host_key("studio"),
+            words::host_key_short("studio"),
+        ),
     ] {
         stand_in.fail_as("studio", how.clone());
         let dir = tempfile::tempdir().unwrap();
@@ -505,7 +530,8 @@ fn each_failure_that_needs_you_gives_its_words() {
             machine("studio"),
             tx,
         );
-        assert_eq!(events.words(false), want, "{how:?}");
+        // The short form is made with the words: the header never matches strings to find it.
+        assert_eq!(events.words_and_short(), (want, short), "{how:?}");
     }
 }
 
@@ -522,7 +548,10 @@ fn a_taw_of_another_protocol_is_newer_in_words_and_one_with_no_protocol_is_not_a
         machine("studio"),
         tx,
     );
-    assert_eq!(events.words(false), words::newer("9.0.0", VERSION));
+    assert_eq!(
+        events.words_and_short(),
+        (words::newer("9.0.0", VERSION), words::newer_short())
+    );
     // A hello with no protocol is not a newer taw: it is not a feed.
     let line = serde_json::json!({"type": "hello", "taw": "9.0.0"}).to_string();
     assert_eq!(words_of(&[line], GOES_ON), words::garbage_header());

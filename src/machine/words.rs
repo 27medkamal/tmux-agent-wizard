@@ -48,6 +48,11 @@ pub fn no_taw() -> String {
     "no taw there: install it as you did here".to_string()
 }
 
+/// [`no_taw`] for a header that has little room: what is wrong and what to do, nothing more.
+pub fn no_taw_short() -> String {
+    "no taw there: install it".to_string()
+}
+
 /// `version` is what the machine's `taw --version` said; empty when it did not say.
 pub fn no_machines(version: &str) -> String {
     if version.is_empty() {
@@ -57,17 +62,37 @@ pub fn no_machines(version: &str) -> String {
     }
 }
 
+/// [`no_machines`] for a header that has little room, whatever version it runs.
+pub fn no_machines_short() -> String {
+    "old taw there: update it there".to_string()
+}
+
 pub fn newer(version: &str, ours: &str) -> String {
     format!("runs taw {version}, which no longer speaks to this one ({ours}): update taw here")
+}
+
+/// [`newer`] for a header that has little room: the version stays out, what to do stays in.
+pub fn newer_short() -> String {
+    "newer taw there: update taw here".to_string()
 }
 
 pub fn login() -> String {
     "ssh could not log in without asking: add your key to ssh-agent (ssh-add)".to_string()
 }
 
+/// [`login`] for a header that has little room.
+pub fn login_short() -> String {
+    "ssh could not log in: run ssh-add".to_string()
+}
+
 /// `dest` is what is typed after `ssh`, as `[machines]` names it.
 pub fn host_key(dest: &str) -> String {
     format!("its host key is not known here: run ssh {dest} once in a terminal and accept it")
+}
+
+/// [`host_key`] for a header that has little room; `dest` is the same.
+pub fn host_key_short(dest: &str) -> String {
+    format!("unknown host key: run ssh {dest} once")
 }
 
 /// `seen` is how many seconds ago the machine was last heard from, `retry` in how many seconds the
@@ -87,7 +112,8 @@ pub fn garbage(name: &str) -> String {
     format!("{name} {}", garbage_header())
 }
 
-/// What the header says after the machine's name, which it has already written.
+/// What the header says after the machine's name, which it has already written. It has no action to
+/// keep, so it is its own short form.
 pub fn garbage_header() -> String {
     "sent something taw does not read".to_string()
 }
@@ -111,7 +137,7 @@ pub fn is_connecting(header_words: &str) -> bool {
 
 /// What a machine's header says in the popup while no app keeps the connections: the popup lists another
 /// machine only through a running app, and `taw app` typed inside tmux opens the popup, so the app has to be
-/// run outside tmux.
+/// run outside tmux. It is its own short form.
 pub const NO_KEEPER: &str = "not connected: run taw app outside tmux";
 
 /// What the popup's hint line says `Enter` does while the cursor is on a row of the connected machine `name`: the
@@ -483,6 +509,16 @@ mod tests {
             " (README, \"Remote machines\"); it then connects by itself"
         );
         assert_eq!(no_taw(), "no taw there: install it as you did here");
+        assert_eq!(no_taw_short(), "no taw there: install it");
+        assert_eq!(no_machines_short(), "old taw there: update it there");
+        assert_eq!(newer_short(), "newer taw there: update taw here");
+        assert_eq!(login_short(), "ssh could not log in: run ssh-add");
+        assert_eq!(
+            host_key_short("studio.local"),
+            "unknown host key: run ssh studio.local once"
+        );
+        assert_eq!(garbage_header(), "sent something taw does not read");
+        assert_eq!(NO_KEEPER, "not connected: run taw app outside tmux");
         assert_eq!(
             no_machines("0.0.9"),
             "runs taw 0.0.9, which has no machines: update it there"

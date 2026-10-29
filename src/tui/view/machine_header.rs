@@ -32,6 +32,10 @@ struct Parts {
     name: String,
     /// Empty, or what the header says of a machine that is not live.
     words: String,
+    /// The short form of `words` when they wait for the person to act ([`words::login_short`] and the like), else
+    /// empty: such words never change, so the list is made wide enough for the short form, and they are never cut
+    /// at clauses.
+    short: String,
     counts: Vec<(String, Color)>,
 }
 
@@ -117,39 +121,49 @@ fn parts_of(app: &App, machine: Option<usize>) -> Parts {
         ),
         machines::HeaderTail::Words(words) => (words, Vec::new()),
     };
+    let short = machine
+        .and_then(|at| app.snap.machines.get(at))
+        .filter(|_| !words.is_empty())
+        .map(|header| header.short.clone())
+        .unwrap_or_default();
     Parts {
         dot,
         dot_colour,
         name: machines::header_name(&app.snap, machine),
         words,
+        short,
         counts,
     }
 }
 
 /// `machine`'s header, `width` columns wide when given, else the line the panel is measured by:
-/// the dot, the name, the counts and the rule at its shortest, with none of the words, so that
-/// nothing an away machine says widens the list or moves it as the words change.
+/// the dot, the name, the counts and the rule at its shortest, with the words only when they wait for
+/// the person to act (then their short form, so the list makes room for what to do), and none of the
+/// words that change, so that nothing an away machine says moves the list as the words change.
 ///
-/// When the words do not fit beside the rule, they give up their clauses from the end, one at a
-/// time, and the rule stays: a clause begins at `, ` or `: `, so `not answering, last seen 2m ago,
-/// trying again in 30s` becomes `not answering, last seen 2m ago`, then `not answering`. Only when
-/// the first clause alone does not fit with the rule does the line give up its parts in this
-/// order: the rule at the end, then the rule altogether, then the counts, then the first clause
-/// from its end, and last the name, which is never cut below [`NAME_MIN`] columns (the panel cuts
-/// what is still too wide).
+/// Words that change give up their clauses from the end, one at a time, when they do not fit beside
+/// the rule, and the rule stays: a clause begins at `, `, so `not answering, last seen 2m ago,
+/// trying again in 30s` becomes `not answering, last seen 2m ago`, then `not answering`. Words that
+/// wait for the person are never cut at clauses (the clause after `: ` is what to do): the whole
+/// sentence, when it fits beside the rule, else its short form beside the rule. Only when the first
+/// clause, or the short form, alone does not fit with the rule does the line give up its parts in
+/// this order: the rule at the end, then the rule altogether, then the counts, then those words from
+/// their end, and last the name, which is never cut below [`NAME_MIN`] columns (the panel cuts what
+/// is still too wide).
 pub(super) fn machine_line(app: &App, machine: Option<usize>, width: Option<u16>) -> Line<'static> {
     let mut parts = parts_of(app, machine);
     if width.is_none() {
-        parts.words.clear();
+        parts.words = parts.short.clone();
     }
     compose(&app.theme, &parts, width.map(usize::from))
 }
 
 /// `words` whole, then with each clause dropped from the end, down to the first clause alone. A
-/// clause begins at `, ` or `: `.
+/// clause begins at `, `: the `: ` of a sentence that waits for the person is what to do, and those
+/// are not cut here.
 fn clause_prefixes(words: &str) -> Vec<&str> {
     let mut cuts: Vec<usize> = words
-        .match_indices([',', ':'])
+        .match_indices(',')
         .map(|(at, _)| at)
         .filter(|&at| at > 0 && words[at + 1..].starts_with(' '))
         .collect();
@@ -199,7 +213,12 @@ fn compose(theme: &Theme, parts: &Parts, width: Option<usize>) -> Line<'static> 
         }
     };
     let name_width = parts.name.width();
-    let candidates = clause_prefixes(&parts.words);
+    // Words that wait for the person: the whole sentence, else its short form. Words that change: by clauses.
+    let candidates = if parts.short.is_empty() {
+        clause_prefixes(&parts.words)
+    } else {
+        vec![parts.words.as_str(), parts.short.as_str()]
+    };
     let first_clause = candidates.last().copied().unwrap_or("");
     let lead_width = END_PIECE.chars().count() + 1;
     let has_counts = !parts.counts.is_empty();
@@ -287,6 +306,11 @@ mod tests {
             name: name.to_string(),
             live,
             words: words.to_string(),
+            short: if no_keeper {
+                words.to_string()
+            } else {
+                String::new()
+            },
             no_keeper,
             ..MachineHeader::default()
         };
@@ -741,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn a_machine_no_app_keeps_says_not_connected_with_its_rule_where_its_sentence_does_not_fit() {
+    fn a_machine_no_app_keeps_never_loses_what_to_do_to_a_clause_cut() {
         let cfg = cfg();
         let a = app(&cfg);
         let sentence = crate::machine::words::NO_KEEPER;
@@ -751,23 +775,95 @@ mod tests {
             line.contains(&format!("far  {sentence} \u{2501}")),
             "{line:?}"
         );
+        // Too narrow for a rule: the rule goes, the sentence stays whole.
         let line = text(&drawn(&a, Some(3), whole - 1));
+        assert_eq!(line, format!("\u{25cb} far  {sentence}"), "{line:?}");
+    }
+
+    /// `machine`'s header words set to `words`, with `short` as their short form.
+    fn with_steady(a: &mut App, machine: usize, words: &str, short: &str) {
+        let mut snap = a.snap.clone();
+        snap.machines[machine].words = words.to_string();
+        snap.machines[machine].short = short.to_string();
+        a.set_snapshot(snap);
+    }
+
+    /// The header of machine `machine` as the list draws it at its widest, in 110 columns.
+    fn at_widest(a: &App, machine: usize) -> String {
+        let inner = tree_width(a, 110) - 2;
+        text(&drawn(a, Some(machine), inner))
+    }
+
+    #[test]
+    fn a_login_machine_widens_the_list_for_its_short_form_beside_its_rule_and_no_further() {
+        use crate::machine::words;
+        let cfg = cfg();
+        let mut a = short_rows_app(&cfg);
+        with_words(&mut a, 1, "");
+        let none = list_width(&a);
+        assert!(none < TREE_MAX, "the rows are short: {none}");
+        let (whole, short) = (words::login(), words::login_short());
         assert!(
-            line.contains("\u{25cb} far  not connected \u{2501}"),
+            beside_rule(&short) + 2 < TREE_MAX && beside_rule(&whole) > beside_rule(&short),
+            "positive: the whole sentence would have made the list wider"
+        );
+        with_steady(&mut a, 1, &whole, &short);
+        // The list holds the short form beside the rule, exactly: two columns of border more.
+        assert_eq!(list_width(&a), beside_rule(&short) + 2);
+        assert!(list_width(&a) > none, "it makes room for what to do");
+        // And it shows it there, with its action and its rule.
+        let line = text(&drawn(&a, Some(1), list_width(&a) - 2));
+        assert!(line.contains(&format!("pi  {short} \u{2501}")), "{line:?}");
+    }
+
+    #[test]
+    fn a_header_that_waits_for_you_shows_its_short_form_with_its_action_at_the_widest_list() {
+        use crate::machine::words;
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        let ours = env!("CARGO_PKG_VERSION");
+        for (whole, short) in [
+            (words::newer("9.0.0", ours), words::newer_short()),
+            (words::login(), words::login_short()),
+            (words::host_key("pi"), words::host_key_short("pi")),
+        ] {
+            with_steady(&mut a, 1, &whole, &short);
+            assert!(
+                tree_width(&a, 110) == TREE_MAX,
+                "positive: the fixture's rows make the list widest"
+            );
+            let line = at_widest(&a, 1);
+            assert!(
+                line.contains(&format!("pi  {short} \u{2501}")),
+                "{whole:?}: {line:?}"
+            );
+            assert!(!line.contains("runs taw 9.0.0"), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn a_no_taw_header_shows_its_whole_sentence_when_the_rows_make_the_list_wide_enough() {
+        use crate::machine::words;
+        let cfg = cfg();
+        let mut a = app(&cfg);
+        with_steady(&mut a, 1, &words::no_taw(), &words::no_taw_short());
+        let line = at_widest(&a, 1);
+        assert!(
+            line.contains(&format!("pi  {} \u{2501}", words::no_taw())),
             "{line:?}"
         );
-        assert!(!line.contains("run taw"), "{line:?}");
-        assert!(line.ends_with('\u{2501}'), "{line:?}");
     }
 
     /// The list sized by its rows alone: no agent has a title, so the rows are short and the
-    /// widest line is one a machine's header would make.
+    /// widest line is one a machine's header would make. The machine no app keeps has no short form
+    /// here (it would set the width itself, as its words never change).
     fn short_rows_app(cfg: &Config) -> App<'_> {
         let mut a = app(cfg);
         let mut snap = world();
         for agent in &mut snap.agents {
             agent.pane_title.clear();
         }
+        snap.machines[3].short.clear();
         a.set_snapshot(snap);
         a
     }

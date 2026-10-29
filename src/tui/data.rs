@@ -134,6 +134,9 @@ pub struct MachineHeader {
     pub live: bool,
     /// What the header says of a machine that is not live (`connecting`, `not answering, ...`).
     pub words: String,
+    /// The short form of `words` while they wait for the person to act (empty for words that change): the list is
+    /// made wide enough for it, and a header with little room says it in place of `words`.
+    pub short: String,
     /// Unix milliseconds of the last line heard from it.
     pub last_seen: Option<u64>,
     /// This machine's own tmux server, listed among the machines: no other machine, so the bar neither

@@ -946,6 +946,7 @@ mod tests {
                 last_seen: Some(if live { now } else { now - 125_000 }),
                 live,
                 words: "connected: taw 0.1.0".into(),
+                short: String::new(),
                 taw_version: None,
                 protocol: None,
                 this_server: false,

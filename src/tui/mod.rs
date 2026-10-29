@@ -483,6 +483,11 @@ fn machine_views(paths: &Paths, machines: &[Machine]) -> Vec<MachineView> {
                     } else {
                         words::NO_KEEPER.to_string()
                     },
+                    short: if this_server {
+                        String::new()
+                    } else {
+                        words::NO_KEEPER.to_string()
+                    },
                     state: None,
                     last_seen: None,
                     this_server,
@@ -1565,6 +1570,7 @@ mod tests {
         for header in &snap.machines {
             assert!(!header.live && header.no_keeper && !header.this_server);
             assert_eq!(header.words, crate::machine::words::NO_KEEPER);
+            assert_eq!(header.short, crate::machine::words::NO_KEEPER);
             assert_eq!(header.last_seen, None);
         }
         assert_eq!(
@@ -1579,7 +1585,12 @@ mod tests {
                 .lines()
                 .find(|l| l.contains(name) && l.contains(crate::machine::words::NO_KEEPER))
                 .unwrap_or_else(|| panic!("no header of {name} with the words:\n{shown}"));
-            assert!(!line.is_empty());
+            // Whatever the fixture's rows: the sentence whole, with its rule after it (the list is made wide
+            // enough for these words, which never change).
+            assert!(
+                line.contains(&format!("{} \u{2501}", crate::machine::words::NO_KEEPER)),
+                "{line:?}"
+            );
         }
     }
 
@@ -1737,10 +1748,8 @@ mod tests {
         assert!(app.snap.spaces.iter().all(|s| s.machine.is_none()));
         let gone = text_of(&popup_frame(app.snap.clone(), app.worktrees.clone()));
         assert!(!gone.contains("garden"), "nobody keeps it: {gone}");
-        // The list is as wide as its rows, so the header keeps its first clause and its rule.
-        let (said, _) = crate::machine::words::NO_KEEPER
-            .split_once(':')
-            .expect("a sentence with a clause after its first");
+        // The sentence waits for the person, so the list is made wide enough for it: whole, with its rule.
+        let said = crate::machine::words::NO_KEEPER;
         assert!(gone.contains(&format!("{said} \u{2501}")), "{gone}");
     }
 

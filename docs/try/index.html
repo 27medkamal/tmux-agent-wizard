@@ -20,7 +20,7 @@
   }
   html { background: var(--paper); color: var(--ink); }
   body { margin: 0; font: 17px/1.5 var(--serif); }
-  main { max-width: 1260px; margin: 0 auto; padding: 40px 28px 96px; }
+  main { max-width: 1656px; margin: 0 auto; padding: 40px 28px 96px; }
   h1 { font-size: 34px; line-height: 1.15; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.01em; }
   h2 { font-size: 24px; font-weight: 600; margin: 56px 0 12px; padding-top: 18px; border-top: 1px solid var(--rule); }
   h3 { font-size: 18px; font-weight: 600; margin: 24px 0 6px; }
@@ -163,7 +163,7 @@
   <p class="phone">The demo needs a keyboard: open it on a computer. <a class="full-link" href="./" target="_top">Open the full page</a></p>
   <div class="demo">
 
-  <div class="titlebar" hidden><span><span id="where0"></span><span id="clientw">150</span><span id="where1"></span></span><span id="focushint">click the window, then use the keys</span></div>
+  <div class="titlebar" hidden><span><span id="where0"></span><span id="clientw">160</span><span id="where1"></span></span><span id="focushint">click the window, then use the keys</span></div>
   <div class="term-wrap" id="termwrap"><div class="term" id="term" tabindex="0" aria-label="taw popup"></div></div>
   <div class="note pagenote" id="pagenote" aria-live="polite"></div>
   <svg class="qarrow" id="qarrow" aria-hidden="true" focusable="false"><defs><marker id="qhead" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="4" markerHeight="4" orient="auto"><path d="M0 0 L10 5 L0 10 z"/></marker></defs><path id="qpath" d="" marker-end="url(#qhead)"/></svg>
@@ -188,7 +188,7 @@
       <label class="on"><input type="checkbox" id="opt-titles" checked>agent titles</label>
       <label><input type="checkbox" id="opt-pif">projects in the filter</label></div></div>
     <div class="grp"><span>Width</span><div>
-      <label class="on"><input type="radio" name="width" value="150" checked>150 columns</label>
+      <label class="on"><input type="radio" name="width" value="160" checked>160 columns</label>
       <label><input type="radio" name="width" value="100">100</label>
       <label><input type="radio" name="width" value="99">99</label>
       <label><input type="radio" name="width" value="60">60</label></div></div>
@@ -252,7 +252,7 @@
 <script>
 (() => {
   'use strict';
-  let COLS = 150; const EMBED = new URLSearchParams(window.location.search).get('embed') === '1'; document.documentElement.classList.toggle('embed', EMBED); const ROWS = EMBED ? 38 : 40; if (!EMBED && window.matchMedia('(max-width: 599px)').matches) COLS = 60;
+  let COLS = 160; const EMBED = new URLSearchParams(window.location.search).get('embed') === '1'; document.documentElement.classList.toggle('embed', EMBED); const ROWS = 34; if (!EMBED && window.matchMedia('(max-width: 599px)').matches) COLS = 60;
   const WIDE_COLUMNS = 100, PREVIEW_MIN = 40;
   const CALM = true;
   const now = () => 17 * 3600 + 58 * 60;
@@ -1252,12 +1252,33 @@
   probe.textContent = 'x'.repeat(50);
   document.body.appendChild(probe);
   const advance = () => probe.getBoundingClientRect().width / 5000;
-  if (EMBED) document.querySelector('main').style.maxWidth = Math.ceil(150 * advance() * 12.5 + 22) + 'px';
+  // The room the window has in height: the page's viewport less what sits above the window and the arrow's zone
+  // under it. In the homepage's frame the viewport is the page's, and the page scrolls to #try with its own gap
+  // (the site header and a little more) above the frame; a page of its own scrolls, so only a margin is left.
+  function roomBelow() {
+    let view = window.innerHeight, gap = 0, above = 0;
+    if (EMBED && window.frameElement) {
+      try {
+        view = window.parent.innerHeight;
+        const holder = window.frameElement.parentElement, head = window.parent.document.querySelector('.md-header');
+        gap = Math.max(parseFloat(window.parent.getComputedStyle(holder).scrollMarginTop) || 0, head ? head.getBoundingClientRect().bottom : 0);
+      } catch (e) { return 0; }
+      above = term.getBoundingClientRect().top + window.scrollY;
+    } else gap = 12;
+    return view - gap - above - 16 - Math.round(ZONE / 2) - 4;
+  }
+  // A row is as tall as its text's own box at most: a taller row shows a line of the window's own colour between
+  // two painted rows, so the row height is the text box measured at that size, never more than 1.35 times it.
+  const lineProbe = document.createElement('span'), lineText = document.createElement('span');
+  lineProbe.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font-family:' + getComputedStyle(term).fontFamily;
+  lineText.textContent = 'x'; lineProbe.appendChild(lineText); document.body.appendChild(lineProbe);
+  const rowHeight = size => { lineProbe.style.fontSize = size + 'px'; return Math.min(Math.floor(size * 1.35), Math.floor(lineText.getBoundingClientRect().height)); };
   function fitTerm() {
-    let size = Math.min(12.5, (termWrap.clientWidth - 22) / (COLS * advance()));
-    size = Math.max(6, Math.floor(size * 10) / 10);
+    let size = Math.max(6, Math.floor((termWrap.clientWidth - 22) / (COLS * advance()) * 10) / 10);
+    const room = roomBelow();
+    if (room > 0) while (size > 6 && rowHeight(size) * ROWS > room) size = Math.round((size - 0.1) * 10) / 10;
     term.style.fontSize = size + 'px';
-    term.style.setProperty('--lh', Math.floor(size * 1.35) + 'px');
+    term.style.setProperty('--lh', rowHeight(size) + 'px');
   }
   function placeArrow() {
     const calm = !S.overlay && S.filter === null && S.model !== 'search' && !S.toast && !insideNow();
@@ -1276,6 +1297,7 @@
   const refit = () => { fitTerm(); placeArrow(); };
   new MutationObserver(refit).observe(term, { childList: true });
   window.addEventListener('resize', refit);
+  if (EMBED) try { window.parent.addEventListener('resize', refit); } catch (e) { }
   const themeOf = () => {
     try { const scheme = window.parent.document.body.getAttribute('data-md-color-scheme'); if (scheme) return scheme === 'slate' ? 'dark' : 'light'; } catch (e) { }
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';

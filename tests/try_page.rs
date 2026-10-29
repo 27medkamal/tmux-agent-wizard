@@ -565,7 +565,7 @@ fn the_page_can_be_embedded_in_the_homepage() {
     for part in [
         "new URLSearchParams(window.location.search).get('embed') === '1'",
         "document.documentElement.classList.toggle('embed', EMBED)",
-        "const ROWS = EMBED ? 38 : 40;",
+        "const ROWS = 34;",
         "html.embed { background: transparent; }",
         "html.embed .full { display: none; }",
         "frame.style.height = Math.ceil(main.getBoundingClientRect().bottom",
@@ -685,4 +685,41 @@ fn the_sample_fits_the_number_and_letter_keys_and_the_preview_never_wraps() {
         page.contains("<input type=\"checkbox\" id=\"opt-wrap\">"),
         "{PAGE}: the wrap switch is drawn ticked"
     );
+}
+
+/// The window is wide and short, like a screen: 160 columns by 34 rows. Its font is the largest at which the
+/// columns fit the width and the rows fit the viewport's height under the site header (no 12.5 px cap), and
+/// the homepage gives it the viewport's width less a margin, at most 1600 px, and scrolls to it under the header.
+#[test]
+fn the_window_is_160_columns_by_34_rows_sized_to_the_viewport() {
+    let page = read(PAGE);
+    for part in [
+        "let COLS = 160;",
+        "const ROWS = 34;",
+        "<span id=\"clientw\">160</span>",
+        "<input type=\"radio\" name=\"width\" value=\"160\" checked>160 columns</label>",
+        "function roomBelow()",
+        "view = window.parent.innerHeight;",
+        "scrollMarginTop",
+        "window.parent.addEventListener('resize', refit)",
+        "rowHeight(size) * ROWS > room",
+    ] {
+        assert!(page.contains(part), "{PAGE} lacks {part:?}");
+    }
+    for old in ["Math.min(12.5", "advance() * 12.5", "value=\"150\"", "COLS = 150", "ROWS = EMBED"] {
+        assert!(!page.contains(old), "{PAGE} still has {old:?}");
+    }
+    let css = read("docs/stylesheets/extra.css");
+    let rule = css
+        .find(".taw-hero-try {")
+        .map(|at| &css[at..at + css[at..].find('}').unwrap()])
+        .expect("the homepage's try rule");
+    for part in [
+        "width: min(calc(100vw - 3rem), 1600px)",
+        "left: 50%",
+        "translateX(-50%)",
+        "scroll-margin-top: 3rem",
+    ] {
+        assert!(rule.contains(part), "the try rule lacks {part:?}: {rule}");
+    }
 }

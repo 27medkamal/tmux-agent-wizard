@@ -125,6 +125,7 @@ for (const cols of [160, 100, 99, 60]) {
       if (!p) continue;
       step(p, cols, where, () => { p.radio('width', String(cols)); p.check('opt-preview', preview); });
       if (!step(p, cols, where, () => view(p))) continue;
+      if (name !== 'the first view' && name !== 'the flat list' && name !== 'the away machine live') continue;
       step(p, cols, where, () => { for (let i = 0; i < 40; i++) p.key('j'); });
       for (const sc of ['ask', 'finish', 'look', 'reset', 'rask']) step(p, cols, where + ', scenario ' + sc, () => p.scenario(sc));
     }

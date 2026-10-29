@@ -144,8 +144,8 @@ The keys taw adds to herdr's, or reads with another default or meaning, with the
 | `[hooks] pre_close`, `pre_worktree_remove` | *(unset)* | commands taw waits for before a close or a worktree removal; a non-zero exit refuses |
 | `[hooks] timeout_seconds` | `30` | how long an event hook may run before taw stops it; `0` means no limit |
 
-Row templates use herdr's format. These are the defaults, and while your rows equal them taw draws its own
-columns (below); set different rows to draw from the template instead:
+Row templates use herdr's format. These are the defaults: while your rows equal them, and no `rows_by_agent`
+entry is set, taw draws its own columns (below); set different rows to draw from the template instead:
 
 ```toml
 [ui.sidebar.agents]

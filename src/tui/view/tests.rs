@@ -1668,13 +1668,9 @@ fn a_working_template_row_keeps_its_own_token_colours() {
     let cfg = templated("\"state_icon\", \"agent\", \"tab\"");
     let mut app = app(&cfg);
     let theme = app.theme;
-    let styles = template_row_styles(
-        &mut app,
-        "Invoice parser: credit notes",
-        "\u{23f5}",
-        "2:zsh.1",
-        "claude",
-    );
+    // A working agent in a window its session does not have open (the open window's row is lit).
+    with_agents(&mut app, &[("%121", AgentState::Working, true)]);
+    let styles = template_row_styles(&mut app, "Review PR 42", "\u{23f5}", "2:review", "claude");
     assert_eq!(
         styles,
         [
@@ -6762,5 +6758,117 @@ fn a_filter_that_drops_the_longest_name_narrows_the_column() {
         wide - 7,
         "{}",
         after.join("\n")
+    );
+}
+
+// ------------------------------------------------------------------ the open window's template rows
+
+/// The first line of the template used below: glyph, agent, place and state word; the title is the
+/// line under it.
+const LIT_TOKENS: &str = "\"state_icon\", \"agent\", \"tab\", \"state_text\"";
+
+/// A template row of the window its session has open is lit as the popup's own rows are: the
+/// agent and its place white and bold, the state word and the title white, the glyph in its state's
+/// colour. web's open window is 2: its working claude sits in it; mobile's idle claude sits in
+/// window 2 of a session that has window 1 open, so it stays quiet.
+#[test]
+fn a_template_row_of_the_open_window_is_lit_as_the_popups_rows_are() {
+    let cfg = templated(LIT_TOKENS);
+    let mut app = app(&cfg);
+    let theme = app.theme;
+    let buffer = frame(&mut app, W, H);
+    let lines = lines_of(&buffer);
+    let (title, _) = find(&lines, "Invoice parser");
+    let y = title - 1;
+    let working = theme.state_color(Some(AgentState::Working));
+    assert_eq!(
+        style_of(&buffer, &lines, y, "\u{23f5}"),
+        (working, false),
+        "glyph"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, y, "claude"),
+        (theme.fg, true),
+        "agent"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, y, "2:zsh.1"),
+        (theme.fg, true),
+        "place"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, y, "working"),
+        (theme.fg, false),
+        "state word"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, title, "Invoice parser"),
+        (theme.fg, false),
+        "title"
+    );
+    // Another window of another session: the quiet colours.
+    let (title, _) = find(&lines, "Review PR");
+    let y = title - 1;
+    assert_eq!(
+        style_of(&buffer, &lines, y, "claude"),
+        (theme.accent, false),
+        "agent"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, y, "2:review"),
+        (theme.dim, false),
+        "place"
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, title, "Review PR"),
+        (theme.dim, false),
+        "title"
+    );
+}
+
+#[test]
+fn a_hot_template_row_of_the_open_window_stays_in_the_attention_colour() {
+    let cfg = templated(LIT_TOKENS);
+    let mut app = app(&cfg);
+    with_agents(&mut app, &[("%221", AgentState::Blocked, true)]);
+    let blocked = app.theme.state_color(Some(AgentState::Blocked));
+    let buffer = frame(&mut app, W, H);
+    let lines = lines_of(&buffer);
+    let (title, _) = find(&lines, "Invoice parser");
+    for needle in ["claude", "2:zsh.1", "blocked"] {
+        assert_eq!(
+            style_of(&buffer, &lines, title - 1, needle),
+            (blocked, true),
+            "{needle}"
+        );
+    }
+    assert_eq!(
+        style_of(&buffer, &lines, title, "Invoice parser"),
+        (blocked, true)
+    );
+}
+
+#[test]
+fn an_open_windows_template_token_with_its_own_colour_keeps_it() {
+    let cfg = templated(
+        r##""state_icon", { token = "agent", fg = "#00ff00" }, { token = "tab", rules = [{ contains = "zsh", fg = "#ff00ff" }] }"##,
+    );
+    let mut app = app(&cfg);
+    let theme = app.theme;
+    let buffer = frame(&mut app, W, H);
+    let lines = lines_of(&buffer);
+    let (title, _) = find(&lines, "Invoice parser");
+    let y = title - 1;
+    assert_eq!(
+        style_of(&buffer, &lines, y, "claude"),
+        (Color::Rgb(0, 255, 0), false)
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, y, "2:zsh.1"),
+        (Color::Rgb(255, 0, 255), false)
+    );
+    assert_eq!(
+        style_of(&buffer, &lines, title, "Invoice parser"),
+        (theme.fg, false)
     );
 }

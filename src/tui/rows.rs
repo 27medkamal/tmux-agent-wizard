@@ -92,17 +92,30 @@ pub trait TokenSource {
 /// first: the first one its text meets lays its style over the token's own, or hides the token
 /// (a row with none left is an empty line, which callers drop).
 pub fn render_row(tokens: &[RowToken], src: &dyn TokenSource, ctx: &Ctx) -> Line<'static> {
-    render_row_with(tokens, src, ctx, None)
+    render_row_with(tokens, src, ctx, Lit::Quiet)
 }
 
-/// [`render_row`] for a row that needs you: `hot` is the state's style (its colour, bold while
-/// blocked), which every token takes that has no `fg` of its own and that none of its `rules`
-/// restyled. A token with its own `fg`, or one a rule restyled, keeps what it was given.
+/// How a row is lit: quiet, as it is by default; hot, when it needs you; or open, when its session
+/// has its window open.
+#[derive(Clone, Copy, Default)]
+pub enum Lit {
+    #[default]
+    Quiet,
+    /// The state's style (its colour, bold while blocked), which every token takes.
+    Hot(Style),
+    /// The popup's own rows of the open window: every token that is dim on another row is white,
+    /// the agent and its place bold; the state glyph keeps its state's colour.
+    Open,
+}
+
+/// [`render_row`] for a row that is lit ([`Lit`]): the style applies to every token that has no
+/// `fg` of its own and that none of its `rules` restyled. A token with its own `fg`, or one a rule
+/// restyled, keeps what it was given.
 pub fn render_row_with(
     tokens: &[RowToken],
     src: &dyn TokenSource,
     ctx: &Ctx,
-    hot: Option<Style>,
+    lit: Lit,
 ) -> Line<'static> {
     let cells = cells(tokens, src, ctx.indicators);
     let Some(last) = cells.iter().rposition(Option::is_some) else {
@@ -120,15 +133,20 @@ pub fn render_row_with(
             continue;
         };
         let own = part.token.own_style();
-        let mut style = match hot {
-            Some(hot) if own.fg.is_none() && part.style == own => hot,
-            _ => Style::default().fg(part
+        let unchanged = own.fg.is_none() && part.style == own;
+        let lit_style = match lit {
+            Lit::Hot(hot) if unchanged => Some(hot),
+            Lit::Open if unchanged => open_style(&part.token.token, ctx.theme),
+            _ => None,
+        };
+        let mut style = lit_style.unwrap_or_else(|| {
+            Style::default().fg(part
                 .style
                 .fg
                 .as_deref()
                 .and_then(theme::parse_color)
-                .unwrap_or_else(|| src.token_color(&part.token.token, ctx.theme))),
-        };
+                .unwrap_or_else(|| src.token_color(&part.token.token, ctx.theme)))
+        });
         if part.style.bold == Some(true) {
             style = style.add_modifier(Modifier::BOLD);
         }
@@ -142,6 +160,18 @@ pub fn render_row_with(
         }
     }
     Line::from(spans)
+}
+
+/// What a token is drawn in on a row of the open window, as the popup's own columns are: the
+/// agent and its place in `fg`, bold; the state word, the title and a session's name in `fg`.
+/// `None` for a token the popup has no such column for (the glyph stays in its state's colour).
+fn open_style(token: &str, theme: &Theme) -> Option<Style> {
+    let fg = Style::default().fg(theme.fg);
+    match token {
+        "agent" | "tab" | "pane" => Some(fg.add_modifier(Modifier::BOLD)),
+        "state_text" | "terminal_title" | "terminal_title_stripped" | "workspace" => Some(fg),
+        _ => None,
+    }
 }
 
 /// The plain text of one row — what the filter and the fuzzy pickers match against.

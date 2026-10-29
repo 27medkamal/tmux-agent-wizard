@@ -1175,7 +1175,11 @@ fn session_lines(
         } else {
             Vec::new()
         };
-        return prefixed(prefix, None, template_lines(template, space, ctx, None));
+        return prefixed(
+            prefix,
+            None,
+            template_lines(template, space, ctx, rows::Lit::Quiet),
+        );
     }
     let theme = &app.theme;
     let indicators = app.cfg.ui.status_indicators;
@@ -1257,7 +1261,8 @@ fn session_flag_style(app: &App, space: &SpaceRow) -> (&'static str, Style) {
 /// pane title; when it needs you ([`attention::hot`]) every one of those spans is drawn in
 /// the state's colour instead of the quiet ones, bold while it is blocked, and so is a row drawn
 /// from a template, in each token with no `fg` of its own that no rule restyled. Otherwise, a
-/// row of the window its session has open is lit whole: every column that is dim on other
+/// row of the window its session has open is lit whole (a template row too, in the same colours,
+/// token by token: [`rows::Lit::Open`]): every column that is dim on other
 /// rows is white on it — what is in it and its place bold, its state, elapsed time and
 /// title, a flat row's session name, a plain pane's glyph;
 /// and its tree line, `fg` and bold, hot or not ([`row_prefix`]). Every other row
@@ -1284,10 +1289,10 @@ fn pane_lines(
     {
         // With `[ui] labels` on, the letter and the connector stay in front of the template's
         // rows, as on a built-in row (lit as the open window's rows are).
+        let open = tree::space_of(&app.snap, &Row::Pane(index))
+            .and_then(|space| app.snap.spaces.get(space))
+            .is_some_and(|s| s.active_window_id == pane.window_id);
         let prefix = if app.cfg.ui.labels {
-            let open = tree::space_of(&app.snap, &Row::Pane(index))
-                .and_then(|space| app.snap.spaces.get(space))
-                .is_some_and(|s| s.active_window_id == pane.window_id);
             row_prefix(app, last, number, mine, open, letter)
         } else {
             Vec::new()
@@ -1306,14 +1311,20 @@ fn pane_lines(
             })
         };
         // A row that needs you is drawn in the state's colour end to end, as a built-in row is.
-        let hot = attention::hot(agent.state, agent.seen).then(|| {
+        // A row of the window its session has open is lit as the popup's own rows are, unless it
+        // needs you, which wins.
+        let lit = if attention::hot(agent.state, agent.seen) {
             let mut style = Style::default().fg(app.theme.state_color(agent.state));
             if agent.state == Some(AgentState::Blocked) {
                 style = style.add_modifier(Modifier::BOLD);
             }
-            style
-        });
-        return prefixed(prefix, rest, template_lines(template, agent, ctx, hot));
+            rows::Lit::Hot(style)
+        } else if open {
+            rows::Lit::Open
+        } else {
+            rows::Lit::Quiet
+        };
+        return prefixed(prefix, rest, template_lines(template, agent, ctx, lit));
     }
     let theme = &app.theme;
     let dim = Style::default().fg(theme.dim);
@@ -1832,18 +1843,18 @@ fn template_columns(app: &App, defaults: &Sidebar) -> rows::Columns {
     columns
 }
 
-/// One entry's configured rows, herdr's way; `hot` is the style of an agent that needs you
-/// ([`rows::render_row_with`]). A row whose every token is empty (a session
+/// One entry's configured rows, herdr's way; `lit` is how an agent's row is lit, hot or open
+/// ([`rows::Lit`]). A row whose every token is empty (a session
 /// with no repository, say) is dropped rather than drawn as a blank line.
 fn template_lines(
     template: &[Vec<RowToken>],
     src: &dyn rows::TokenSource,
     ctx: &rows::Ctx,
-    hot: Option<Style>,
+    lit: rows::Lit,
 ) -> Vec<Line<'static>> {
     template
         .iter()
-        .map(|row| rows::render_row_with(row, src, ctx, hot))
+        .map(|row| rows::render_row_with(row, src, ctx, lit))
         .filter(|line| !line.spans.is_empty())
         .collect()
 }

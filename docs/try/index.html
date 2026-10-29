@@ -1365,7 +1365,11 @@
   new MutationObserver(placeArrow).observe(term, { childList: true });
   window.addEventListener('resize', refit);
   if (document.fonts) { document.fonts.addEventListener('loadingdone', refit); if (document.fonts.ready) document.fonts.ready.then(refit); }
-  if (EMBED) try { window.parent.addEventListener('resize', refit); } catch (e) { }
+  // Everything the frame hangs on its parent window goes when the frame does (the homepage keeps its window across
+  // pages), so a visit leaves nothing behind.
+  const gone = new AbortController(); let themeWatch = null;
+  window.addEventListener('pagehide', () => { gone.abort(); if (themeWatch) themeWatch.disconnect(); });
+  if (EMBED) try { window.parent.addEventListener('resize', refit, { signal: gone.signal }); } catch (e) { }
   const themeOf = () => {
     try { const scheme = window.parent.document.body.getAttribute('data-md-color-scheme'); if (scheme) return scheme === 'slate' ? 'dark' : 'light'; } catch (e) { }
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -1380,7 +1384,7 @@
     };
     paint();
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paint);
-    try { new MutationObserver(paint).observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-md-color-scheme'] }); } catch (e) { }
+    try { themeWatch = new MutationObserver(paint); themeWatch.observe(window.parent.document.body, { attributes: true, attributeFilter: ['data-md-color-scheme'] }); } catch (e) { }
     if (frame) {
       document.documentElement.classList.add('fitted');
       const fitFrame = () => { frame.style.height = Math.ceil(main.getBoundingClientRect().bottom + window.scrollY + 4) + 'px'; };

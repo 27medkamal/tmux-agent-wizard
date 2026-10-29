@@ -735,7 +735,7 @@ fn the_window_is_160_columns_by_34_rows_sized_to_the_viewport() {
         "function roomBelow()",
         "view = window.parent.innerHeight;",
         "scrollMarginTop",
-        "window.parent.addEventListener('resize', refit)",
+        "window.parent.addEventListener('resize', refit, { signal: gone.signal })",
         "rowHeight(size) * ROWS > room",
     ] {
         assert!(page.contains(part), "{PAGE} lacks {part:?}");

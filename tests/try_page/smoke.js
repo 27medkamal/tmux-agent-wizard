@@ -46,7 +46,7 @@ function load(html, opts = {}) {
   class KeyboardEvent { constructor(t, e) { Object.assign(this, e); this.type = t; } }
   class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } }
   class ResizeObserver { constructor(f) { this.f = f; } observe() {} }
-  const ctx = { document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout: () => 0, clearTimeout: () => {}, Date: { now: () => clock }, console };
+  const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout: () => 0, clearTimeout: () => {}, Date: { now: () => clock }, console };
   ctx.globalThis = ctx;
   vm.runInNewContext(script, ctx, { filename: 'try-script.js' });
   const SHIFT = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZ?!@#$%^&*()"<>:'.split(''));

@@ -94,6 +94,20 @@ depth = "$DEPTH"
 
 [sessions]
 project_dirs = ["~/projects"]
+
+# Calmer rows for the screenshots, and a narrower list: an agent row is its state, its agent and its own
+# title, with no window, state word or age; a session row is its name and its branch, and `main` is hidden.
+# A title that is only the agent's own name (Codex, Gemini CLI and OpenCode set one) is hidden too.
+# The popup's defaults are unchanged, and the session numbers, the row letters and the tree lines stay.
+[ui.sidebar.agents]
+rows = [["state_icon", "agent", { token = "terminal_title_stripped", rules = [
+  { equals = "codex", hide = true },
+  { equals = "Gemini CLI", hide = true },
+  { equals = "OpenCode", hide = true },
+] }]]
+
+[ui.sidebar.sessions]
+rows = [["workspace", { token = "branch", rules = [{ equals = "main", hide = true }] }]]
 EOF
 if [ -n "${TAW_DEMO_FAR:-}" ]; then
   # The machine called home-server: what ssh home-server runs is the stand-in in far.sh.

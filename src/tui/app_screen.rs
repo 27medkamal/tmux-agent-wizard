@@ -949,6 +949,7 @@ impl Feed<'_> {
         let mut command = crate::cli::open::attach_from(self.tmux, came_from, &landing.target);
         // Kept by its id: a name can be renamed, and the name given to another session.
         self.last_attached = crate::cli::open::session_id_of(self.tmux, &landing.target);
+        let through_came_from = came_from.is_some();
         // tmux's client prints its exit line (`[detached (from session api)]`) on its standard output, which is the
         // terminal the list is drawn on again, so the line showed until the list's first frame. The client draws
         // through its standard input and says what went wrong on its standard error: only the line is held back,
@@ -962,7 +963,19 @@ impl Feed<'_> {
         let supervisor = self.record.supervisor();
         let (ended, back_in) = lend_through(
             screen,
-            || self.attach(command, "", Some(&mut client_output)),
+            || {
+                let ended = self.attach(command, "", Some(&mut client_output));
+                if attach_again_plain(through_came_from, &ended, || {
+                    self.tmux
+                        .run_ok(&["has-session", "-t", &landing.target])
+                        .is_ok()
+                }) {
+                    let mut plain = crate::cli::open::attach_to(self.tmux, &landing.target);
+                    client_output = ClientOutput::on(&mut plain);
+                    return self.attach(plain, "", Some(&mut client_output));
+                }
+                ended
+            },
             // The client was ended for a signal or a gone supervisor (`wait_for`): the screen is not taken back.
             ending(supervisor),
             || left_line(&mut tail, &holder, LEFT_WAIT),
@@ -1273,6 +1286,18 @@ struct ClientOutput {
     /// so that the flags of the one the program shares are not touched. Opened at the first write; closed with this.
     own: Option<std::os::fd::OwnedFd>,
     own_tried: bool,
+}
+
+/// Whether an attach that went in through the session the person came from is made again as a plain attach to the
+/// target: it failed (the session came from was closed between the look at it and the attach, which stops the
+/// command list before it reaches the target) and the target is still there. A failure to start the client, a
+/// client that ended well, and a target that is gone are not.
+fn attach_again_plain(
+    through_came_from: bool,
+    ended: &Result<std::process::ExitStatus, String>,
+    target_is_there: impl FnOnce() -> bool,
+) -> bool {
+    through_came_from && matches!(ended, Ok(status) if !status.success()) && target_is_there()
 }
 
 /// The longest tmux exit line that is held, its newline included.
@@ -2209,6 +2234,40 @@ mod tests {
     use super::*;
     use crate::machine::wire::{State, WireSpace, WireWorktree};
     use crate::tui::fixtures::{snapshot, worktrees};
+
+    /// An attach through the session the person came from is made again, plain, only when it failed with the target
+    /// still there.
+    #[test]
+    fn a_failed_attach_through_a_came_from_is_made_again_only_with_the_target_there() {
+        use std::os::unix::process::ExitStatusExt;
+        let failed: Result<std::process::ExitStatus, String> =
+            Ok(std::process::ExitStatus::from_raw(1 << 8));
+        let well: Result<std::process::ExitStatus, String> =
+            Ok(std::process::ExitStatus::from_raw(0));
+        let never = || -> bool {
+            panic!("the target is asked about only after a failure through a came-from")
+        };
+        assert!(
+            attach_again_plain(true, &failed, || true),
+            "failed, target there"
+        );
+        assert!(
+            !attach_again_plain(true, &failed, || false),
+            "failed, target gone"
+        );
+        assert!(
+            !attach_again_plain(false, &failed, never),
+            "a plain attach is not made again"
+        );
+        assert!(
+            !attach_again_plain(true, &well, never),
+            "a client that ended well"
+        );
+        assert!(
+            !attach_again_plain(true, &Err("could not attach".into()), never),
+            "not started"
+        );
+    }
 
     fn session(id: &str, last_attached: u64) -> SessionInfo {
         SessionInfo {

@@ -313,11 +313,13 @@ for (const cols of [160, 100, 60]) {
   const p = loadPage('the narrow top line', { embed: true, frame: true }, 160);
   if (p) {
     step(p, 160, 'the narrow top line', () => p.radio('layout', 'flat'));
-    for (const cols of [160, 100, 60]) {
+    for (const cols of [160, 100, 99, 60]) {
       step(p, cols, `the narrow top line at ${cols}`, () => p.radio('width', String(cols)));
       const t = top(p);
       if (!t.includes(WORDS)) note(`the top line at ${cols}`, `the away words are gone: ${t.trim()}`);
       if (t.length > cols) note(`the top line at ${cols}`, `the line is ${t.length} columns`);
+      // The clock goes before the machine count: a line with the clock and no count has dropped them in the wrong order.
+      if (/\d\d:\d\d/.test(t) && !/\d machines/.test(t)) note(`the top line at ${cols}`, `the clock stays while the machine count is gone: ${t.trim()}`);
     }
   }
 }

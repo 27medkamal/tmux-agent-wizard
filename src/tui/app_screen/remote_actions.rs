@@ -563,7 +563,10 @@ impl Rows {
                         .filter(|said| !said.trim().is_empty());
                     app.toast(match said {
                         Some(said) => words::refused(machine, &said),
-                        None => words::no_folder(machine, session_term.unwrap_or_default()),
+                        None => words::no_folder(
+                            machine,
+                            &crate::machine::clean::plain(session_term.unwrap_or_default()),
+                        ),
                     });
                 }
                 (Reply::Usage(said), _) => {
@@ -3030,6 +3033,35 @@ mod rows_tests {
             assert!(answered(&mut feed, &mut app).is_empty());
             assert_eq!(toast_of(&app).as_deref(), Some(words), "{said} {stale}");
         }
+    }
+
+    /// The far folder named in the toast of an empty `not_found` is cleaned like the rest of the far words: a mark
+    /// that reorders text, in a folder name the far list gave, never reaches the toast.
+    /// Mutation: `words::no_folder` is given the folder as it came (`plain` removed at the call).
+    #[test]
+    fn the_far_folder_in_the_not_found_toast_is_cleaned() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = rig.fake(
+            r#"{"id":"cli:open","error":{"code":"not_found","message":""}}"#,
+            1,
+            false,
+        );
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "/home/studio/gone\u{202e}txt.exe".into(),
+                exact: false,
+            },
+        );
+        assert!(answered(&mut feed, &mut app).is_empty());
+        assert_eq!(
+            toast_of(&app).as_deref(),
+            Some("studio: no directory matches /home/studio/gonetxt.exe")
+        );
     }
 
     /// A far error that carries no message is a sentence, not `studio: `.

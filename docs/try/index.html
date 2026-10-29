@@ -898,10 +898,10 @@
       blocked: w => [...boxed(['cargo test --workspace'], w), 'Allow execution of [Shell]?', '', '● 1. Allow once', '  2. Allow for this session', '  3. No, suggest changes (esc)', '', rule(w), ' > Type your message or @path/to/file', rule(w), apart(' ~/code/web (feat/signup*)', 'no sandbox   gemini-2.5-pro (91% context left) ', w)],
     },
     opencode: {
-      hist: w => ['', '  ┃', '  ┃  cache the image layers', '  ┃', '', '  \u2192 Read Dockerfile', '', '  ✱ Grep "FROM" in docker', '', '  ← Edit Dockerfile', '', '  Docker build uses a cache mount for the dependency layer now, so a change in', '  the source no longer invalidates it.', '', '  ▣  Build · claude-sonnet · 14.2s', ''],
-      idle: w => ['  $ docker build --target deps .', '', '  ▣  Build · claude-sonnet · 21.7s', '', '  ┃', '  ┃  Ask anything... "Fix broken tests"', '  ┃', '  ┃  Build  claude-sonnet  Anthropic', '  ╹' + '▀'.repeat(Math.max(0, w - 3)), apart('', 'tab agents  ctrl+p commands  ', w)],
-      working: w => ['  \u2192 Read build.sh', '', '  $ docker build --target deps .', '    Step 4/9 : RUN --mount=type=cache npm ci', '', '  ■■⬝⬝⬝⬝⬝⬝  esc interrupt', '', '  ┃', '  ┃  Ask anything... "Fix broken tests"', '  ┃', '  ┃  Build  claude-sonnet  Anthropic', '  ╹' + '▀'.repeat(Math.max(0, w - 3)), apart('', 'esc interrupt  ctrl+p commands  ', w)],
-      blocked: w => ['  ← Edit Dockerfile', '', '  ┃', '  ┃  △ Permission required', '  ┃    $ docker build --target deps .', '  ┃', '  ┃  Allow once   Allow always   Reject', '  ╹' + '▀'.repeat(Math.max(0, w - 3)), apart('', 'ctrl+p commands  ', w)],
+      hist: w => ['', '  cache the image layers', '', '  Read Dockerfile', '', '  ✱ Grep "FROM" in docker', '', '  ← Edit Dockerfile', '', '  Docker build uses a cache mount for the dependency layer now, so a change in', '  the source no longer invalidates it.', '', '  ▣  Build · claude-sonnet · 14.2s', ''],
+      idle: w => ['  $ docker build --target deps .', '', '  ▣  Build · claude-sonnet · 21.7s', '', apart('', 'ctrl+p commands  ', w)],
+      working: w => ['  Read build.sh', '', '  $ docker build --target deps .', '    Step 4/9 : RUN --mount=type=cache npm ci', '', apart('', 'esc interrupt  ctrl+p commands  ', w)],
+      blocked: w => ['  △ Permission required', '    $ docker build --target deps .', '', '  Allow once   Allow always   Reject', '', apart('', 'ctrl+p commands  ', w)],
     },
   };
   const agentScreen = (kind, state, w) => { w = Math.max(w, 30); const k = SCREENS[kind] || SCREENS.claude, call = x => typeof x === 'function' ? x(w) : x; const st = state === 'done' && !k.done ? 'idle' : state; const body = call(k[st] || k.idle); return [...call(k.hist), ...body].map(l => l.length > w ? clipEnd(l, w) : l); };

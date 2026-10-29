@@ -60,25 +60,28 @@ fn dot_of(app: &App, machine: Option<usize>) -> (&'static str, Color) {
 }
 
 /// How many of the machine groups in the drawn list have agents: a header whose tail is counts, and
-/// under which a drawn session shows at least one agent (a view hides agents from the list, and an
-/// agent it hides is not there to count).
+/// under which an agent row is drawn or, at the sessions depth, where the agents are folded into the
+/// session rows, a drawn session row has agents (a view or a filter hides agents from the list, and
+/// an agent it hides is not there to count).
 fn groups_with_agents(app: &App) -> usize {
+    let folded = app.depth == Depth::Sessions;
     let mut groups: Vec<Option<usize>> = Vec::new();
     let mut with_agents: Vec<Option<usize>> = Vec::new();
     for row in &app.rows.rows {
-        match row {
-            Row::Machine(machine) => groups.push(*machine),
-            Row::Session(space) => {
-                let Some(&machine) = groups.last() else {
-                    continue;
-                };
-                if !with_agents.contains(&machine)
-                    && !tree::shown_agents(&app.snap, *space).is_empty()
-                {
-                    with_agents.push(machine);
-                }
-            }
-            _ => {}
+        if let Row::Machine(machine) = row {
+            groups.push(*machine);
+            continue;
+        }
+        let Some(&machine) = groups.last() else {
+            continue;
+        };
+        let agent_drawn = match row {
+            Row::Pane(pane) => app.snap.panes.get(*pane).and_then(|p| p.agent).is_some(),
+            Row::Session(space) => folded && !tree::shown_agents(&app.snap, *space).is_empty(),
+            _ => false,
+        };
+        if agent_drawn && !with_agents.contains(&machine) {
+            with_agents.push(machine);
         }
     }
     with_agents
@@ -415,6 +418,69 @@ mod tests {
             assert!(
                 !has_counts(&line),
                 "the view hides studio's agents: {line:?}"
+            );
+        }
+    }
+
+    /// A filter is honoured as a view is: with `zsh` typed at the all depth, two machine groups are
+    /// drawn with shell rows only, no agent row is on screen, and no header shows counts.
+    #[test]
+    fn a_filter_that_leaves_shell_rows_only_leaves_no_group_with_agents() {
+        let mut cfg = cfg();
+        cfg.keys.preset = crate::config::KeysPreset::Search;
+        let mut a = app(&cfg);
+        let mut snap = world();
+        for agent in &mut snap.agents {
+            agent.machine = (agent.session_id == "$2").then_some(0);
+        }
+        for pane in &mut snap.panes {
+            pane.machine = (pane.session_id == "$2").then_some(0);
+            if pane.agent.is_some() {
+                // Nothing of an agent's pane says `zsh`, so the filter drops its row.
+                pane.pane_current_command = "claude".into();
+                pane.window_name = "work".into();
+            }
+        }
+        for space in &mut snap.spaces {
+            space.machine = (space.session_id == "$2").then_some(0);
+        }
+        a.set_snapshot(snap);
+        // Positive first: unfiltered, two groups have agents and both headers show counts.
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(has_counts(&line), "no filter, two groups: {line:?}");
+        }
+        for c in "zsh".chars() {
+            a.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(a.query().map(|q| q.text), Some("zsh".to_string()));
+        let drawn_rows = &a.rows.rows;
+        let headers: Vec<_> = drawn_rows
+            .iter()
+            .filter(|r| matches!(r, Row::Machine(_)))
+            .collect();
+        assert_eq!(
+            headers.len(),
+            2,
+            "both machine groups drawn: {drawn_rows:?}"
+        );
+        let panes: Vec<usize> = drawn_rows
+            .iter()
+            .filter_map(|r| if let Row::Pane(p) = r { Some(*p) } else { None })
+            .collect();
+        assert!(!panes.is_empty(), "shell rows are drawn: {drawn_rows:?}");
+        assert!(
+            panes.iter().all(|&p| a.snap.panes[p].agent.is_none()),
+            "the filter left no agent row: {drawn_rows:?}"
+        );
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(
+                !has_counts(&line),
+                "the filter left shell rows only: {line:?}"
             );
         }
     }

@@ -516,6 +516,64 @@ mod tests {
         }
     }
 
+    /// The sessions depth draws headers and session rows only, the agents folded into them: two
+    /// groups whose session rows have agents show counts on both headers.
+    #[test]
+    fn at_the_sessions_depth_two_groups_with_agents_show_counts() {
+        let mut cfg = cfg();
+        cfg.ui.depth = Depth::Sessions;
+        let a = app(&cfg);
+        assert!(
+            a.rows.rows.iter().all(|r| !matches!(r, Row::Pane(_))),
+            "no pane row at the sessions depth: {:?}",
+            a.rows.rows
+        );
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(has_counts(&line), "two groups with agents: {line:?}");
+        }
+    }
+
+    /// At the sessions depth a filter drops whole headers: with only studio's session kept, one group
+    /// is drawn and no header shows counts, though this machine's agents are still in the snapshot.
+    #[test]
+    fn at_the_sessions_depth_a_filter_that_keeps_one_header_shows_no_counts() {
+        let mut cfg = cfg();
+        cfg.ui.depth = Depth::Sessions;
+        cfg.keys.preset = crate::config::KeysPreset::Search;
+        let mut a = app(&cfg);
+        // Positive first: unfiltered, both headers count.
+        for machine in [None, Some(0)] {
+            let line = text(&drawn(&a, machine, 80));
+            assert!(has_counts(&line), "no filter, two groups: {line:?}");
+        }
+        // Studio's session is infra (`$3`); no other session name has these letters.
+        for c in "infra".chars() {
+            a.on_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(a.query().map(|q| q.text), Some("infra".to_string()));
+        let headers: Vec<_> = a
+            .rows
+            .rows
+            .iter()
+            .filter(|r| matches!(r, Row::Machine(_)))
+            .collect();
+        assert_eq!(
+            headers,
+            [&Row::Machine(Some(0))],
+            "only studio's header is drawn: {:?}",
+            a.rows.rows
+        );
+        let line = text(&drawn(&a, Some(0), 80));
+        assert!(
+            line.contains("\u{25cf} studio") && !has_counts(&line),
+            "one group: {line:?}"
+        );
+    }
+
     #[test]
     fn the_five_states_at_80_columns_say_the_same_at_the_same_places() {
         let cfg = cfg();

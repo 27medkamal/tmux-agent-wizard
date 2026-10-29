@@ -346,7 +346,8 @@ pub fn candidates_offered(stdout: &[u8]) -> Option<crate::tui::picker::FarList> 
         rows.iter()
             .filter_map(|row| {
                 let name = plain(row["name"].as_str()?);
-                // The folder is what Enter sends, so it is kept exactly as listed (it is never drawn): absolute,
+                // The folder is what Enter sends, so it is kept exactly as listed (drawn only
+                // cleaned, in the toast for a folder that is nowhere): absolute,
                 // and a NUL cannot be sent. A row that is not that is left out.
                 let dir = row["dir"].as_str()?.to_string();
                 let sendable = dir.starts_with('/') && !dir.contains('\0');

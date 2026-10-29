@@ -239,7 +239,7 @@ enum Group {
     Seen {
         #[arg(value_name = "PANE")]
         pane: String,
-        /// Mark it only if someone is looking at it as this runs (an attached session, its active window and pane)
+        /// Mark it only if someone is looking at it as this runs (a client shows it: the active pane of the active window of the session some client is on)
         #[arg(long)]
         if_looked_at: bool,
     },

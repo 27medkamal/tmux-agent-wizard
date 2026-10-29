@@ -375,7 +375,7 @@ when the pane closes or the pipe is removed.
    the foreground. Those focus hooks are `after-select-pane`,
    `after-select-window`, `client-session-changed` and `pane-focus-in`, plus
    `client-focus-in` on tmux 3.6+. Each runs `taw seen --if-looked-at <pane>`, which marks the pane only
-   if a client shows it when the job runs (its session attached, the pane active in the active window):
+   if a client shows it when the job runs (it is the active pane of the active window of the session some client is on):
    a client that is attached to one session and switched to another in one command line, as `taw app`
    does to go in with a last session, passes through the first, and nobody looked at that one. A note on `pane-focus-in` and tmux 3.6b: it still
    *fires* there (verified: a terminal regaining focus or a pane being selected runs

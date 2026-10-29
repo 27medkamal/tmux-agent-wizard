@@ -381,12 +381,21 @@ fn enter_on_studios_row_in_the_popup_makes_the_client_the_app_in_studio() {
 /// the doorway starts it. The line ends in the shell's own status, written to `status`. Returns once the app's
 /// list shows `shown`.
 fn start_back_app(rig: &Rig, back: &str, shown: &str) {
+    start_back_app_from(rig, back, None, shown);
+}
+
+/// [`start_back_app`] with `--back-last` when `last` is a session id: the session the doorway's client came to
+/// the `--back` session from.
+fn start_back_app_from(rig: &Rig, back: &str, last: Option<&str>, shown: &str) {
     let mut env = rig.mac.taw_env();
     env.push(("TAW_SSH_BIN".into(), rig.stand_in.bin.display().to_string()));
+    let last = last
+        .map(|id| format!(" --back-last '{id}'"))
+        .unwrap_or_default();
     type_line(
         &rig.term,
         &format!(
-            "env -u TMUX -u TMUX_PANE {}'{}' app --back '{back}' 2>'{}'; echo $? >'{}'",
+            "env -u TMUX -u TMUX_PANE {}'{}' app --back '{back}'{last} 2>'{}'; echo $? >'{}'",
             env_words(&env),
             taw_bin(),
             rig.mac.work_dir().join("back-err").display(),
@@ -677,5 +686,78 @@ fn an_app_whose_standard_output_is_a_pipe_draws_on_its_terminal() {
     own(record["supervisor"].as_u64().expect("a supervisor") as u32);
     expect(&rig, "the app's list on the terminal", || {
         screen_of(&rig.term).contains("Enter go in")
+    });
+}
+
+/// What a client of this Mac's server says of its sessions: its own and its last.
+fn client_last_session(mac: &Server) -> (String, String) {
+    let line = mac.tmux_ok(&[
+        "list-clients",
+        "-F",
+        "#{client_session} #{client_last_session}",
+    ]);
+    let mut words = line.trim().splitn(2, ' ');
+    (
+        words.next().unwrap_or("").to_string(),
+        words.next().unwrap_or("").to_string(),
+    )
+}
+
+/// An app started with `--back S --back-last L`, quit with `Q`, puts a client on S whose last session is L, so
+/// that prefix + L goes there.
+#[test]
+fn quitting_an_app_started_with_back_last_leaves_that_session_as_the_clients_last() {
+    let _own = Owned::new();
+    let rig = rig();
+    rig.mac.tmux_ok(&["new-session", "-d", "-s", "back-here"]);
+    rig.mac.tmux_ok(&["new-session", "-d", "-s", "back-before"]);
+    let here = session_id(&rig.mac, "back-here");
+    let before = session_id(&rig.mac, "back-before");
+    start_back_app_from(&rig, &here, Some(&before), "back-before");
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "-l", "Q"]);
+    expect(&rig, "a client of this Mac's server", || {
+        clients(&rig.mac).len() == 1
+    });
+    expect(
+        &rig,
+        "the client on the --back session with its last",
+        || client_last_session(&rig.mac) == ("back-here".into(), "back-before".into()),
+    );
+    let name = rig.mac.tmux_ok(&["list-clients", "-F", "#{client_name}"]);
+    rig.mac.tmux_ok(&["switch-client", "-c", name.trim(), "-l"]);
+    assert_eq!(
+        client_last_session(&rig.mac).0,
+        "back-before",
+        "switch-client -l goes to the last session\n{}",
+        seen(&rig)
+    );
+}
+
+/// The first Enter on a local session of an app started with `--back S` lands with S as the client's last
+/// session: the app records the doorway's session, as the one it came from.
+#[test]
+fn the_first_session_entered_from_the_doorways_app_has_the_back_session_as_its_last() {
+    let _own = Owned::new();
+    let rig = rig();
+    rig.mac.tmux_ok(&["new-session", "-d", "-s", "back-here"]);
+    rig.mac.tmux_ok(&["new-session", "-d", "-s", "back-other"]);
+    let here = session_id(&rig.mac, "back-here");
+    start_back_app_from(&rig, &here, None, "back-other");
+    for _ in 0..12 {
+        if selected_row(&rig.term).contains("back-other") {
+            break;
+        }
+        rig.term
+            .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "-l", "j"]);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    expect(&rig, "the row of the other session selected", || {
+        selected_row(&rig.term).contains("back-other")
+    });
+    rig.term
+        .tmux_ok(&["send-keys", "-t", &rig.term.pane(), "Enter"]);
+    expect(&rig, "a client on the other session", || {
+        client_last_session(&rig.mac) == ("back-other".into(), "back-here".into())
     });
 }

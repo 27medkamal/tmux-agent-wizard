@@ -60,11 +60,12 @@ function load(html, opts = {}) {
   const docEl = new El('html'); const body = new El('body'); const mainEl = new El('main');
   const document = { documentElement: docEl, body, getElementById: id => byId[id] || (byId[id] = new El('div', { id })), querySelector: s => (s === '#ordertable tbody' ? orderBody : s === 'main' ? mainEl : null), querySelectorAll: s => { const m = s.match(/^input\[name=(\w+)\]$/); if (m) return radios.filter(r => r.attrs.name === m[1]); if (s === '[data-sc]') return buttons; return []; }, addEventListener: (t, f) => docListeners.push([t, f]), createElement: t => new El(t) };
   const mq = q => ({ matches: q.includes('max-width: 599px') ? !!opts.phone : false, addEventListener() {} });
-  const parentWin = opts.frame ? { innerHeight: opts.parentH || 860, document: { querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 48 }) }), body: { getAttribute: () => null } }, getComputedStyle: () => ({ scrollMarginTop: '60px' }), addEventListener: (t, f, o) => { const list = (winListeners['p' + t] = winListeners['p' + t] || []); list.push(f); if (o && o.signal) o.signal.addEventListener('abort', () => { const i = list.indexOf(f); if (i >= 0) list.splice(i, 1); }); } } : null;
+  const parentBody = { getAttribute: () => null }; const themeWatchers = new Set();
+  const parentWin = opts.frame ? { innerHeight: opts.parentH || 860, document: { querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 48 }) }), body: parentBody }, getComputedStyle: () => ({ scrollMarginTop: '60px' }), addEventListener: (t, f, o) => { const list = (winListeners['p' + t] = winListeners['p' + t] || []); list.push(f); if (o && o.signal) o.signal.addEventListener('abort', () => { const i = list.indexOf(f); if (i >= 0) list.splice(i, 1); }); } } : null;
   const window = { location: { search: opts.embed ? '?embed=1' : '' }, matchMedia: mq, scrollY: 0, innerHeight: opts.innerH || 860, frameElement: opts.frame ? { parentElement: new El('div'), style: {} } : null, addEventListener: (t, f) => (winListeners[t] = winListeners[t] || []).push(f) };
   window.parent = parentWin || window;
   class KeyboardEvent { constructor(t, e) { Object.assign(this, e); this.type = t; } }
-  class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } disconnect() {} }
+  class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); if (t === parentBody) themeWatchers.add(this); } disconnect() { themeWatchers.delete(this); } }
   const sizeObservers = [];
   class ResizeObserver { constructor(f) { this.f = f; } observe() { sizeObservers.push(this.f); this.f(); } }
   const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout, clearTimeout, Date: { now: () => clock }, console };
@@ -90,6 +91,8 @@ function load(html, opts = {}) {
     raw() { return term._raw || ''; },
     frame() { return term.innerHTML; },
     winListeners,
+    // How many observers the frame still has on its parent's body (the theme watch).
+    themeWatchers: () => themeWatchers.size,
     measures: () => measures,
     fontSize: () => term.style.fontSize,
     // What the page's fit code decided: the font size, the row height and the frame's height, in px.
@@ -385,6 +388,9 @@ for (const persisted of [true, false]) {
   const reads = p.measures() - before;
   if (persisted && reads === 0) note(where, 'a parent resize does not size the window after a pagehide that kept the page');
   if (!persisted && reads !== 0) note(where, `${reads} layout reads on a parent resize after the frame was removed`);
+  const watching = p.themeWatchers();
+  if (persisted && watching !== 1) note(where, `${watching} theme observers on the parent's body after a pagehide that kept the page, wanted 1`);
+  if (!persisted && watching !== 0) note(where, `${watching} theme observers still on the parent's body after the frame was removed`);
 }
 
 if (problems.size) {

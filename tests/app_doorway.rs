@@ -527,6 +527,25 @@ fn back_takes_a_session_id() {
     }
 }
 
+/// `--back-last` takes a session id and nothing else, and its usage line names it, not `--back`.
+#[test]
+fn back_last_takes_a_session_id_and_says_so() {
+    let mac = Server::start();
+    for target in ["garden", "3", "$", "$3;x", "@5"] {
+        let out = mac
+            .taw_command(&["app", "--back", "$1", "--back-last", target])
+            .output()
+            .expect("taw runs");
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(2), "{target}: {stderr}");
+        assert!(
+            stderr.contains("--back-last takes the id of a tmux session, as in $2"),
+            "{target}: {stderr}"
+        );
+        assert!(!stderr.contains("--back takes"), "{target}: {stderr}");
+    }
+}
+
 /// `taw app --go` with a bare session or window id, nothing before the colon or a machine with no id is a usage
 /// error (2) that says how it is said, before anything is started (`last` and `%7` are forms of their own).
 #[test]

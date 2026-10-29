@@ -27,6 +27,8 @@ pub const LOST: &str = "taw app: lost track of the app child";
 
 /// What `taw app --back` says of a value that is no session id.
 pub const BACK_USAGE: &str = "--back takes the id of a tmux session, as in $3";
+/// What a `--back-last` that is not a session id is told.
+pub const BACK_LAST_USAGE: &str = "--back-last takes the id of a tmux session, as in $2";
 
 /// `taw app`. Inside tmux (`$TMUX` is set) it says so on standard error and opens the popup on the client
 /// it is run from, as `taw ui open` does, ending 0 when the popup opened and with its error when not.
@@ -52,7 +54,7 @@ pub(super) fn run(
         std::process::exit(2);
     }
     if back_last.is_some_and(|session| !crate::machine::valid_session_id(session)) {
-        eprintln!("taw app: {BACK_USAGE}");
+        eprintln!("taw app: {BACK_LAST_USAGE}");
         std::process::exit(2);
     }
     if child {

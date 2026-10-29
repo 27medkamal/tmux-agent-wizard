@@ -95,7 +95,19 @@ pub(super) fn app_top_line(app: &App, width: u16) -> Line<'static> {
         Line::default()
     };
     let (right, words_shown) = if away.is_empty() {
-        (clock_alone, false)
+        // The clock goes before any count is cut or the machine count is dropped: it stays only
+        // while the whole left, a gap of one and the trailing space fit beside it. Beside a toast
+        // the left is the toast, which the counts' rule does not govern.
+        let whole = wide.as_ref().unwrap_or(&left);
+        let room = line_width(whole) + 1 + line_width(&clock_alone) < width;
+        (
+            if toast.is_some() || room {
+                clock_alone
+            } else {
+                Line::default()
+            },
+            false,
+        )
     } else {
         let words_span = Span::styled(words::away_names(&away), Style::default().fg(theme.yellow));
         let words_only = Line::from(words_span.clone());
@@ -274,30 +286,21 @@ mod tests {
         assert_eq!(a.bar_counts().machines, 3);
     }
 
-    /// On a narrow line the clock goes first, then the machine count, then the other counts are cut:
-    /// scanning the widths, the clock never stays once the count has gone, and a cut count never has the
-    /// machine count beside it. Each stage is met by some width.
-    #[test]
-    fn a_narrow_line_drops_the_clock_then_the_machine_count_then_cuts_the_others() {
-        let mut cfg = cfg();
-        let mut snap = away_world(false);
-        snap.machines.push(MachineHeader {
-            name: "far".into(),
-            live: true,
-            ..MachineHeader::default()
-        });
-        let a = flat_app(&mut cfg, snap);
-        let clock = clock_of(&a);
+    /// The scan every layout and world must pass: on a narrow line the clock goes first, then the
+    /// machine count, then the other counts are cut. Over the widths, the clock never stays once the
+    /// count has gone, and a cut count never has the machine count beside it. Each stage is met by
+    /// some width.
+    fn scan_narrow_line(a: &App, machines: &str) {
+        let clock = clock_of(a);
         let counts = a.bar_counts();
-        assert_eq!(counts.machines, 4);
         let whole = format!("{} sessions", counts.sessions);
         let mut stages = [false; 4];
         for width in 20..=150u16 {
-            let line = text(&app_top_line(&a, width));
-            assert_eq!(line.chars().count(), width as usize, "{line:?}");
+            let line = text(&app_top_line(a, width));
+            assert!(line.chars().count() <= width as usize, "{line:?}");
             let (has_clock, has_count, cut) = (
                 line.contains(&clock),
-                line.contains("4 machines"),
+                line.contains(machines),
                 line.contains('\u{2026}'),
             );
             assert!(
@@ -322,6 +325,48 @@ mod tests {
             stages, [true; 4],
             "the clock, the count, the others went in turn"
         );
+    }
+
+    /// On a narrow line the clock goes first, then the machine count, then the other counts are cut,
+    /// with an away machine on the line and with nothing away, in the flat list and in the tree.
+    #[test]
+    fn a_narrow_line_drops_the_clock_then_the_machine_count_then_cuts_the_others() {
+        let far = MachineHeader {
+            name: "far".into(),
+            live: true,
+            ..MachineHeader::default()
+        };
+        // Flat, pi away and named on the line.
+        let mut cfg_away = cfg();
+        let mut snap = away_world(false);
+        snap.machines.push(far.clone());
+        let a = flat_app(&mut cfg_away, snap);
+        assert_eq!(a.bar_counts().machines, 4);
+        scan_narrow_line(&a, "4 machines");
+        // Flat and tree with every machine connected, so nothing is away: the normal list.
+        let mut snap = away_world(false);
+        snap.machines[1].live = true;
+        snap.machines.push(far);
+        let mut cfg_flat = cfg();
+        let a = flat_app(&mut cfg_flat, snap.clone());
+        assert!(a.away_unheaded().is_empty());
+        scan_narrow_line(&a, "4 machines");
+        let cfg_tree = cfg();
+        let mut a = app(&cfg_tree);
+        a.set_snapshot(snap);
+        assert!(a.away_unheaded().is_empty());
+        scan_narrow_line(&a, "4 machines");
+        // The tree with pi away: its header says so, so the line names none.
+        let mut snap = away_world(false);
+        snap.machines.push(MachineHeader {
+            name: "far".into(),
+            live: true,
+            ..MachineHeader::default()
+        });
+        let mut a = app(&cfg_tree);
+        a.set_snapshot(snap);
+        assert!(a.away_unheaded().is_empty());
+        scan_narrow_line(&a, "4 machines");
     }
 
     /// The sample world with studio (live, no session) and pi, which is away: with `rows` its stale
@@ -617,16 +662,18 @@ mod tests {
         assert!(line.trim_end().ends_with('\u{2026}'), "{line:?}");
     }
 
-    /// The plain tree has a header for every away machine, so the narrow line is as it was: the clock alone.
+    /// The plain tree has a header for every away machine, so the narrow line names none; there the
+    /// clock goes before any count is cut, so at thirty columns the left is cut and the clock is gone.
     #[test]
-    fn the_plain_tree_at_thirty_columns_keeps_the_clock_alone() {
+    fn the_plain_tree_at_thirty_columns_drops_the_clock_and_names_no_machine() {
         let cfg = cfg();
         let mut a = app(&cfg);
         a.set_snapshot(away_world(false));
         assert!(a.rows.rows.contains(&Row::Machine(Some(1))));
         let line = text(&app_top_line(&a, 30));
         assert_eq!(line.chars().count(), 30, "{line:?}");
-        assert!(line.trim_end().ends_with(&clock_of(&a)), "{line:?}");
+        assert!(line.trim_end().ends_with('\u{2026}'), "{line:?}");
+        assert!(!line.contains(&clock_of(&a)), "{line:?}");
         assert!(
             !line.contains("not connected") && !line.contains("pi"),
             "{line:?}"

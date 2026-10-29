@@ -168,7 +168,8 @@ pub fn render_row_with(
 
 /// What a token is drawn in on a row of the open window, as the popup's own columns are: the
 /// agent and its place in `fg`, bold; the state word, the title and a session's name in `fg`.
-/// `None` for a token the popup has no such column for (the glyph stays in its state's colour).
+/// `None` for a token the popup has no such column for (the glyph stays in its state's colour; a
+/// custom `$name` token is in `fg` on every row of an agent already, so there is nothing to light).
 fn open_style(token: &str, theme: &Theme) -> Option<Style> {
     let fg = Style::default().fg(theme.fg);
     match token {

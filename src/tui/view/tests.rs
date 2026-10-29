@@ -6916,3 +6916,45 @@ fn an_open_windows_template_token_with_its_own_colour_keeps_it() {
         (theme.fg, false)
     );
 }
+
+/// A custom `$name` token is in the text colour on every agent row, the open window's included
+/// (its quiet colour is not dim, so nothing is left to light): tree, flat list and under a filter.
+#[test]
+fn a_custom_token_is_in_the_text_colour_on_the_open_windows_row() {
+    let rows = "[ui.sidebar.agents]\nrows = [[\"agent\", \"$jj_status\"]]\n";
+    for (layout, filter) in [("tree", None), ("flat", None), ("flat", Some("claude"))] {
+        let cfg = config(&format!("[ui]\nlayout = \"{layout}\"\n{rows}"));
+        let mut app = app(&cfg);
+        let theme = app.theme;
+        let mut snap = app.snap.clone();
+        for agent in snap.agents.iter_mut() {
+            agent.tokens.insert(
+                "jj_status".to_string(),
+                format!("jj{}", &agent.pane_id[1..]),
+            );
+        }
+        app.set_snapshot(snap);
+        if let Some(filter) = filter {
+            app.filter = Some(Input::new(filter));
+            app.rebuild();
+        }
+        let buffer = frame(&mut app, W, H);
+        let lines = lines_of(&buffer);
+        // %221 is the working claude of web's open window.
+        let (y, _) = find(&lines, "jj221");
+        let what = format!("{layout} {filter:?}: {}", lines[y]);
+        if filter.is_none() {
+            // (Under a filter the matched letters of the name are yellow.)
+            assert_eq!(
+                style_of(&buffer, &lines, y, "claude"),
+                (theme.fg, true),
+                "the agent is lit, {what}"
+            );
+        }
+        assert_eq!(
+            style_of(&buffer, &lines, y, "jj221"),
+            (theme.fg, false),
+            "{what}"
+        );
+    }
+}

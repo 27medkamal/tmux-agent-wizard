@@ -19,6 +19,8 @@ use crate::plugin::context;
 use crate::session::create::Outcome;
 use crate::session::{self, restore, snapshot};
 use crate::tmux::ids;
+use crate::tui::data::{Snapshot, SpaceRow};
+use crate::tui::picker;
 
 /// The snapshot name `save`/`restore` use when none is given — also the one `autosave`
 /// writes.
@@ -74,6 +76,18 @@ pub enum Cmd {
     Snapshot,
     /// Switch to, or create, the session for a directory (tilde or absolute)
     Open { path: String },
+    /// List the folders the new-session picker offers on this machine
+    ///
+    /// What the picker lists before anything is typed, in its order: zoxide's folders, then the
+    /// folders under `[sessions] project_dirs`, each told as `session` when a session is already
+    /// running there, else `zoxide` or `project`. Nothing is asked and nothing is switched, and a
+    /// machine with no zoxide, no project folders or no tmux server answers an empty list. Without
+    /// `--json` it prints one line for each folder.
+    Candidates {
+        /// Print the envelope: `{"candidates":[{"kind","name","dir","session"}]}`
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 pub(crate) fn run(ctx: &Ctx, cmd: Cmd) -> (Sub, anyhow::Result<Value>) {
@@ -87,7 +101,79 @@ pub(crate) fn run(ctx: &Ctx, cmd: Cmd) -> (Sub, anyhow::Result<Value>) {
         Cmd::Autosave { on_close } => ("autosave", autosave(ctx, on_close)),
         Cmd::Snapshot => ("snapshot", live_snapshot(ctx)),
         Cmd::Open { path } => ("open", open(ctx, &path)),
+        Cmd::Candidates { .. } => ("candidates", candidates(ctx)),
     }
+}
+
+/// `taw session candidates`: what the new-session picker lists on this machine before anything is
+/// typed ([`picker::offered`]), as `{"candidates": [...]}`. Each has `kind`, `name` (the folder as the
+/// picker shows it), `dir` (absolute) and, for a folder with a session running in it, `session`.
+fn candidates(ctx: &Ctx) -> anyhow::Result<Value> {
+    let home = dirs::home_dir().context("resolving the home directory")?;
+    let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
+    let offered = offered_here(ctx, &home, &zoxide)?;
+    Ok(json!({ "candidates": offered.iter().map(candidate_json).collect::<Vec<_>>() }))
+}
+
+/// The picker's rows for this machine's own sessions.
+pub(crate) fn offered_here(
+    ctx: &Ctx,
+    home: &Path,
+    zoxide: &[String],
+) -> anyhow::Result<Vec<picker::Offered>> {
+    // A tmux that does not answer (no server, or a socket that is not there) has no sessions: the
+    // folders are still this machine's, so this is not an error.
+    let sessions = ctx.tmux.list_sessions().unwrap_or_else(|e| {
+        log::debug!("session candidates: no sessions listed: {e:#}");
+        Vec::new()
+    });
+    let spaces = sessions
+        .into_iter()
+        .map(|session| SpaceRow {
+            session_id: session.session_id,
+            session_name: session.session_name,
+            session_path: session.session_path.into(),
+            ..SpaceRow::default()
+        })
+        .collect();
+    let snap = Snapshot {
+        spaces,
+        ..Snapshot::default()
+    };
+    Ok(picker::offered(
+        &snap,
+        &ctx.cfg,
+        home,
+        zoxide,
+        picker::OFFERED_MAX,
+    ))
+}
+
+fn candidate_json(row: &picker::Offered) -> Value {
+    let mut fields = json!({
+        "kind": row.kind,
+        "name": row.name,
+        "dir": row.dir.to_string_lossy(),
+    });
+    if let Some(session) = &row.session {
+        fields["session"] = json!(session);
+    }
+    fields
+}
+
+/// The plain answer of `taw session candidates` without `--json`: a line for each folder, its kind
+/// and name, and the session running there in brackets. Nothing for an empty list.
+pub(crate) fn candidates_plain(ctx: &Ctx) -> anyhow::Result<String> {
+    let home = dirs::home_dir().context("resolving the home directory")?;
+    let zoxide = crate::tui::zoxide_dirs(&ctx.cfg);
+    let offered = offered_here(ctx, &home, &zoxide)?;
+    Ok(offered
+        .iter()
+        .map(|row| match &row.session {
+            Some(session) => format!("{:<8} {} [{session}]\n", row.kind, row.name),
+            None => format!("{:<8} {}\n", row.kind, row.name),
+        })
+        .collect())
 }
 
 /// herdr's socket protocol version, from the vendored schema, herdr v0.9.3's

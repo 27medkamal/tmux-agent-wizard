@@ -9,7 +9,9 @@ use crate::tui::actions::Action;
 use crate::tui::data::{Snapshot, SpaceRow};
 use crate::tui::overlays::state::Response;
 
-use super::{Project, ProjectPicker, Tag, looks_like_path, projects, retag};
+use super::{
+    MAX_CANDIDATES, Offered, Project, ProjectPicker, Tag, looks_like_path, offered, projects, retag,
+};
 
 /// A temp `home` with `code/{mobile,web}`, `clients/infra`,
 /// `oss/api` and `code/api`.
@@ -820,4 +822,78 @@ fn the_filter_lists_no_git_folder_either() {
     let list = projects("~/code/docs", &snap, &cfg, home.path(), &[], 8);
     let listed: Vec<&str> = list.iter().map(|p| p.path.as_str()).collect();
     assert_eq!(listed, vec!["~/code/docs", "~/code/docs/src"]);
+}
+
+/// `taw session candidates` and the picker, given the same machine, list the same folders in
+/// the same order with the same words for them: the verb is the picker's own list, not a copy.
+#[test]
+fn the_offered_list_is_the_pickers_list_for_the_same_machine() {
+    let home = home_with_tree();
+    // `~/code/api` is in zoxide, in the project folders and running: it is listed once.
+    let cfg = config(true, &[home.path().join("code"), home.path().join("oss")]);
+    let snap = snapshot(home.path());
+    let zoxide = vec![
+        "~/code/web".to_string(),
+        "~/code/api".to_string(),
+        "~/clients/infra".to_string(),
+    ];
+    let mut picker = ProjectPicker::new(&cfg, home.path());
+    picker.refresh(&snap, &cfg, home.path(), &zoxide);
+
+    let rows = offered(&snap, &cfg, home.path(), &zoxide, MAX_CANDIDATES);
+
+    let names: Vec<&str> = rows.iter().map(|row| row.name.as_str()).collect();
+    assert_eq!(names, paths(&picker));
+    assert!(names.len() > 4, "too few rows to prove an order: {names:?}");
+    for (index, row) in rows.iter().enumerate() {
+        let kind = match picker.tag(index) {
+            Some(Tag::Running) => "session",
+            Some(Tag::Zoxide) => "zoxide",
+            _ => "project",
+        };
+        assert_eq!(row.kind, kind, "{}", row.name);
+    }
+}
+
+#[test]
+fn an_offered_folder_is_absolute_and_a_running_one_names_its_session() {
+    let home = home_with_tree();
+    let cfg = config(true, &[home.path().join("oss")]);
+    let snap = snapshot(home.path());
+    let zoxide = vec!["~/code/web".to_string(), "~/code/api".to_string()];
+
+    let rows = offered(&snap, &cfg, home.path(), &zoxide, 10);
+
+    assert_eq!(
+        rows,
+        vec![
+            Offered {
+                kind: "zoxide",
+                name: "~/code/web".to_string(),
+                dir: home.path().join("code/web"),
+                session: None,
+            },
+            Offered {
+                kind: "session",
+                name: "~/code/api".to_string(),
+                dir: home.path().join("code/api"),
+                session: Some("api".to_string()),
+            },
+            Offered {
+                kind: "project",
+                name: "~/oss/api".to_string(),
+                dir: home.path().join("oss/api"),
+                session: None,
+            },
+        ]
+    );
+}
+
+#[test]
+fn nothing_to_offer_is_an_empty_list() {
+    let home = home_with_tree();
+    let cfg = config(false, &[]);
+    let zoxide = vec!["~/code/web".to_string()];
+
+    assert!(offered(&Snapshot::default(), &cfg, home.path(), &zoxide, 10).is_empty());
 }

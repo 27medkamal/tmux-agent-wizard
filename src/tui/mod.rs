@@ -256,7 +256,7 @@ fn refresh_bar(
 /// felt. An empty list is the honest answer when `[sessions] zoxide` is off or `zoxide` is
 /// not installed — the source is then simply absent, not an error, and the picker still
 /// has filesystem completion and `[sessions] project_dirs`.
-fn zoxide_dirs(cfg: &Config) -> Vec<String> {
+pub(crate) fn zoxide_dirs(cfg: &Config) -> Vec<String> {
     if !cfg.sessions.zoxide {
         return Vec::new();
     }
@@ -264,12 +264,48 @@ fn zoxide_dirs(cfg: &Config) -> Vec<String> {
         log::debug!("zoxide is not installed: the project picker lists no history");
         return Vec::new();
     };
-    crate::session::projects::zoxide_candidates(&|args| {
-        let out = std::process::Command::new(&bin).args(args).output().ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    })
+    crate::session::projects::zoxide_candidates(&|args| zoxide_within(&bin, args, ZOXIDE_BOUND))
+}
+
+/// The longest `zoxide query -l` is waited for: a `zoxide` that hangs gives no history, as a
+/// missing one does, and never holds the popup or a `taw session candidates` over ssh.
+const ZOXIDE_BOUND: Duration = Duration::from_secs(5);
+
+/// What `bin args` prints on stdout when it succeeds within `bound`; `None` when it fails, cannot
+/// start, or is still running at the end of `bound` (then it is killed: it is this function's own child).
+fn zoxide_within(bin: &Path, args: &[&str], bound: Duration) -> Option<String> {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    // Read on a thread: a full pipe would otherwise stop the child before it could exit.
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + bound;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    // Not joined when it was killed: a grandchild may still hold the pipe, and the thread ends with it.
+    status.filter(|status| status.success())?;
+    let bytes = reader.join().ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Runs one action, reporting whether the popup should close.
@@ -812,6 +848,39 @@ fn install_panic_hook() {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let path = dir.join("zoxide");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_zoxide_that_answers_is_read_and_one_that_hangs_gives_nothing_at_the_bound() {
+        use std::time::{Duration, Instant};
+        let dir = tempfile::tempdir().unwrap();
+        // Written whole before it runs, so Linux has no busy file to refuse (ETXTBSY).
+        let answers = script(dir.path(), "echo /a; echo /b");
+        assert_eq!(
+            super::zoxide_within(&answers, &["query", "-l"], Duration::from_secs(20)),
+            Some("/a\n/b\n".to_string())
+        );
+        let fails = script(dir.path(), "echo /a; exit 1");
+        assert_eq!(
+            super::zoxide_within(&fails, &[], Duration::from_secs(20)),
+            None
+        );
+        let hangs = script(dir.path(), "exec sleep 30");
+        let started = Instant::now();
+        assert_eq!(
+            super::zoxide_within(&hangs, &[], Duration::from_millis(300)),
+            None
+        );
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
     /// A log of what lending the terminal did, in order.
     struct Logged(std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>);
 

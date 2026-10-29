@@ -8257,3 +8257,216 @@ fn config_check_exits_1_on_an_error_and_0_on_a_warning_or_nothing() {
         );
     }
 }
+
+/// What `taw session candidates` is run against: a scratch `$HOME` with some folders, a fake
+/// `zoxide` that lists three of them, and the fixture's config with `project_dirs` set.
+struct Candidates {
+    home: tempfile::TempDir,
+    bin: tempfile::TempDir,
+}
+
+impl Candidates {
+    /// `~/web`, `~/api`, `~/mobile` and `~/proj/{app,lib}`; the fake zoxide lists `~/web`,
+    /// `~/api` and `~/mobile`, and answers `add` with nothing, as the real one does.
+    fn new(f: &Fixture, with_zoxide: bool) -> Candidates {
+        let home = tempfile::tempdir().unwrap();
+        for dir in ["web", "api", "mobile", "proj/app", "proj/lib"] {
+            std::fs::create_dir_all(home.path().join(dir)).unwrap();
+        }
+        let bin = tempfile::tempdir().unwrap();
+        if with_zoxide {
+            let list: String = ["web", "api", "mobile"]
+                .iter()
+                .map(|d| format!("echo '{}/{d}'\n", home.path().display()))
+                .collect();
+            write_hook(
+                &bin.path().join("zoxide"),
+                &format!("[ \"$1\" = add ] && exit 0\n{list}"),
+            );
+        }
+        let text = format!(
+            "[sessions]\nzoxide = {with_zoxide}\nproject_dirs = [\"{}\"]\n",
+            home.path().join("proj").display()
+        );
+        std::fs::write(f.config.path().join("config.toml"), text).unwrap();
+        Candidates { home, bin }
+    }
+
+    /// `taw <args>` with the scratch `$HOME`, the fake zoxide first on `PATH` (the real tmux after
+    /// it), and `socket` as the tmux server to ask.
+    fn run(&self, f: &Fixture, socket: &str, args: &[&str]) -> (i32, String, String) {
+        let path = format!(
+            "{}:{}",
+            self.bin.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_taw"));
+        cmd.args(args)
+            .env("HOME", self.home.path())
+            .env("PATH", path)
+            .env("TAW_TMUX_SOCKET_NAME", socket)
+            .env("TAW_CONFIG_DIR", f.config.path())
+            .env("TAW_STATE_DIR", f.state.path())
+            .env("_ZO_DATA_DIR", f.zoxide.path())
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE");
+        let out = cmd.output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        )
+    }
+
+    fn dir(&self, name: &str) -> String {
+        self.home.path().join(name).display().to_string()
+    }
+}
+
+/// The candidates are the picker's list: zoxide's folders in zoxide's order, then the folders under
+/// `project_dirs`, one row each. A folder with a session running in it (`~/api`) is listed where the picker lists
+/// it, as `session`, with the session's name.
+#[test]
+fn session_candidates_lists_what_the_picker_lists() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let args = ["session", "open", &c.dir("api")];
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stdout} {stderr}");
+    let session = parse_envelope(&args, &stdout, &stderr)["result"]["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let args = ["session", "candidates", "--json"];
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    assert_eq!(env["id"], "cli:session:candidates", "{env}");
+    assert_eq!(env["result"]["type"], "session_candidates", "{env}");
+    let row = |kind: &str, name: &str, dir: &str, session: Option<&str>| {
+        let mut row = serde_json::json!({ "kind": kind, "name": name, "dir": c.dir(dir) });
+        if let Some(session) = session {
+            row["session"] = serde_json::json!(session);
+        }
+        row
+    };
+    assert_eq!(
+        env["result"]["candidates"],
+        serde_json::json!([
+            row("zoxide", "~/web", "web", None),
+            row("session", "~/api", "api", Some(&session)),
+            row("zoxide", "~/mobile", "mobile", None),
+            row("project", "~/proj/app", "proj/app", None),
+            row("project", "~/proj/lib", "proj/lib", None),
+        ]),
+        "{env}"
+    );
+}
+
+/// No zoxide, no project folders and no server are an empty answer, not an error.
+#[test]
+fn session_candidates_with_nothing_to_offer_is_an_empty_list() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, false);
+    std::fs::write(
+        f.config.path().join("config.toml"),
+        "[sessions]\nzoxide = true\n",
+    )
+    .unwrap();
+    // `PATH` holds tmux alone: there is no `zoxide` to find.
+    let tmux = String::from_utf8(
+        Command::new("sh")
+            .args(["-c", "command -v tmux"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(tmux.trim(), c.bin.path().join("tmux")).unwrap();
+    let only = |socket: &str| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_taw"));
+        cmd.args(["session", "candidates", "--json"])
+            .env("HOME", c.home.path())
+            .env("PATH", c.bin.path())
+            .env("TAW_TMUX_SOCKET_NAME", socket)
+            .env("TAW_CONFIG_DIR", f.config.path())
+            .env("TAW_STATE_DIR", f.state.path())
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE");
+        let out = cmd.output().unwrap();
+        (
+            out.status.code().unwrap(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+        )
+    };
+
+    // A server that answers, then one that is not running.
+    for socket in [f.socket.clone(), format!("{}-none", f.socket)] {
+        let (code, stdout) = only(&socket);
+        assert_eq!(code, 0, "{socket}: {stdout}");
+        let env: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            env["result"]["candidates"],
+            serde_json::json!([]),
+            "{socket}: {env}"
+        );
+    }
+}
+
+/// A tmux server that is not running still lists the folders: they are not its.
+#[test]
+fn session_candidates_without_a_server_lists_the_folders() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let socket = format!("{}-none", f.socket);
+    let args = ["session", "candidates", "--json"];
+    let (code, stdout, stderr) = c.run(&f, &socket, &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    let kinds: Vec<&str> = env["result"]["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["zoxide", "zoxide", "zoxide", "project", "project"],
+        "{env}"
+    );
+}
+
+/// Without `--json` it is a line for each folder, its kind and name, and no envelope.
+#[test]
+fn session_candidates_without_json_is_a_line_for_each_folder() {
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let args = ["session", "open", &c.dir("api")];
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &args);
+    assert_eq!(code, 0, "{stdout} {stderr}");
+    let session = parse_envelope(&args, &stdout, &stderr)["result"]["session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (code, stdout, stderr) = c.run(&f, &f.socket, &["session", "candidates"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout,
+        format!(
+            "zoxide   ~/web\nsession  ~/api [{session}]\nzoxide   ~/mobile\n\
+             project  ~/proj/app\nproject  ~/proj/lib\n"
+        )
+    );
+}
+
+#[test]
+fn session_candidates_help_says_what_it_lists() {
+    let f = Fixture::start();
+    let (code, stdout, _) = f.run_raw(&["session", "candidates", "--help"]);
+    assert_eq!(code, 0);
+    for word in ["picker", "zoxide", "project_dirs", "--json"] {
+        assert!(stdout.contains(word), "no `{word}` in:\n{stdout}");
+    }
+}

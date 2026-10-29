@@ -34,6 +34,10 @@ use crate::tui::tree::{self, Query};
 /// the overlay — off the bottom of a short popup.
 const MAX_CANDIDATES: usize = 10;
 
+/// How many folders `taw session candidates` tells at most: a whole zoxide history is hundreds
+/// of directories, and a machine's answer is read through ssh.
+pub const OFFERED_MAX: usize = 200;
+
 /// What a candidate's row says about it on the right: where it came from, or that a
 /// session is already running there.
 ///
@@ -401,6 +405,49 @@ pub fn projects(
         .collect();
     retag(&mut list, snap, cfg, home, zoxide);
     list
+}
+
+/// One row of what the picker offers an empty input, as `taw session candidates` tells it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offered {
+    /// `session` for a folder with a session running in it, else `zoxide` or `project`: the
+    /// picker's [`Tag`], as a word that does not change with the screen's wording.
+    pub kind: &'static str,
+    /// What the picker shows: the folder in tilde form.
+    pub name: String,
+    /// The folder, absolute.
+    pub dir: PathBuf,
+    /// The name of the session running in the folder, when there is one.
+    pub session: Option<String>,
+}
+
+/// What the picker lists when nothing is typed, cut to `limit`: [`projects`] for the empty
+/// text, so the order, the dedupe and the tags are the picker's, with each folder made
+/// absolute and the session running in it named.
+pub fn offered(
+    snap: &Snapshot,
+    cfg: &Config,
+    home: &Path,
+    zoxide: &[String],
+    limit: usize,
+) -> Vec<Offered> {
+    let running = running_sessions(snap, home);
+    projects("", snap, cfg, home, zoxide, limit)
+        .into_iter()
+        .map(|project| {
+            let dir = expand_tilde(&project.path, home);
+            Offered {
+                kind: match project.tag {
+                    Some(Tag::Running) => "session",
+                    Some(Tag::Zoxide) => "zoxide",
+                    Some(Tag::ProjectDir) | None => "project",
+                },
+                session: running_at(&running, &dir).map(|r| r.name.clone()),
+                name: project.path,
+                dir,
+            }
+        })
+        .collect()
 }
 
 /// Sets each project's tag from the sessions in `snap`, without listing anything again: a

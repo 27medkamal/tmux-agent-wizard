@@ -59,6 +59,15 @@ envelope `session open` prints, plus `dir`, the absolute folder it opened. With 
 `taw ui open --new-session`, which opens the popup on the new-session picker
 (`taw ui --new-session` does the same for the popup itself), and Esc closes it. The
 picker `n` opens inside the popup is different: Esc there goes back to the tree.
+`taw session candidates [--json]` tells what that picker lists before anything is typed, on the
+machine it runs on: zoxide's folders in zoxide's order, then the folders under `[sessions]
+project_dirs`, a folder once, and at most 200. `--json` answers
+`{"candidates": [{"kind": "zoxide", "name": "~/web", "dir": "/home/me/web"}, ...]}`: `kind` is
+`session` for a folder with a session running in it (the row then has `session`, that session's
+name), else `zoxide` or `project`; `name` is the folder as the picker shows it and `dir` the same
+folder, absolute. Without `--json` it prints a line for each folder. It asks nothing, waits at
+most five seconds for zoxide, and a machine with no zoxide, no project folders or no tmux server
+answers `{"candidates": []}`.
 
 `taw sandbox [<agent>] [--profile <name>] [-- <agent args>]` runs an agent in a container, in the
 pane it is typed in; `taw sandbox new <name> [--from <profile>]` copies a profile into your folder

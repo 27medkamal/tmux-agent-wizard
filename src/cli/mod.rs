@@ -393,6 +393,7 @@ const RESULT_TYPES: &[(&str, &str, &str)] = &[
     ("session", "autosave", "session_autosave"),
     ("session", "snapshot", "session_snapshot"),
     ("session", "open", "session_open"),
+    ("session", "candidates", "session_candidates"),
     ("open", "", "session_open"),
     // sandbox
     ("sandbox", "new", "sandbox_profile"),
@@ -736,6 +737,16 @@ fn dispatch(ctx: &Ctx, command: Group) -> (&'static str, Sub, anyhow::Result<Out
                 None => Output::Nothing,
             });
             return ("open", "", output);
+        }
+        Group::Session {
+            cmd: session::Cmd::Candidates { json: false },
+        } => {
+            // An empty list prints nothing: `Output::Raw` would end it with an empty line.
+            let output = session::candidates_plain(ctx).map(|text| match text.is_empty() {
+                true => Output::Nothing,
+                false => Output::Raw(text),
+            });
+            return ("session", "candidates", output);
         }
         Group::Sandbox(args) if args.cmd.is_none() => {
             return (
@@ -1163,7 +1174,14 @@ mod tests {
         (
             "session",
             &[
-                "list", "save", "restore", "delete", "autosave", "snapshot", "open",
+                "list",
+                "save",
+                "restore",
+                "delete",
+                "autosave",
+                "snapshot",
+                "open",
+                "candidates",
             ],
         ),
         ("integration", &["install", "uninstall", "status"]),

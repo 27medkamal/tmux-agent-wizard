@@ -1975,7 +1975,17 @@ mod rows_tests {
             .clone();
         let opened = OPENED.replace(r#""session":"garden""#, &format!(r#""session":"{name}""#));
         let guard = rig.fake(&opened, 0, false);
-        select(&mut app, "studio:$4");
+        // The cursor is on another session of studio, so the row the answer names is a move away.
+        let other = app
+            .snap
+            .spaces
+            .iter()
+            .find(|s| s.session_id.starts_with("studio:") && s.session_id != "studio:$4")
+            .expect("another session of studio")
+            .session_id
+            .clone();
+        select(&mut app, &other);
+        let before = app.sel;
         let action = Action::NewRemoteSession {
             machine: "studio".into(),
             term: "-odd".into(),
@@ -2006,6 +2016,7 @@ mod rows_tests {
             matches!(&routes[0], Route::Attach { machine, target, .. } if machine == "studio" && target == "$4"),
             "{routes:?}"
         );
+        assert_ne!(app.sel, before, "the cursor moved");
         assert!(
             matches!(app.current(), Some(Row::Session(s)) if app.snap.spaces[*s].session_id == "studio:$4")
         );

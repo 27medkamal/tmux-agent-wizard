@@ -402,6 +402,41 @@ fn every_worktree_folder_the_page_shows_is_in_taws_shape() {
 
 /// The page shows the image paste in the real screens' words: the help row and the help's mouse line, the right-click menu of an agent row, and the toast and the refusals
 /// `ctrl-v` gives (taw's own constants, so a change of a word there fails here).
+/// Codex CLI 0.164's composer says `Ask Codex to do anything` whenever it is empty (the `PLACEHOLDER`
+/// of codex-rs/tui/src/chatwidget.rs); `Ask a follow-up question` is only the side conversation's, and
+/// `Summarize recent commits` is gone from its binary. The footer's `tab to queue message` is its
+/// `footer.rs` while a turn runs, and `? for shortcuts` after it.
+#[test]
+fn the_codex_screens_use_codexs_own_composer_and_footer_words() {
+    let page = read(PAGE);
+    let start = page.find("    codex: {").expect("the codex screens");
+    let end = start
+        + page[start..]
+            .find("\n    },")
+            .expect("the codex screens end");
+    let codex = &page[start..end];
+    for state in ["working", "idle", "done"] {
+        let row = codex
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("{state}: w =>")))
+            .unwrap_or_else(|| panic!("the codex {state} screen"));
+        assert!(
+            row.contains("'\u{203a} Ask Codex to do anything'"),
+            "the codex {state} screen lacks Codex's composer placeholder"
+        );
+    }
+    for gone in ["Summarize recent commits", "Ask a follow-up question"] {
+        assert!(
+            !page.contains(gone),
+            "{PAGE}: {gone:?} is not what the Codex composer shows"
+        );
+    }
+    assert!(
+        codex.contains("apart('  tab to queue message', "),
+        "the working footer"
+    );
+}
+
 #[test]
 fn the_page_shows_the_image_paste_in_the_real_screens_words() {
     use taw::tui::overlays::state::{MENU_HELP, PASTE_IMAGE_ENTRY, PASTE_IMAGE_ROW_HELP};

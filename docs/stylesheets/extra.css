@@ -464,11 +464,15 @@
   .taw-highlights { grid-template-columns: 1fr 1fr; }
   .taw-counters { grid-template-columns: 1fr 1fr; }
 }
+/* Until both halves fit, a code example wider than its half scrolls inside its box instead of widening the page. */
+@media (max-width: 66em) {
+  .taw-pillar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
 @media (max-width: 44.9375em) {
   .taw-highlights { grid-template-columns: 1fr; }
   .taw-hero { padding-top: 2rem; }
   .taw-hero h1 { font-size: clamp(2rem, 11vw, 2.8rem); }
-  .taw-install, .taw-pillar { grid-template-columns: 1fr; gap: 1.4rem; }
+  .taw-install, .taw-pillar { grid-template-columns: minmax(0, 1fr); gap: 1.4rem; }
   .taw-pillar.reverse > :first-child { order: 0; }
   .taw-pillar { padding: 1.6rem 0; }
   .taw-window-bar em { display: none; }

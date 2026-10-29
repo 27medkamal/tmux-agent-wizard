@@ -965,11 +965,22 @@ impl Feed<'_> {
             screen,
             || {
                 let ended = self.attach(command, "", Some(&mut client_output));
-                if attach_again_plain(through_came_from, &ended, || {
-                    self.tmux
-                        .run_ok(&["has-session", "-t", &landing.target])
-                        .is_ok()
-                }) {
+                let ending = signalled() || self.record.orphaned();
+                if attach_again_plain(
+                    through_came_from,
+                    &ended,
+                    ending,
+                    || {
+                        came_from.is_some_and(|from| {
+                            self.tmux.run_ok(&["has-session", "-t", from]).is_err()
+                        })
+                    },
+                    || {
+                        self.tmux
+                            .run_ok(&["has-session", "-t", &landing.target])
+                            .is_ok()
+                    },
+                ) {
                     let mut plain = crate::cli::open::attach_to(self.tmux, &landing.target);
                     client_output = ClientOutput::on(&mut plain);
                     return self.attach(plain, "", Some(&mut client_output));
@@ -1289,15 +1300,23 @@ struct ClientOutput {
 }
 
 /// Whether an attach that went in through the session the person came from is made again as a plain attach to the
-/// target: it failed (the session came from was closed between the look at it and the attach, which stops the
-/// command list before it reaches the target) and the target is still there. A failure to start the client, a
-/// client that ended well, and a target that is gone are not.
+/// target: it failed because the session came from was closed between the look at it and the attach (which stops
+/// the command list before it reaches the target), so that session is gone now, and the target is still there. A
+/// hang-up or a TERM (`ending`: the app is ending, and a closed terminal is not one to attach anything on), a
+/// failure to start the client, a client that ended well, a came-from that is still there and a target that is
+/// gone are not.
 fn attach_again_plain(
     through_came_from: bool,
     ended: &Result<std::process::ExitStatus, String>,
+    ending: bool,
+    came_from_is_gone: impl FnOnce() -> bool,
     target_is_there: impl FnOnce() -> bool,
 ) -> bool {
-    through_came_from && matches!(ended, Ok(status) if !status.success()) && target_is_there()
+    through_came_from
+        && matches!(ended, Ok(status) if !status.success())
+        && !ending
+        && came_from_is_gone()
+        && target_is_there()
 }
 
 /// The longest tmux exit line that is held, its newline included.
@@ -2235,36 +2254,45 @@ mod tests {
     use crate::machine::wire::{State, WireSpace, WireWorktree};
     use crate::tui::fixtures::{snapshot, worktrees};
 
-    /// An attach through the session the person came from is made again, plain, only when it failed with the target
-    /// still there.
+    /// An attach through the session the person came from is made again, plain, only when it failed because that
+    /// session closed (it is gone now), the app is not ending, and the target is still there. A hang-up or a TERM
+    /// ends a client the same way (exit 1, a session still there), and no second attach is made on a closed
+    /// terminal.
     #[test]
-    fn a_failed_attach_through_a_came_from_is_made_again_only_with_the_target_there() {
+    fn a_failed_attach_through_a_came_from_is_made_again_only_when_the_came_from_closed() {
         use std::os::unix::process::ExitStatusExt;
         let failed: Result<std::process::ExitStatus, String> =
             Ok(std::process::ExitStatus::from_raw(1 << 8));
         let well: Result<std::process::ExitStatus, String> =
             Ok(std::process::ExitStatus::from_raw(0));
-        let never = || -> bool {
-            panic!("the target is asked about only after a failure through a came-from")
-        };
+        let never =
+            || -> bool { panic!("asked about a session before every earlier condition held") };
         assert!(
-            attach_again_plain(true, &failed, || true),
-            "failed, target there"
+            attach_again_plain(true, &failed, false, || true, || true),
+            "failed, came-from gone, target there"
         );
         assert!(
-            !attach_again_plain(true, &failed, || false),
-            "failed, target gone"
+            !attach_again_plain(true, &failed, false, || true, || false),
+            "failed, came-from gone, target gone"
         );
         assert!(
-            !attach_again_plain(false, &failed, never),
+            !attach_again_plain(true, &failed, false, || false, never),
+            "failed, but the came-from is still there: a hang-up or a TERM, not a closed session"
+        );
+        assert!(
+            !attach_again_plain(true, &failed, true, never, never),
+            "failed while the app is ending (a signal or a gone supervisor)"
+        );
+        assert!(
+            !attach_again_plain(false, &failed, false, never, never),
             "a plain attach is not made again"
         );
         assert!(
-            !attach_again_plain(true, &well, never),
+            !attach_again_plain(true, &well, false, never, never),
             "a client that ended well"
         );
         assert!(
-            !attach_again_plain(true, &Err("could not attach".into()), never),
+            !attach_again_plain(true, &Err("could not attach".into()), false, never, never),
             "not started"
         );
     }

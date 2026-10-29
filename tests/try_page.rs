@@ -757,3 +757,43 @@ fn the_window_is_160_columns_by_34_rows_sized_to_the_viewport() {
         assert!(rule.contains(part), "the try rule lacks {part:?}: {rule}");
     }
 }
+
+/// Whether `node` runs here. The smoke run below needs it; a machine without it prints a skip
+/// line, unless `TAW_REQUIRE_NODE` is set (the gate sets it), which makes the skip a failure.
+fn node_available() -> bool {
+    std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// The tests above pin strings, so a page whose script throws or does not parse passed them. This
+/// one draws the page: `tests/try_page/smoke.js` loads the script under node with a small stand-in
+/// for the browser and draws it at 160, 100, 99 and 60 columns with the preview on and off, the
+/// flat list, a filter, titles off and the away machine live, then every agent screen and a
+/// short seeded fuzz. It fails on an exception, a row count other than 34, a row wider than the
+/// terminal, or `undefined` or `NaN` in the text.
+#[test]
+fn the_pages_script_draws_without_a_fault() {
+    if !node_available() {
+        assert!(
+            std::env::var_os("TAW_REQUIRE_NODE").is_none(),
+            "node is not on PATH and TAW_REQUIRE_NODE is set"
+        );
+        eprintln!("skipped: node is not on PATH, so the try page's script was not drawn");
+        return;
+    }
+    let out = std::process::Command::new("node")
+        .arg(repo("tests/try_page/smoke.js"))
+        .arg(repo(PAGE))
+        .output()
+        .expect("node starts");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "the try page's script did not draw cleanly:\n{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("try page smoke ok"), "smoke run said: {text}");
+}

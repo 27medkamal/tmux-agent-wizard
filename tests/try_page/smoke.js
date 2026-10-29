@@ -9,7 +9,7 @@ const vm = require('vm');
 
 function load(html, opts = {}) {
   let script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
-  if (opts.peek) script = script.replace(/\}\)\(\);\s*$/, 'globalThis.__peek = () => ({ agentScreen, SCREENS, PREV }); })();');
+  script = script.replace(/\}\)\(\);\s*$/, 'globalThis.__peek = () => ({ agentScreen, SCREENS, PREV, cols: () => COLS }); })();');
   let clock = 1_000_000; const errors = [];
   let measures = 0;
   const rect = () => (measures++, { top: 0, left: 0, bottom: opts.rectH || 0, right: 0, width: opts.rectW || 0, height: opts.rectH || 0 });
@@ -67,6 +67,7 @@ function load(html, opts = {}) {
     winListeners,
     measures: () => measures,
     fontSize: () => term.style.fontSize,
+    cols: () => ctx.__peek().cols(),
   };
   return api;
 }
@@ -89,9 +90,11 @@ function check(p, cols, where) {
     for (const c of r) if (c.charCodeAt(0) > 127) glyphs.add(c);
   });
 }
+// `cols` is a width, or a function that gives it: it is read after `fn` has run, so a step that changes the
+// width is checked at the width it leaves.
 function step(p, cols, where, fn) {
   try { fn(); } catch (e) { note(where, `exception ${String(e).slice(0, 90)} at ${((e.stack || '').split('\n')[1] || '').trim().slice(0, 60)}`); return false; }
-  check(p, cols, where);
+  check(p, typeof cols === 'function' ? cols() : cols, where);
   return true;
 }
 
@@ -157,7 +160,9 @@ for (const cols of [160, 100, 99, 60]) {
 }
 
 // 4. A seeded fuzz over keys, filters, every radio and checkbox, the scenarios and clicks.
+// TAW_SMOKE_SEED moves the random stream (the default is 7).
 {
+  const SEED = +(process.env.TAW_SMOKE_SEED || 7);
   const rng = seed => { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; };
   const KEYS = ['j', 'k', 'J', 'K', 'h', 'l', 'f', 'a', 'b', 'c', 'd', 'e', 'g', 'n', 'w', 'r', 'x', 'X', 'o', 'y', 'q', 's', 'z', '?', '/', ' ', '1', '2', '3', 'Tab', 'Enter', 'Escape', 'Backspace', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'O', 'C', 'Q', 'p', 'v', 'm', 'i', 't', 'u'];
   const CHORDS = [['s', 'ctrl'], ['b', 'ctrl'], ['n', 'ctrl'], ['p', 'ctrl'], ['j', 'ctrl'], ['k', 'ctrl'], ['w', 'ctrl'], ['a', 'ctrl'], ['e', 'ctrl'], ['u', 'ctrl'], ['Tab', 'shift']];
@@ -166,16 +171,16 @@ for (const cols of [160, 100, 99, 60]) {
   const CHECKS = ['opt-pif', 'opt-openmark', 'opt-wrap', 'opt-git', 'opt-symbols', 'opt-statustop', 'opt-zoxide', 'opt-dirs', 'opt-labels', 'opt-titles', 'opt-remote', 'opt-preview'];
   const SC = ['ask', 'finish', 'look', 'reset', 'rask'];
   for (let run = 0; run < 6; run++) {
-    const r = rng(7 + run), pick = xs => xs[Math.floor(r() * xs.length)];
+    const r = rng(SEED + run), pick = xs => xs[Math.floor(r() * xs.length)];
     const p = loadPage(`fuzz run ${run}`, { embed: true, frame: true }, 160);
     if (!p) continue;
-    let cols = 160;
+    const cols = () => p.cols();
     for (let i = 0; i < 60; i++) {
       const x = r(); let name, fn;
       if (x < 0.5) { const k = pick(KEYS); name = 'key ' + k; fn = () => p.key(k); }
       else if (x < 0.6) { const [k, m] = pick(CHORDS); name = m + '-' + k; fn = () => p.key(k, { [m]: true }); }
       else if (x < 0.68) { const w = pick(WORDS); name = 'type ' + w; fn = () => p.type(w); }
-      else if (x < 0.8) { const n = pick(Object.keys(RADIOS)), v = pick(RADIOS[n]); name = `radio ${n}=${v}`; fn = () => { p.radio(n, v); if (n === 'width') cols = +v; }; }
+      else if (x < 0.8) { const n = pick(Object.keys(RADIOS)), v = pick(RADIOS[n]); name = `radio ${n}=${v}`; fn = () => p.radio(n, v); }
       else if (x < 0.9) { const id = pick(CHECKS), on = r() < 0.5; name = `check ${id}=${on}`; fn = () => p.check(id, on); }
       else if (x < 0.95) { const s = pick(SC); name = 'scenario ' + s; fn = () => p.scenario(s); }
       else { const l = Math.floor(r() * ROWS); name = 'click ' + l; fn = () => p.click(l); }

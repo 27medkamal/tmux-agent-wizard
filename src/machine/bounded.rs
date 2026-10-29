@@ -23,6 +23,8 @@ pub enum Ran {
         code: Option<i32>,
         signal: Option<i32>,
         stdout: Vec<u8>,
+        /// The last bytes of its standard error when the run kept them ([`run_keeping_stderr`]), else empty.
+        stderr: Vec<u8>,
     },
     /// The process could not be started, or could not be waited for.
     Failed(String),
@@ -105,16 +107,39 @@ pub fn run<C>(
 pub fn run_in<C>(
     ender: &Ender,
     ctx: &mut C,
+    command: Command,
+    bound: Duration,
+    look: Duration,
+    ended: impl Fn(&C) -> bool,
+    meanwhile: impl Fn(&mut C),
+) -> Ran {
+    run_keeping_stderr(ender, ctx, command, bound, look, 0, ended, meanwhile)
+}
+
+/// [`run_in`] that also keeps the last `keep_stderr` bytes of the child's standard error in [`Ran::Done`]
+/// (nothing is kept, and the standard error is dropped, when it is 0). The pipe is drained on a thread of its own
+/// and, as the output is, not waited for to its end.
+#[allow(clippy::too_many_arguments)]
+pub fn run_keeping_stderr<C>(
+    ender: &Ender,
+    ctx: &mut C,
     mut command: Command,
     bound: Duration,
     look: Duration,
+    keep_stderr: usize,
     ended: impl Fn(&C) -> bool,
     meanwhile: impl Fn(&mut C),
 ) -> Ran {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(if keep_stderr == 0 {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+    let tail = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let (err_over, err_ended) = mpsc::channel::<()>();
     // The slot is held from before the spawn until the child is stored, so [`Ender::end`] either runs first (and
     // nothing is spawned) or waits for the child to be there and ends it. Nothing under the lock waits for the
     // child or for anything that needs the lock: a spawn returns once the child has exec'd, the reader thread
@@ -150,6 +175,31 @@ pub fn run_in<C>(
             });
             if let Err(err) = reader {
                 // Nothing would read the pipe: the child is ended and reaped, and nothing runs.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ran::Failed(err.to_string());
+            }
+        }
+        if let Some(mut pipe) = child.stderr.take() {
+            let tail = tail.clone();
+            let spawned = std::thread::Builder::new().spawn(move || {
+                let mut chunk = [0u8; CHUNK];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => {
+                            let mut kept = tail.lock().unwrap_or_else(|gone| gone.into_inner());
+                            kept.extend_from_slice(&chunk[..read]);
+                            if kept.len() > keep_stderr {
+                                let cut = kept.len() - keep_stderr;
+                                kept.drain(..cut);
+                            }
+                        }
+                    }
+                }
+                let _ = err_over.send(());
+            });
+            if let Err(err) = spawned {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ran::Failed(err.to_string());
@@ -200,11 +250,18 @@ pub fn run_in<C>(
         };
         bytes.extend(chunk);
     }
+    // What the child said on its standard error: its end is waited for no longer than the output's, and what
+    // came by then is what is kept.
+    if keep_stderr > 0 {
+        let _ = err_ended.recv_timeout(Duration::from_millis(500));
+    }
+    let stderr = tail.lock().unwrap_or_else(|gone| gone.into_inner()).clone();
     use std::os::unix::process::ExitStatusExt;
     Ran::Done {
         code: status.code(),
         signal: status.signal(),
         stdout: bytes,
+        stderr,
     }
 }
 
@@ -261,6 +318,43 @@ mod tests {
             stdout.len()
         );
         assert!(began.elapsed() < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn the_last_bytes_of_the_standard_error_are_kept_when_asked_for_and_only_then() {
+        let script = "printf 'first line\\n' >&2; head -c 3000 /dev/zero | tr '\\0' x >&2; printf '\\nlast line\\n' >&2; exit 2";
+        let ran = run_keeping_stderr(
+            &Ender::default(),
+            &mut (),
+            sh(script),
+            Duration::from_secs(20),
+            Duration::from_millis(10),
+            2048,
+            never,
+            |_| {},
+        );
+        let Ran::Done { code, stderr, .. } = ran else {
+            panic!("expected Done, got {ran:?}");
+        };
+        assert_eq!(code, Some(2));
+        assert_eq!(stderr.len(), 2048, "the tail, cut to the cap");
+        assert!(
+            stderr.ends_with(b"\nlast line\n"),
+            "the end is what is kept"
+        );
+        assert!(!String::from_utf8_lossy(&stderr).contains("first line"));
+        let ran = run(
+            &mut (),
+            sh(script),
+            Duration::from_secs(20),
+            Duration::from_millis(10),
+            never,
+            |_| {},
+        );
+        let Ran::Done { stderr, .. } = ran else {
+            panic!("expected Done, got {ran:?}");
+        };
+        assert!(stderr.is_empty(), "nothing is kept unless asked for");
     }
 
     #[test]

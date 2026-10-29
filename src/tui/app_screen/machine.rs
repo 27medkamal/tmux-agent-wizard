@@ -374,6 +374,7 @@ impl Feed<'_> {
                 code,
                 signal,
                 stdout,
+                ..
             } => read_opened(name, code, signal, &stdout).map_err(Stop::Said),
         }
     }

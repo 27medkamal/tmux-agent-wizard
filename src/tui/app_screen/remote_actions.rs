@@ -72,6 +72,9 @@ pub(super) fn command(
     Some(ssh::command(ssh, paths, machine, Mode::Command, &words))
 }
 
+/// How much of a verb's standard error is kept for [`classify`] when it asks for it (about 2 KiB).
+const STDERR_TAIL: usize = 2048;
+
 /// What a verb that has ended came to, and which one it was.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Finished {
@@ -140,11 +143,25 @@ impl RemoteActions {
         bound: Duration,
         now_ms: u64,
     ) -> Result<(), Refusal> {
-        self.begin_with_look(machine, token, command, bound, now_ms, LOOK)
+        self.begin_with_look(machine, token, command, bound, now_ms, LOOK, 0)
+    }
+
+    /// [`Self::begin`] that also keeps the last [`STDERR_TAIL`] bytes of the verb's standard error, which
+    /// [`classify`] reads when the verb ends with status 2 and no envelope.
+    pub(super) fn begin_keeping_stderr(
+        &mut self,
+        machine: &str,
+        token: u64,
+        command: Command,
+        bound: Duration,
+        now_ms: u64,
+    ) -> Result<(), Refusal> {
+        self.begin_with_look(machine, token, command, bound, now_ms, LOOK, STDERR_TAIL)
     }
 
     /// [`Self::begin`] with the thread's look set (a test gives it a long one, so that only what the app does itself
     /// can end the child in time).
+    #[allow(clippy::too_many_arguments)]
     fn begin_with_look(
         &mut self,
         machine: &str,
@@ -153,12 +170,14 @@ impl RemoteActions {
         bound: Duration,
         now_ms: u64,
         look: Duration,
+        keep_stderr: usize,
     ) -> Result<(), Refusal> {
         if self.busy(machine) {
             return Err(Refusal::Busy);
         }
         let ender = Ender::new();
-        let ran = launch(command, bound, ender.clone(), look).map_err(Refusal::NotRun)?;
+        let ran =
+            launch(command, bound, ender.clone(), look, keep_stderr).map_err(Refusal::NotRun)?;
         self.flights.insert(
             machine.to_string(),
             Flight {
@@ -304,11 +323,21 @@ fn launch(
     bound: Duration,
     ender: Arc<Ender>,
     look: Duration,
+    keep_stderr: usize,
 ) -> Result<Receiver<Ran>, String> {
     let (sent, ran) = mpsc::channel();
     std::thread::Builder::new()
         .spawn(move || {
-            let ran = bounded::run_in(&ender, &mut (), command, bound, look, |_| false, |_| {});
+            let ran = bounded::run_keeping_stderr(
+                &ender,
+                &mut (),
+                command,
+                bound,
+                look,
+                keep_stderr,
+                |_| false,
+                |_| {},
+            );
             let _ = sent.send(ran);
         })
         .map_err(|err| err.to_string())?;
@@ -425,10 +454,15 @@ impl Rows {
         };
         self.next_token += 1;
         let token = self.next_token;
-        match self
-            .worker
-            .begin(machine, token, command, bound, app.wall_ms())
-        {
+        // A new session's `open` keeps its stderr: only clap's own words tell an old taw from a wrapper.
+        let begun = if matches!(action, Action::NewRemoteSession { .. }) {
+            self.worker
+                .begin_keeping_stderr(machine, token, command, bound, app.wall_ms())
+        } else {
+            self.worker
+                .begin(machine, token, command, bound, app.wall_ms())
+        };
+        match begun {
             Ok(()) => {}
             // The caller said so already ([`Feed::perform_remote`] checks first); nothing is sent.
             Err(Refusal::Busy) => {
@@ -499,11 +533,8 @@ impl Rows {
                         None => app.toast(words::session_made_unreadable(machine)),
                     }
                 }
-                (Reply::Usage, Some(sent))
-                    if matches!(sent.action, Action::NewRemoteSession { .. }) =>
-                {
-                    app.toast(words::update_taw_to_make_sessions(machine));
-                }
+                // Only the far taw's own clap refusing `--no-switch` says to update it.
+                (Reply::OldTaw, _) => app.toast(words::update_taw_to_make_sessions(machine)),
                 // `open` says `not_found` for a folder or a term that is nowhere: the far words, or the folder's
                 // own when it said none, and never "row gone", whether or not the token is the one sent.
                 (Reply::Gone, _) if session_term.is_some() => {
@@ -514,7 +545,9 @@ impl Rows {
                         None => words::no_folder(machine, session_term.unwrap_or_default()),
                     });
                 }
-                (Reply::Usage, _) => app.toast(crate::machine::actions::usage_words(machine)),
+                (Reply::Usage(said), _) => {
+                    app.toast(crate::machine::actions::usage_words(machine, &said))
+                }
                 (Reply::Done, Some(sent)) if here => {
                     if matches!(sent.action, Action::NewWorktree { .. }) {
                         match created(&done.stdout) {
@@ -879,7 +912,15 @@ mod tests {
         let long = Duration::from_secs(10);
         assert!(
             actions
-                .begin_with_look("studio", 1, sh(&script), Duration::from_secs(20), 0, long)
+                .begin_with_look(
+                    "studio",
+                    1,
+                    sh(&script),
+                    Duration::from_secs(20),
+                    0,
+                    long,
+                    0
+                )
                 .is_ok()
         );
         wait_until("the process writing its pid", || pid_in(&pidfile) > 0);
@@ -1133,6 +1174,22 @@ mod rows_tests {
             let script = format!(
                 r#"printf '%s\n' "$@" >> '{}'; {tail}"#,
                 self.path("argv.txt").display()
+            );
+            seam::set(move |argv| {
+                let mut command = Command::new("sh");
+                command.arg("-c").arg(&script).arg("sh").args(argv);
+                command
+            })
+        }
+
+        /// [`Self::fake`] for a far command that prints nothing on its standard output, `said` on its standard
+        /// error, and exits with `code`.
+        fn fake_saying(&self, said: &str, code: i32) -> seam::Guard {
+            fs::write(self.path("stderr.txt"), said).unwrap();
+            let script = format!(
+                r#"printf '%s\n' "$@" >> '{}'; cat '{}' >&2; exit {code}"#,
+                self.path("argv.txt").display(),
+                self.path("stderr.txt").display()
             );
             seam::set(move |argv| {
                 let mut command = Command::new("sh");
@@ -2085,8 +2142,13 @@ mod rows_tests {
         );
     }
 
-    /// A far error is toasted in the far words, an old taw's usage error says to update it.
-    /// Mutation: `Reply::Usage` reads as the generic refusal.
+    /// What a taw built before `open --no-switch` wrote for `taw open --json --no-switch -- x`: its stderr and
+    /// exit status 2, copied from a run of master's release build (its `open --help` has no `--no-switch`) under
+    /// `env -i` with a scratch HOME and TMUX_TMPDIR; nothing on stdout.
+    const OLD_TAW_STDERR: &str = "error: unexpected argument '--no-switch' found\n\n  tip: to pass '--no-switch' as a value, use '-- --no-switch'\n\nUsage: taw open --json [TERMS]...\n\nFor more information, try '--help'.\n";
+
+    /// A far error is toasted in the far words, an old taw's own clap error says to update it.
+    /// Mutation: `Reply::OldTaw` reads as the generic refusal.
     #[test]
     fn a_far_error_is_toasted_and_an_old_taw_is_told_to_update() {
         let rig = Rig::new(None);
@@ -2104,13 +2166,49 @@ mod rows_tests {
             Some("studio: no directory matches nothing-like-it")
         );
         drop(guard);
-        let _old = rig.fake("", 2, false);
+        let _old = rig.fake_saying(OLD_TAW_STDERR, 2);
         send(&mut feed, &mut app, &action);
         assert!(answered(&mut feed, &mut app).is_empty());
         assert_eq!(
             toast_of(&app),
             Some("update taw on studio to make sessions there from here".to_string())
         );
+    }
+
+    /// Status 2 with no envelope is the update words only when the stderr is a taw's clap refusing `--no-switch`
+    /// or `open`: a wrapper script's message, a shell's syntax error and no stderr at all are said as what they
+    /// are. Mutation: `clap_refused_open` always true.
+    #[test]
+    fn status_2_with_another_stderr_is_not_the_update_words() {
+        for (stderr, said) in [
+            (
+                "wrapper: the taw there is being upgraded, try again\n",
+                "studio: it ended with status 2 and said: wrapper: the taw there is being upgraded, try again",
+            ),
+            (
+                "sh: -c: line 1: syntax error near unexpected token `)'\nsh: -c: line 1: `taw open )'\n",
+                "studio: it ended with status 2 and said: sh: -c: line 1: syntax error near unexpected token `)'",
+            ),
+            (
+                "",
+                "studio: it ended with status 2 and no answer taw can read",
+            ),
+        ] {
+            let rig = Rig::new(None);
+            let (mut feed, mut app) = (rig.feed(), rig.app());
+            select(&mut app, "studio:$4");
+            let _far = rig.fake_saying(stderr, 2);
+            send(
+                &mut feed,
+                &mut app,
+                &Action::NewRemoteSession {
+                    machine: "studio".into(),
+                    term: "api".into(),
+                },
+            );
+            assert!(answered(&mut feed, &mut app).is_empty());
+            assert_eq!(toast_of(&app).as_deref(), Some(said), "{stderr:?}");
+        }
     }
 
     /// Makes studio list a session named `name`, as its feed does a settle after the answer: the space is in the

@@ -162,10 +162,13 @@ pub enum Reply {
     Dirty,
     /// The target is not there any more (`not_found`).
     Gone,
-    /// The far taw ended with status 2 and no envelope: clap refused the command line, which is what a taw
-    /// that does not know an option of it does (the worker keeps no stderr). A taw that knows `open
+    /// The far taw's own clap refused `open --no-switch` (or `open` itself): the exit was 2, with no envelope,
+    /// and the stderr the run kept shows clap naming that option or subcommand. A taw that knows `open
     /// --no-switch` answers every failure with an envelope.
-    Usage,
+    OldTaw,
+    /// The far command ended with status 2 and no envelope for any other reason (a wrapper script, a shell's
+    /// syntax error): the first line of the stderr tail the run kept, cleaned, or empty when it kept none.
+    Usage(String),
     /// Any other error the machine's taw reported: its own message, with the machine named
     /// ([`super::words::refused`]).
     Refused(String),
@@ -202,9 +205,15 @@ pub fn classify(machine: &str, ran: Ran, bound: Duration) -> Reply {
             code: Some(SSH_FAILED),
             ..
         } => Reply::NoAnswer,
-        Ran::Done { code, stdout, .. } => match error_of(&stdout) {
+        Ran::Done {
+            code,
+            stdout,
+            stderr,
+            ..
+        } => match error_of(&stdout) {
             Some((code, message)) => by_code(machine, &code, &message),
-            None if code == Some(2) => Reply::Usage,
+            None if code == Some(2) && clap_refused_open(&stderr) => Reply::OldTaw,
+            None if code == Some(2) => Reply::Usage(first_line(&stderr)),
             None => Reply::Refused(words::refused(
                 machine,
                 &match code {
@@ -258,9 +267,35 @@ fn error_of(stdout: &[u8]) -> Option<(String, String)> {
     ))
 }
 
-/// What a [`Reply::Usage`] says of a verb that is not `open`: the far taw ended with status 2 and no answer.
-pub fn usage_words(machine: &str) -> String {
-    words::refused(machine, "it ended with status 2 and no answer taw can read")
+/// Whether `stderr` is a taw's own clap refusing `open --no-switch` (`error: unexpected argument '--no-switch'
+/// found`) or `open` (`error: unrecognized subcommand 'open'`): what a taw older than `open --no-switch` says.
+/// Any other text, a wrapper's or a shell's, is not that taw speaking.
+fn clap_refused_open(stderr: &[u8]) -> bool {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("error:"))
+        .any(|said| {
+            said.contains("unexpected argument '--no-switch'")
+                || said.contains("unrecognized subcommand 'open'")
+        })
+}
+
+/// The first non-empty line of `stderr`, cleaned (the far side's text reaches a toast only through the cleaner).
+fn first_line(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| plain(line.trim()))
+        .unwrap_or_default()
+}
+
+/// What a [`Reply::Usage`] says: the far command ended with status 2 and no answer, and `said`, the first line
+/// of its stderr when there is one.
+pub fn usage_words(machine: &str, said: &str) -> String {
+    if said.is_empty() {
+        return words::refused(machine, "it ended with status 2 and no answer taw can read");
+    }
+    words::refused(machine, &format!("it ended with status 2 and said: {said}"))
 }
 
 /// The session `open --json` made or found, as its envelope names it: the name, whether it was made, and the
@@ -805,7 +840,46 @@ mod reply_tests {
             code: Some(code),
             signal: None,
             stdout: stdout.as_bytes().to_vec(),
+            stderr: Vec::new(),
         }
+    }
+
+    /// An old taw's own clap error for `open --json --no-switch -- x` (a real run's stderr), exit 2.
+    const OLD_TAW_STDERR: &str = "error: unexpected argument '--no-switch' found\n\n  tip: to pass '--no-switch' as a value, use '-- --no-switch'\n\nUsage: taw open --json [TERMS]...\n\nFor more information, try '--help'.\n";
+
+    fn ended_with(code: i32, stderr: &str) -> Reply {
+        classify(
+            "studio",
+            Ran::Done {
+                code: Some(code),
+                signal: None,
+                stdout: Vec::new(),
+                stderr: stderr.as_bytes().to_vec(),
+            },
+            VERB_BOUND,
+        )
+    }
+
+    #[test]
+    fn status_2_is_an_old_taw_only_when_its_own_clap_refused_open() {
+        assert_eq!(ended_with(2, OLD_TAW_STDERR), Reply::OldTaw);
+        assert_eq!(
+            ended_with(2, "error: unrecognized subcommand 'open'\n"),
+            Reply::OldTaw
+        );
+        // A wrapper's message that names the option is not clap speaking.
+        assert_eq!(
+            ended_with(2, "wrapper: no --no-switch here\n"),
+            Reply::Usage("wrapper: no --no-switch here".into())
+        );
+        assert_eq!(ended_with(2, ""), Reply::Usage(String::new()));
+        // Another status with the same text is no usage error.
+        assert!(matches!(ended_with(1, OLD_TAW_STDERR), Reply::Refused(_)));
+        // The first line only, cleaned.
+        assert_eq!(
+            ended_with(2, "\n  \x1b]0;x\x07oops\nmore\n"),
+            Reply::Usage("oops".into())
+        );
     }
 
     fn reply(code: i32, line: &str) -> Reply {
@@ -976,6 +1050,7 @@ mod reply_tests {
             code: None,
             signal: Some(9),
             stdout: NOT_FOUND.as_bytes().to_vec(),
+            stderr: Vec::new(),
         };
         assert_eq!(classify("studio", killed, VERB_BOUND), Reply::NoAnswer);
         assert_eq!(

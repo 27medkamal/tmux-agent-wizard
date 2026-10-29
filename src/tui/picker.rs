@@ -337,9 +337,9 @@ impl ProjectPicker {
         let Some(far) = self.far.as_ref() else {
             return Response::Stay;
         };
-        let term = match far.shown.get(self.sel) {
-            Some(at) => far.folders[*at].dir.clone(),
-            None => self.input.value().trim().to_string(),
+        let (term, exact) = match far.shown.get(self.sel) {
+            Some(at) => (far.folders[*at].dir.clone(), true),
+            None => (self.input.value().trim().to_string(), false),
         };
         if term.is_empty() {
             return Response::Stay;
@@ -347,6 +347,7 @@ impl ProjectPicker {
         Response::Run(Action::NewRemoteSession {
             machine: far.machine.clone(),
             term,
+            exact,
         })
     }
 

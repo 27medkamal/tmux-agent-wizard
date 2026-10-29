@@ -78,6 +78,18 @@ pub fn remote_argv(action: &Action) -> Vec<String> {
         // argument each, as `taw open code api` gets them at a shell: that taw tries them joined with single
         // spaces as a folder and hands zoxide each as its own keyword, which one argument with a space in it
         // would not be.
+        //
+        // A folder the far taw listed (`exact`) is one argument as it stands: not split, not cleaned, not cut. A
+        // folder with two spaces in a row, or a tab, would otherwise come out as another folder there.
+        Action::NewRemoteSession {
+            term, exact: true, ..
+        } => word(term)
+            .filter(|term| !term.is_empty())
+            .map(|term| {
+                let mut argv = args(&["open", "--json", "--no-switch", "--"]);
+                argv.push(term.to_string());
+                argv
+            }),
         Action::NewRemoteSession { term, .. } => word(term)
             .filter(|term| !term.trim().is_empty())
             .map(|term| {
@@ -334,8 +346,11 @@ pub fn candidates_offered(stdout: &[u8]) -> Option<crate::tui::picker::FarList> 
         rows.iter()
             .filter_map(|row| {
                 let name = plain(row["name"].as_str()?);
-                let dir = plain(row["dir"].as_str()?);
-                (!name.is_empty() && !dir.is_empty()).then(|| crate::tui::picker::FarFolder {
+                // The folder is what Enter sends, so it is kept exactly as listed (it is never drawn): absolute,
+                // and a NUL cannot be sent. A row that is not that is left out.
+                let dir = row["dir"].as_str()?.to_string();
+                let sendable = dir.starts_with('/') && !dir.contains('\0');
+                (!name.is_empty() && sendable).then(|| crate::tui::picker::FarFolder {
                     kind: plain(row["kind"].as_str().unwrap_or_default()),
                     name,
                     dir,
@@ -527,12 +542,65 @@ mod tests {
         );
     }
 
+    /// A folder the far taw listed goes as one argument, exactly as listed: two spaces in a row, a tab, a quote,
+    /// a dash, non-ASCII and a long path all stay. Typed text (not exact) keeps its word split.
+    /// Mutation: the exact term is split on white space again.
+    #[test]
+    fn a_listed_folder_goes_to_the_far_taw_as_one_exact_argument() {
+        let long = format!("/home/studio/{}", "d".repeat(300));
+        for dir in [
+            "/home/studio/my  notes",
+            "/home/studio/tab\there",
+            "/home/studio/it's \"quoted\"",
+            "/home/studio/--dash -x",
+            "/home/studio/caf\u{e9} \u{4e2d}\u{6587}",
+            " /home/studio/ends ",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                argv(Action::NewRemoteSession {
+                    machine: "studio".into(),
+                    term: dir.into(),
+                    exact: true,
+                }),
+                words(&["open", "--json", "--no-switch", "--", dir]),
+                "{dir:?}"
+            );
+        }
+        // A NUL cannot be sent: nothing is.
+        assert!(
+            argv(Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "/a\0b".into(),
+                exact: true,
+            })
+            .is_empty()
+        );
+        // The same text typed is still split into words.
+        assert_eq!(
+            argv(Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "/home/studio/my  notes".into(),
+                exact: false,
+            }),
+            words(&[
+                "open",
+                "--json",
+                "--no-switch",
+                "--",
+                "/home/studio/my",
+                "notes"
+            ])
+        );
+    }
+
     #[test]
     fn the_far_n_gives_the_far_taw_each_word_of_the_term() {
         let open = |term: &str| {
             argv(Action::NewRemoteSession {
                 machine: "studio".into(),
                 term: term.into(),
+                exact: false,
             })
         };
         assert_eq!(
@@ -995,6 +1063,43 @@ mod reply_tests {
         );
         assert_eq!(candidates_offered(b"not json"), None);
         assert_eq!(candidates_offered(br#"{"result":{"type":"ok"}}"#), None);
+    }
+
+    /// A listed folder keeps its exact text for sending (spaces, tab, quote, non-ASCII, any length); only the
+    /// display name is cleaned. A row whose folder is not absolute, or holds a NUL, is left out.
+    /// Mutation: the dir goes through `plain` again.
+    #[test]
+    fn a_listed_folder_keeps_its_exact_text() {
+        let long = format!("/home/me/{}", "d".repeat(300));
+        let dirs = [
+            "/home/me/my  notes",
+            "/home/me/tab\there",
+            "/home/me/it's",
+            "/home/me/caf\u{e9}",
+            long.as_str(),
+        ];
+        let rows: Vec<serde_json::Value> = dirs
+            .iter()
+            .map(|dir| serde_json::json!({"kind": "zoxide", "name": "~/n\u{1b}[31ma", "dir": dir}))
+            .chain([
+                serde_json::json!({"kind": "zoxide", "name": "~/rel", "dir": "relative/dir"}),
+                serde_json::json!({"kind": "zoxide", "name": "~/nul", "dir": "/a\u{0}b"}),
+            ])
+            .collect();
+        let envelope =
+            serde_json::json!({"result": {"type": "session_candidates", "candidates": rows}});
+        let list = candidates_offered(envelope.to_string().as_bytes()).expect("the envelope");
+        assert_eq!(
+            list.folders
+                .iter()
+                .map(|f| f.dir.as_str())
+                .collect::<Vec<_>>(),
+            dirs
+        );
+        assert!(
+            list.folders.iter().all(|f| f.name == "~/na"),
+            "name is cleaned"
+        );
     }
 
     #[test]

@@ -972,6 +972,7 @@ impl App<'_> {
             PromptKind::NewSessionOn { machine } => Ok(Action::NewRemoteSession {
                 machine,
                 term: text.trim().to_string(),
+                exact: false,
             }),
             PromptKind::NewWorktree { workspace } => {
                 if text.is_empty() {

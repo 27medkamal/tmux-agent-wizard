@@ -83,9 +83,13 @@ pub enum Action {
     },
     /// `n` in the app on a row of another machine: make (or find) the session for `term` on `machine`, with
     /// that machine's own taw (`taw open --json --no-switch -- <term>` over ssh). Only the app sends it.
+    ///
+    /// `exact` is set for a folder the far taw itself listed in the picker: it goes as one argument, as it is.
+    /// Typed text (not set) is split into words, cleaned and cut as step 1 sends it.
     NewRemoteSession {
         machine: String,
         term: String,
+        exact: bool,
     },
     /// Enter on a live machine's row in the popup: the popup ends and the client goes into the app, which goes
     /// into the machine (`taw app --go machine:id`). `id` is the machine's own (`%16`, `$3` or `@5`), not

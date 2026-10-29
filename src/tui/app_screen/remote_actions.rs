@@ -2172,7 +2172,8 @@ mod rows_tests {
             action,
             Action::NewRemoteSession {
                 machine: "studio".into(),
-                term: "/home/studio/web".into()
+                term: "/home/studio/web".into(),
+                exact: true,
             }
         );
         drop(lists);
@@ -2191,8 +2192,66 @@ mod rows_tests {
             press(&mut app, KeyCode::Enter),
             Some(Action::NewRemoteSession {
                 machine: "studio".into(),
-                term: "zzqq".into()
+                term: "zzqq".into(),
+                exact: false,
             })
+        );
+    }
+
+    /// Enter on a listed folder sends that folder exactly: two spaces in a row, a tab, quotes, a dash, non-ASCII and
+    /// a path of over 256 characters reach the far argv unchanged; typed `code api` still goes as two words.
+    /// Mutation: the exact path is split on white space (`split_whitespace` on it).
+    #[test]
+    fn enter_on_a_listed_folder_reaches_the_far_argv_exactly() {
+        let long = format!("/home/studio/{}", "d".repeat(300));
+        let dirs = [
+            "/home/studio/my  notes".to_string(),
+            "/home/studio/tab\there".to_string(),
+            "/home/studio/it's \"q\"".to_string(),
+            "/home/studio/--dash".to_string(),
+            "/home/studio/caf\u{e9} \u{4e2d}".to_string(),
+            long,
+        ];
+        let rows: Vec<serde_json::Value> = dirs
+            .iter()
+            .enumerate()
+            .map(|(i, dir)| serde_json::json!({"kind": "zoxide", "name": format!("~/f{i}"), "dir": dir}))
+            .collect();
+        let envelope = serde_json::json!({"id": "cli:session:candidates", "result": {"type": "session_candidates", "candidates": rows}})
+            .to_string();
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        for (at, dir) in dirs.iter().enumerate() {
+            let lists = rig.fake(&envelope, 0, false);
+            let _ = press(&mut app, KeyCode::Char('n'));
+            folders_answered(&mut feed, &mut app);
+            for _ in 0..at {
+                let _ = press(&mut app, KeyCode::Down);
+            }
+            let action = press(&mut app, KeyCode::Enter).expect("Enter on the folder");
+            drop(lists);
+            let _open = rig.fake(OPENED, 0, false);
+            send(&mut feed, &mut app, &action);
+            let _ = answered(&mut feed, &mut app);
+            let sent = rig.sent();
+            assert_eq!(
+                sent[sent.len() - 5..],
+                ["open", "--json", "--no-switch", "--", dir.as_str()],
+                "folder {at}"
+            );
+        }
+        let _ = press(&mut app, KeyCode::Char('n'));
+        type_in(&mut app, "code api");
+        app.refresh_project_picker();
+        let action = press(&mut app, KeyCode::Enter).expect("typed text");
+        let _open = rig.fake(OPENED, 0, false);
+        send(&mut feed, &mut app, &action);
+        let _ = answered(&mut feed, &mut app);
+        let sent = rig.sent();
+        assert_eq!(
+            sent[sent.len() - 6..],
+            ["open", "--json", "--no-switch", "--", "code", "api"]
         );
     }
 
@@ -2238,7 +2297,8 @@ mod rows_tests {
             press(&mut app, KeyCode::Enter),
             Some(Action::NewRemoteSession {
                 machine: "studio".into(),
-                term: "~/new".into()
+                term: "~/new".into(),
+                exact: false,
             })
         );
     }
@@ -2324,6 +2384,7 @@ mod rows_tests {
         let action = Action::NewRemoteSession {
             machine: "studio".into(),
             term: "-odd".into(),
+            exact: false,
         };
         send(&mut feed, &mut app, &action);
         send(&mut feed, &mut app, &action);
@@ -2390,6 +2451,7 @@ mod rows_tests {
             &Action::NewRemoteSession {
                 machine: "studio".into(),
                 term: "garden".into(),
+                exact: false,
             },
         );
         assert!(answered(&mut feed, &mut app).is_empty());
@@ -2424,6 +2486,7 @@ mod rows_tests {
         let action = Action::NewRemoteSession {
             machine: "studio".into(),
             term: "nothing-like-it".into(),
+            exact: false,
         };
         let guard = rig.fake(NO_DIR, 1, false);
         send(&mut feed, &mut app, &action);
@@ -2471,6 +2534,7 @@ mod rows_tests {
                 &Action::NewRemoteSession {
                     machine: "studio".into(),
                     term: "api".into(),
+                    exact: false,
                 },
             );
             assert!(answered(&mut feed, &mut app).is_empty());
@@ -2521,6 +2585,7 @@ mod rows_tests {
             &Action::NewRemoteSession {
                 machine: "studio".into(),
                 term: "x".into(),
+                exact: false,
             },
         );
         assert!(answered(feed, app).is_empty());
@@ -2710,6 +2775,7 @@ mod rows_tests {
             &Action::NewRemoteSession {
                 machine: "pi".into(),
                 term: "y".into(),
+                exact: false,
             },
         );
         let routes = answered_by(&mut feed, &mut app, "pi");
@@ -2747,6 +2813,7 @@ mod rows_tests {
             &Action::NewRemoteSession {
                 machine: "studio".into(),
                 term: "y".into(),
+                exact: false,
             },
         );
         assert!(answered(&mut feed, &mut app).is_empty());
@@ -2772,6 +2839,7 @@ mod rows_tests {
         let action = Action::NewRemoteSession {
             machine: "studio".into(),
             term: "nothing-like-it".into(),
+            exact: false,
         };
         let silent = r#"{"id":"cli:open","error":{"code":"not_found","message":""}}"#;
         let words = "studio: no directory matches nothing-like-it";
@@ -2804,6 +2872,7 @@ mod rows_tests {
             &Action::NewRemoteSession {
                 machine: "studio".into(),
                 term: "x".into(),
+                exact: false,
             },
         );
         assert!(answered(&mut feed, &mut app).is_empty());

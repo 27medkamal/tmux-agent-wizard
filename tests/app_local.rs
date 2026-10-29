@@ -3452,3 +3452,73 @@ fn the_list_shown_again_after_an_attach_wakes_a_machine_that_waits() {
         settled_at.elapsed()
     );
 }
+
+/// The session and the last session of the one client of "this Mac" that is not `old`, once it is there.
+fn new_client_sessions(mac: &Server, old: u32) -> (u32, String, String, String) {
+    let mut seen = None;
+    let found = wait_for(
+        || {
+            seen = inner(mac)
+                .run(&[
+                    "list-clients",
+                    "-F",
+                    "#{client_pid} #{client_name} #{session_name} #{client_last_session}",
+                ])
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| {
+                    let words: Vec<&str> = line.split(' ').collect();
+                    let pid: u32 = words.first()?.parse().ok()?;
+                    (pid != old && words.len() >= 3).then(|| {
+                        (
+                            pid,
+                            words[1].to_string(),
+                            words[2].to_string(),
+                            words.get(3).copied().unwrap_or("").to_string(),
+                        )
+                    })
+                })
+                .next();
+            seen.is_some()
+        },
+        Duration::from_secs(20),
+    );
+    assert!(found, "no new client of the app showed on the server");
+    seen.unwrap()
+}
+
+/// Every attach the app makes is a new client, and a new client has no last session, so prefix + L said "Can't
+/// find last session". The second session the app goes into in one run is attached through the first, so the client
+/// lands on the second with the first as its last session, and `switch-client -l` goes back to it.
+#[test]
+fn the_second_session_the_app_goes_into_has_the_first_as_its_last_session() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    press(&term, &["Enter"]);
+    let (pid, name, first, last) = new_client_sessions(&mac, 0);
+    assert_eq!(last, "", "the first attach has no session to come from");
+    mac.tmux_ok(&["detach-client", "-t", &name]);
+    expect_terminal(&term, "the list again", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    // The cursor is on the row just left: the other session is one row away (beta sorts before one).
+    press(&term, &[if first == "one" { "k" } else { "j" }, "Enter"]);
+    let (_, name, second, last) = new_client_sessions(&mac, pid);
+    assert_ne!(first, second, "the second Enter went into the same session");
+    assert_eq!(last, first, "the client's last session");
+    mac.tmux_ok(&["switch-client", "-c", &name, "-l"]);
+    let now = mac.tmux_ok(&["display-message", "-p", "-c", &name, "#{session_name}"]);
+    assert_eq!(now.trim(), first, "switch-client -l goes back to the first");
+}

@@ -400,6 +400,43 @@ pub(crate) fn attach_to(tmux: &Tmux, target: &str) -> Command {
     command
 }
 
+/// [`attach_to`] for `target` as a client that has `came_from` as its last session, so that prefix + L (`switch-client
+/// -l`) goes back: tmux gives a new client no last session, so the client is attached to the session the person came
+/// from and switched to `target` in the same command line. With `None` it is [`attach_to`]. Use
+/// [`usable_came_from`] for the session to name.
+pub(crate) fn attach_from(tmux: &Tmux, came_from: Option<&str>, target: &str) -> Command {
+    let Some(came_from) = came_from else {
+        return attach_to(tmux, target);
+    };
+    let mut command = attach_to(tmux, came_from);
+    command.args([";", "switch-client", "-t"]).arg(target);
+    command
+}
+
+/// `came_from` when it names a session that is there and is not `target` (the session id of each, so that `$3` and
+/// `=name` of one session are one), else `None`: the attach is then a plain one, as before.
+pub(crate) fn usable_came_from<'a>(
+    tmux: &Tmux,
+    came_from: Option<&'a str>,
+    target: &str,
+) -> Option<&'a str> {
+    let came_from = came_from?;
+    let id_of = |session: &str| {
+        tmux.run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("{session}:"),
+            "#{session_id}",
+        ])
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+    };
+    let from = id_of(came_from)?;
+    (id_of(target).as_deref() != Some(from.as_str())).then_some(came_from)
+}
+
 /// Replaces this process with `command`, so the terminal becomes the tmux client. Only a
 /// failure to do that returns.
 fn attach(mut command: Command) -> anyhow::Error {
@@ -473,8 +510,66 @@ mod tests {
 
     use super::*;
     use crate::cli::envelope::code_for;
-    use crate::cli::test_support::{Stub, calls, stub_ctx, stub_tmux as shared_stub};
+    use crate::cli::test_support::{
+        Stub, calls, sessions_tmux, stub_ctx, stub_tmux as shared_stub,
+    };
     use crate::tmux::Socket;
+
+    // ---------------------------------------------------------------- the client's last session
+
+    fn argv(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// With a session to come from, the client is attached to it and switched to the target in one command
+    /// line (a new client has no last session, and this gives it one); with none it is the plain attach.
+    #[test]
+    fn an_attach_from_a_session_goes_through_it_and_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = sessions_tmux(dir.path(), &[]);
+        assert_eq!(
+            argv(&attach_from(&tmux, Some("$4"), "=api")),
+            [
+                "attach-session",
+                "-t",
+                "$4",
+                ";",
+                "switch-client",
+                "-t",
+                "=api"
+            ]
+        );
+        assert_eq!(
+            argv(&attach_from(&tmux, None, "=api")),
+            ["attach-session", "-t", "=api"]
+        );
+    }
+
+    /// A session to come from that is gone, or is the target (named by id or by name), is none: the plain attach.
+    #[test]
+    fn a_session_to_come_from_that_is_gone_or_is_the_target_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = sessions_tmux(
+            dir.path(),
+            &[("$4", "$4"), ("=other", "$4"), ("=api", "$5"), ("$5", "$5")],
+        );
+        assert_eq!(usable_came_from(&tmux, Some("$4"), "=api"), Some("$4"));
+        assert_eq!(
+            usable_came_from(&tmux, Some("=other"), "$5"),
+            Some("=other")
+        );
+        assert_eq!(usable_came_from(&tmux, None, "=api"), None, "none given");
+        assert_eq!(usable_came_from(&tmux, Some("$9"), "=api"), None, "gone");
+        assert_eq!(usable_came_from(&tmux, Some("$5"), "=api"), None, "same id");
+        assert_eq!(
+            usable_came_from(&tmux, Some("=api"), "$5"),
+            None,
+            "same by name"
+        );
+    }
 
     // ---------------------------------------------------------------- helpers
 

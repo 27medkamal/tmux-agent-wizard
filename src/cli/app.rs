@@ -36,6 +36,7 @@ pub(super) fn run(
     go: Option<&str>,
     child: bool,
     back: Option<&str>,
+    back_last: Option<&str>,
 ) -> anyhow::Result<Output> {
     // `--go` takes `machine:id`, a pane id of this Mac (`%7`) or `last`; anything else is refused before
     // anything starts, as a usage error (2), so that no terminal is taken for a target that cannot be had.
@@ -47,6 +48,10 @@ pub(super) fn run(
         }
     };
     if back.is_some_and(|session| !crate::machine::valid_session_id(session)) {
+        eprintln!("taw app: {BACK_USAGE}");
+        std::process::exit(2);
+    }
+    if back_last.is_some_and(|session| !crate::machine::valid_session_id(session)) {
         eprintln!("taw app: {BACK_USAGE}");
         std::process::exit(2);
     }
@@ -76,7 +81,7 @@ pub(super) fn run(
             &ctx.taw_bin,
             None,
             target,
-            back.is_some(),
+            back,
         )
         .context("running the app")?;
         return Ok(Output::Nothing);
@@ -93,7 +98,7 @@ pub(super) fn run(
         std::process::exit(1);
     }
     // The terminal's program: it ends the process with its own status, which is the terminal's.
-    std::process::exit(supervise(ctx, go, back));
+    std::process::exit(supervise(ctx, go, back, back_last));
 }
 
 /// Puts the terminal this process was started from on its standard output when its standard input is one and its
@@ -163,7 +168,12 @@ const LOOK: Duration = Duration::from_millis(100);
 /// exiting 0 ends it 0. After any other end it waits for the client the child's record names
 /// (`client_pid`) to end, which is where the terminal is not the app's, and starts a new child without
 /// `--go`. Three failures to start in a row end it 1, saying where the log is.
-pub(super) fn supervise(ctx: &Ctx, go: Option<&str>, back: Option<&str>) -> i32 {
+pub(super) fn supervise(
+    ctx: &Ctx,
+    go: Option<&str>,
+    back: Option<&str>,
+    back_last: Option<&str>,
+) -> i32 {
     reset_sigchld();
     // SAFETY: `signal` with a handler that only stores to an atomic, or with `SIG_IGN`.
     unsafe {
@@ -209,14 +219,14 @@ pub(super) fn supervise(ctx: &Ctx, go: Option<&str>, back: Option<&str>) -> i32 
             return 128 + signal;
         }
         if status.success() {
-            return back_to_tmux(ctx, back, 0);
+            return back_to_tmux(ctx, back, back_last, 0);
         }
         if failures.ended_after(started.elapsed()) {
             eprintln!(
                 "taw app: the app keeps failing; its log is {}",
                 log.display()
             );
-            return back_to_tmux(ctx, back, 1);
+            return back_to_tmux(ctx, back, back_last, 1);
         }
         // Whatever the child's client is, the terminal is its until it ends.
         let client = files::read_app_record(&ctx.paths, pid).map_or(0, |record| record.client_pid);
@@ -237,8 +247,10 @@ pub(super) fn supervise(ctx: &Ctx, go: Option<&str>, back: Option<&str>) -> i32 
 /// replaced by tmux's own pick (`attach-session` with no target). Nothing is done, and `code` is what the
 /// supervisor ends with as it always did, when there is no `back`, when the terminal is gone (a hung-up tty has
 /// nothing to attach), when the server is gone, or when the exec fails. Never called for a signal passed on: a
-/// terminal that is closing is not given a client.
-fn back_to_tmux(ctx: &Ctx, back: Option<&str>, code: i32) -> i32 {
+/// terminal that is closing is not given a client. `last` is the session the doorway's client was in before
+/// `back` (its `#{client_last_session}`): the new client is given it as its last session, so that prefix + L goes
+/// back to it.
+fn back_to_tmux(ctx: &Ctx, back: Option<&str>, last: Option<&str>, code: i32) -> i32 {
     let Some(session) = back else {
         return code;
     };
@@ -246,7 +258,7 @@ fn back_to_tmux(ctx: &Ctx, back: Option<&str>, code: i32) -> i32 {
     if unsafe { libc::isatty(0) } != 1 {
         return code;
     }
-    let Some(mut command) = attach_back(&ctx.tmux, session) else {
+    let Some(mut command) = attach_back(&ctx.tmux, session, last) else {
         return code;
     };
     // What this process ignores would be ignored by the client it becomes.
@@ -262,10 +274,13 @@ fn back_to_tmux(ctx: &Ctx, back: Option<&str>, code: i32) -> i32 {
 }
 
 /// The command that attaches this terminal to `session` on the server `tmux` talks to: its own session, else (the
-/// session is gone but the server answers) tmux's most recent one, else `None` (no server).
-fn attach_back(tmux: &crate::tmux::Tmux, session: &str) -> Option<Command> {
+/// session is gone but the server answers) tmux's most recent one, else `None` (no server). With `last`, the
+/// session the doorway's client came to `session` from, that is still there, the client is attached to it and
+/// switched to `session`, so that prefix + L goes back to it ([`super::open::attach_from`]).
+fn attach_back(tmux: &crate::tmux::Tmux, session: &str, last: Option<&str>) -> Option<Command> {
     if tmux.run(&["has-session", "-t", session]).is_ok() {
-        return Some(super::open::attach_to(tmux, session));
+        let last = super::open::usable_came_from(tmux, last, session);
+        return Some(super::open::attach_from(tmux, last, session));
     }
     tmux.run(&["list-sessions"]).ok()?;
     let mut command = tmux.command();
@@ -504,7 +519,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let (tmux, _) = stub_tmux(dir.path(), &Stub::default());
-        let command = attach_back(&tmux, "$3").expect("the session is there");
+        let command = attach_back(&tmux, "$3", None).expect("the session is there");
         assert_eq!(args(&command), ["attach-session", "-t", "$3"]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -515,14 +530,50 @@ mod tests {
                 ..Stub::default()
             },
         );
-        let command = attach_back(&tmux, "$3").expect("the server is there");
+        let command = attach_back(&tmux, "$3", None).expect("the server is there");
         assert_eq!(args(&command), ["attach-session"]);
 
         let gone = crate::tmux::Tmux {
             bin: std::path::PathBuf::from("/nonexistent/taw-test-tmux"),
             socket: None,
         };
-        assert!(attach_back(&gone, "$3").is_none(), "no server, nowhere");
+        assert!(
+            attach_back(&gone, "$3", None).is_none(),
+            "no server, nowhere"
+        );
+    }
+
+    /// Going back to tmux, the new client has the session the doorway's client was in before as its last session
+    /// (attached to it, then switched to the session in one command line), so prefix + L goes back to it. A last
+    /// session that is gone, or is the session itself, is no one's: the plain attach.
+    #[test]
+    fn the_way_back_goes_through_the_last_session_when_it_is_there() {
+        let args = |command: &Command| -> Vec<String> {
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) =
+            crate::cli::test_support::sessions_tmux(dir.path(), &[("$3", "$3"), ("$2", "$2")]);
+        let command = attach_back(&tmux, "$3", Some("$2")).expect("the session is there");
+        assert_eq!(
+            args(&command),
+            [
+                "attach-session",
+                "-t",
+                "$2",
+                ";",
+                "switch-client",
+                "-t",
+                "$3"
+            ]
+        );
+        let command = attach_back(&tmux, "$3", Some("$9")).expect("the session is there");
+        assert_eq!(args(&command), ["attach-session", "-t", "$3"], "gone");
+        let command = attach_back(&tmux, "$3", Some("$3")).expect("the session is there");
+        assert_eq!(args(&command), ["attach-session", "-t", "$3"], "itself");
     }
 
     /// With no session to go back to the supervisor ends with the code it was given and execs nothing.
@@ -531,7 +582,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
         let ctx = stub_ctx(tmux);
-        assert_eq!(back_to_tmux(&ctx, None, 7), 7);
+        assert_eq!(back_to_tmux(&ctx, None, None, 7), 7);
         assert!(std::fs::read_to_string(&log).unwrap_or_default().is_empty());
     }
 

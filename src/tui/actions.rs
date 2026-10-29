@@ -888,9 +888,15 @@ fn doorway(t: &Tmux, client: Option<&str>, taw_bin: &Path, machine: &str, id: &s
     // The session the popup was opened from, which the app puts the terminal back in when it ends. A lookup that
     // fails leaves the flag out: the app then ends as it did, and the doorway still opens.
     let back = session_of(t, client);
-    let Some(command) =
-        crate::cli::ui_open::doorway_command(taw_bin, &socket, machine, id, back.as_deref())
-    else {
+    let back_last = last_session_of(t, client);
+    let Some(command) = crate::cli::ui_open::doorway_command(
+        taw_bin,
+        &socket,
+        machine,
+        id,
+        back.as_deref(),
+        back_last.as_deref(),
+    ) else {
         return Outcome::toast(crate::machine::words::NOTHING_TO_GO_IN_TO);
     };
     let mut args = vec!["detach-client"];
@@ -913,6 +919,28 @@ fn session_of(t: &Tmux, client: Option<&str>) -> Option<String> {
     }
     args.push("#{session_id}");
     let id = t.run(&args).ok()?;
+    let id = id.trim();
+    crate::machine::valid_session_id(id).then(|| id.to_string())
+}
+
+/// The id (`$2`) of the session `client` was in before the one it is on (its `#{client_last_session}`, a name, looked
+/// up as the id the session has now), or of tmux's current client's when none is named; `None` when it has none or
+/// tmux does not say one.
+fn last_session_of(t: &Tmux, client: Option<&str>) -> Option<String> {
+    let mut args = vec!["display-message", "-p"];
+    if let Some(client) = client {
+        args.extend(["-c", client]);
+    }
+    args.push("#{client_last_session}");
+    let name = t.run(&args).ok()?;
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
+    }
+    let target = format!("{}:", crate::tmux::session_target(name));
+    let id = t
+        .run(&["display-message", "-p", "-t", &target, "#{session_id}"])
+        .ok()?;
     let id = id.trim();
     crate::machine::valid_session_id(id).then(|| id.to_string())
 }
@@ -1109,7 +1137,7 @@ mod tests {
         std::fs::write(
             &stub,
             format!(
-                "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = '#{{socket_path}}' ]; then\n    echo /run/named.sock\n    exit 0\n  fi\n  if [ \"$a\" = '#{{session_id}}' ]; then\n    echo '$3'\n    exit 0\n  fi\ndone\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
+                "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = '#{{socket_path}}' ]; then\n    echo /run/named.sock\n    exit 0\n  fi\n  if [ \"$a\" = '#{{session_id}}' ]; then\n    echo '$3'\n    exit 0\n  fi\n  if [ \"$a\" = '#{{client_last_session}}' ]; then\n    exit 0\n  fi\ndone\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
                 log.display()
             ),
         )
@@ -1152,6 +1180,47 @@ mod tests {
         assert!(!outcome.exit);
     }
 
+    /// The session the client was in before the one the popup was opened from (`#{client_last_session}`, a name) is
+    /// looked up as an id and carried as `--back-last`, so that the terminal's next client has it as its last session.
+    #[test]
+    fn the_doorway_carries_the_last_session_of_the_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        let stub = dir.path().join("tmux");
+        std::fs::write(
+            &stub,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do\n  case \"$a\" in\n    '#{{client_last_session}}') echo main; exit 0 ;;\n    '#{{session_id}}')\n      case \"$*\" in *'=main:'*) echo '$2' ;; *) echo '$7' ;; esac\n      exit 0 ;;\n  esac\ndone\nprintf '%s\\n' \"$*\" >> {0}\nexit 0\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        crate::test_exec::make_executable(&stub);
+        let t = Tmux {
+            bin: stub,
+            socket: Some(crate::tmux::Socket::Path(PathBuf::from("/run/work.sock"))),
+        };
+        let action = Action::Doorway {
+            machine: "studio".into(),
+            id: "%16".into(),
+        };
+        let outcome = exec(
+            &t,
+            &Config::default(),
+            &Paths::from_env(),
+            Path::new("/opt/taw/taw"),
+            &action,
+            Some("/dev/ttys003"),
+        )
+        .unwrap();
+        assert!(outcome.exit);
+        let seen = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            seen.contains("app --go 'studio:%16' --back '$7' --back-last '$2'\n"),
+            "{seen}"
+        );
+    }
+
     /// The session the popup was opened from is asked of tmux for the client the popup is on (`-c`), and carried
     /// as `--back`; an answer that is no session id leaves the flag out, and the doorway still opens.
     #[test]
@@ -1163,7 +1232,7 @@ mod tests {
         std::fs::write(
             &stub,
             format!(
-                "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = '#{{session_id}}' ]; then\n    printf '%s\\n' \"$*\" >> {0}\n    echo \"$ANSWER\"\n    exit 0\n  fi\ndone\nprintf '%s\\n' \"$*\" >> {0}\nexit 0\n",
+                "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = '#{{client_last_session}}' ]; then\n    exit 0\n  fi\n  if [ \"$a\" = '#{{session_id}}' ]; then\n    printf '%s\\n' \"$*\" >> {0}\n    echo \"$ANSWER\"\n    exit 0\n  fi\ndone\nprintf '%s\\n' \"$*\" >> {0}\nexit 0\n",
                 log.display()
             ),
         )

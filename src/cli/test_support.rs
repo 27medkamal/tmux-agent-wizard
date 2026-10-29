@@ -187,6 +187,45 @@ exit 0
     )
 }
 
+/// A `tmux` stand-in that knows some sessions: `display-message -p -t <session>: '#{session_id}'` says the id of a
+/// session of `sessions` (target, as `$3` or `=name`, and its id) and fails for any other, as tmux does of a session
+/// that is gone; `has-session` is told the same way. Every call is logged as [`stub_tmux`] logs it.
+pub(crate) fn sessions_tmux(dir: &Path, sessions: &[(&str, &str)]) -> (Tmux, PathBuf) {
+    let log = dir.join("calls");
+    let script = dir.join("tmux");
+    let cases: String = sessions
+        .iter()
+        .map(|(target, id)| format!("      '{target}'|'{target}:') echo '{id}'; exit 0 ;;\n"))
+        .collect();
+    let body = format!(
+        r#"#!/bin/sh
+[ "$1" = -u ] && shift
+{{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; }} >> '{log}'
+case "$1" in
+  has-session)
+    case "$3" in
+{cases}    esac
+    exit 1 ;;
+  display-message)
+    case "$4" in
+{cases}    esac
+    exit 1 ;;
+esac
+exit 0
+"#,
+        log = log.display(),
+    );
+    std::fs::write(&script, body).unwrap();
+    crate::test_exec::make_executable(&script);
+    (
+        Tmux {
+            bin: script,
+            socket: None,
+        },
+        log,
+    )
+}
+
 /// A context over `tmux` with `zoxide add` off: on, it would run the real one, on a path
 /// in a temp directory.
 ///

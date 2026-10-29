@@ -281,7 +281,7 @@ pub fn run_app(
     taw_bin: &Path,
     came_from: Option<String>,
     go: Option<GoTarget>,
-    back_to_tmux: bool,
+    back: Option<&str>,
 ) -> anyhow::Result<AppEnd> {
     catch_signals();
     start_watchdog(paths);
@@ -330,6 +330,8 @@ pub fn run_app(
         // The record names this process while it runs; an end that was asked for takes it away.
         record: Record::write(paths),
         own_pane: crate::cli::common::current_pane().ok(),
+        // The session the doorway's client was in is where the first attach comes from.
+        last_attached: back.map(str::to_string),
     };
     // Said once the first frame is drawn, so that its few seconds are not spent starting up.
     let mut doubt = doubt;
@@ -343,7 +345,7 @@ pub fn run_app(
         Screen::enter,
     )?;
     // Started by the doorway: the keys that end the app say they go back to tmux.
-    app.back_to_tmux = back_to_tmux;
+    app.back_to_tmux = back.is_some();
     // The theme is the one the client's light or dark mode asks for from the first frame (`auto_switch`); `shown` is
     // the name on screen, for the ticks to compare with.
     let mut shown = cfg.theme.name.clone();
@@ -501,6 +503,9 @@ struct Feed<'a> {
     /// The pane this app runs in (`$TMUX_PANE`), whose client's light or dark mode `[theme] auto_switch` follows; `None`
     /// outside tmux, where the app keeps `[theme] name`.
     own_pane: Option<String>,
+    /// The session this app last attached on this Mac (at the start, the one the doorway's client was in): the next
+    /// attach goes through it, so that its client has it as its last session and prefix + L goes back.
+    last_attached: Option<String>,
 }
 
 /// How long this Mac's walk file is left as it is when the walk has not changed: the notification key takes
@@ -936,7 +941,13 @@ impl Feed<'_> {
         }
         // What was written before this is not news: the key back writes its line after the attach starts.
         let mut tail = files::EventTail::at_end(self.paths);
-        let mut command = crate::cli::open::attach_to(self.tmux, &landing.target);
+        // A new client has no last session: it is attached to the session the person came from and switched to
+        // the target in the same command line, so that prefix + L goes back to it.
+        let came_from = self.last_attached.take();
+        let came_from =
+            crate::cli::open::usable_came_from(self.tmux, came_from.as_deref(), &landing.target);
+        let mut command = crate::cli::open::attach_from(self.tmux, came_from, &landing.target);
+        self.last_attached = Some(landing.target.clone());
         // tmux's client prints its exit line (`[detached (from session api)]`) on its standard output, which is the
         // terminal the list is drawn on again, so the line showed until the list's first frame. The client draws
         // through its standard input and says what went wrong on its standard error: only the line is held back,
@@ -2509,6 +2520,7 @@ mod tests {
             pasting: crate::tui::pasting::Pasting::default(),
             record: Record::write(paths),
             own_pane: None,
+            last_attached: None,
         }
     }
 

@@ -153,6 +153,10 @@ enum Group {
         /// is put back in tmux on it (not for typing)
         #[arg(long, value_name = "SESSION", hide = true)]
         back: Option<String>,
+        /// The id of the session the doorway's client was in before `--back`: the terminal's new client has it as
+        /// its last session (not for typing)
+        #[arg(long, value_name = "SESSION", hide = true)]
+        back_last: Option<String>,
     },
     /// The machines of [machines]: list, add and remove them, check that they answer (taw --machine NAME
     /// runs a command on one)
@@ -737,11 +741,22 @@ fn dispatch(ctx: &Ctx, command: Group) -> (&'static str, Sub, anyhow::Result<Out
                 sandbox::start(ctx, args).map(|()| Output::Nothing),
             );
         }
-        Group::App { go, child, back } => {
+        Group::App {
+            go,
+            child,
+            back,
+            back_last,
+        } => {
             return (
                 "app",
                 "",
-                app::run(ctx, go.as_deref(), *child, back.as_deref()),
+                app::run(
+                    ctx,
+                    go.as_deref(),
+                    *child,
+                    back.as_deref(),
+                    back_last.as_deref(),
+                ),
             );
         }
         Group::Machine { cmd } => {

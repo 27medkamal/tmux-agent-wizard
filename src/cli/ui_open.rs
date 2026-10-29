@@ -252,7 +252,7 @@ fn popup_command(
 
 /// The command the doorway has tmux run in a client's place:
 /// `env -u TMUX -u TMUX_PANE -u TAW_TMUX_SOCKET_NAME 'TAW_TMUX_SOCKET_PATH=<socket>' <taw> app --go <machine>:<id>
-/// [--back <session>]`, every word quoted for the client's shell (sh-like: tmux runs `-E` with the session's
+/// [--back <session> [--back-last <session>]]`, every word quoted for the client's shell (sh-like: tmux runs `-E` with the session's
 /// default shell, which is not confirmed here, so a backslash in a path is a known
 /// caveat). tmux runs it in the client process with the environment of the shell that ran `tmux attach`,
 /// which names no server and may carry another one's `$TMUX`: the `env` prefix pins the app to `socket`, the
@@ -262,7 +262,9 @@ fn popup_command(
 ///
 /// `back` is the id of the session the popup was opened from (`$3`): the app puts the terminal back in tmux on it
 /// when it ends ([`super::app`]), so that quitting it does not close the window whose program the tmux client was.
-/// Left out unless it is a session id.
+/// Left out unless it is a session id. `back_last` is the id of the session the client was in before `back` (its
+/// `#{client_last_session}`): the app gives the terminal's next client that as its last session, so that prefix + L goes
+/// back to it.
 ///
 /// tmux ends the popup's own process before `detach-client` returns, so nothing in the popup runs after the
 /// detach, and the popup's `--bar` restore stays with the launcher (`taw ui open`), which runs it when its
@@ -273,6 +275,7 @@ pub fn doorway_command(
     machine: &str,
     id: &str,
     back: Option<&str>,
+    back_last: Option<&str>,
 ) -> Option<String> {
     if !crate::machine::valid_go_id(id) {
         return None;
@@ -289,6 +292,10 @@ pub fn doorway_command(
     );
     if let Some(session) = back.filter(|session| crate::machine::valid_session_id(session)) {
         command.push_str(&format!(" --back {}", shell_words::quote(session)));
+        // Only with a `--back`: the last session is where the client was before it.
+        if let Some(last) = back_last.filter(|last| crate::machine::valid_session_id(last)) {
+            command.push_str(&format!(" --back-last {}", shell_words::quote(last)));
+        }
     }
     Some(command)
 }
@@ -548,6 +555,7 @@ mod tests {
                 "studio",
                 "%16",
                 back,
+                None,
             )
             .unwrap()
         };
@@ -1863,6 +1871,36 @@ mod tests {
 mod doorway_new_tests {
     use super::*;
 
+    /// The session the client was in before is carried as `--back-last` after `--back`, and only with a `--back`
+    /// and a session id.
+    #[test]
+    fn the_doorway_command_carries_the_last_session_after_the_back() {
+        let go = |back: Option<&str>, last: Option<&str>| {
+            doorway_command(
+                Path::new("/opt/taw/taw"),
+                Path::new("/run/work.sock"),
+                "studio",
+                "%16",
+                back,
+                last,
+            )
+            .unwrap()
+        };
+        let back = go(Some("$3"), None);
+        assert_eq!(
+            go(Some("$3"), Some("$2")),
+            format!("{back} --back-last '$2'")
+        );
+        assert_eq!(go(None, Some("$2")), go(None, None), "no back");
+        for not_a_session in ["", "main", "$2;ls", "$2 x"] {
+            assert_eq!(
+                go(Some("$3"), Some(not_a_session)),
+                back,
+                "{not_a_session:?}"
+            );
+        }
+    }
+
     /// The doorway takes `new` as an id of a machine, for the row of a machine with no session.
     #[test]
     fn the_doorway_command_takes_new_and_no_other_word() {
@@ -1872,6 +1910,7 @@ mod doorway_new_tests {
                 Path::new("/run/work.sock"),
                 "studio",
                 id,
+                None,
                 None,
             )
         };

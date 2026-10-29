@@ -635,7 +635,10 @@ fn a_machine_header_is_one_full_width_rule_with_a_dot_the_name_and_the_counts() 
             "a header rule with a background: {rule}"
         );
     }
-    assert!(!page.contains("offline, last seen"), "the old away words are still there");
+    assert!(
+        !page.contains("offline, last seen"),
+        "the old away words are still there"
+    );
     assert!(
         !page.contains("trying again in 30s"),
         "the old header words are still there"
@@ -731,7 +734,13 @@ fn the_window_is_160_columns_by_34_rows_sized_to_the_viewport() {
     ] {
         assert!(page.contains(part), "{PAGE} lacks {part:?}");
     }
-    for old in ["Math.min(12.5", "advance() * 12.5", "value=\"150\"", "COLS = 150", "ROWS = EMBED"] {
+    for old in [
+        "Math.min(12.5",
+        "advance() * 12.5",
+        "value=\"150\"",
+        "COLS = 150",
+        "ROWS = EMBED",
+    ] {
         assert!(!page.contains(old), "{PAGE} still has {old:?}");
     }
     let css = read("docs/stylesheets/extra.css");

@@ -690,6 +690,28 @@ fn the_sample_fits_the_number_and_letter_keys_and_the_preview_never_wraps() {
     );
 }
 
+/// The rows are the ones taw draws by default (a fresh install's look), in columns: what, where, the state, then the
+/// title, and a session header's branch and git; the list is as wide as taw's rule says.
+#[test]
+fn the_rows_are_taws_default_rows_in_columns_with_taws_list_width() {
+    let page = read(PAGE);
+    for part in [
+        // an agent row: the what, the where and the state in columns, then the title
+        "kindCell(r.a, sub(r.m, off, r.a.kind.length), nameC) + ' ' + whereCell(wh,",
+        "pad(`${r.a.state} ${elapsed(r.a.since)}`, 12)",
+        "const WHATW = 10, WHEREW = 11;",
+        // a session header: the name, then the branch and the git flags
+        "'  ' + r.s.branch + (r.s.git ? ' ' + r.s.git : '')",
+        // taw's width rule: the widest row plus 2, 36 to 64
+        "const auto = Math.min(64, Math.max(36, ",
+    ] {
+        assert!(page.contains(part), "{PAGE} lacks {part:?}");
+    }
+    for calm in ["CALM", "r.s.branch !== 'main'", "S.titles ? 68 : 52"] {
+        assert!(!page.contains(calm), "{PAGE} still has {calm:?}");
+    }
+}
+
 /// The window is wide and short, like a screen: 160 columns by 34 rows. Its font is the largest at which the
 /// columns fit the width and the rows fit the viewport's height under the site header (no 12.5 px cap), and
 /// the homepage gives it the viewport's width less a margin, at most 1600 px, and scrolls to it under the header.

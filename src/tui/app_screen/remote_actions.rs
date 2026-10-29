@@ -2417,6 +2417,131 @@ mod rows_tests {
         );
     }
 
+    fn prompt_title(app: &App) -> Option<String> {
+        match &app.overlay {
+            Overlay::Prompt(prompt) => Some(prompt.title.clone()),
+            _ => None,
+        }
+    }
+
+    /// The row of a session of this machine's own, found among the rows as they are built.
+    fn local_session_row(app: &App) -> usize {
+        app.rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Session(s) if app.snap.spaces[*s].machine.is_none()))
+            .expect("a session row of this machine")
+    }
+
+    /// In the flat list `n` aims at the machine of the selected row: studio's pane asks for studio, this
+    /// machine's pane opens the picker.
+    /// Mutation: `new_session` looks at `machine_at` of the cursor instead of `machine_of_row` (no machine for
+    /// a flat row, so the picker opens).
+    #[test]
+    fn n_in_the_flat_list_aims_at_the_selected_rows_machine() {
+        let rig = Rig::new(None);
+        let mut app = rig.app();
+        let _ = press(&mut app, KeyCode::Char('f'));
+        assert!(
+            !app.rows
+                .rows
+                .iter()
+                .any(|row| matches!(row, Row::Machine(_))),
+            "the flat list has no headers"
+        );
+        select(&mut app, "studio:%8");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            prompt_title(&app).as_deref(),
+            Some(words::new_session_prompt("studio").as_str()),
+            "{:?}",
+            toast_of(&app)
+        );
+        let _ = press(&mut app, KeyCode::Esc);
+        app.sel = app
+            .rows
+            .rows
+            .iter()
+            .position(|row| matches!(row, Row::Pane(p) if app.snap.panes[*p].machine.is_none()))
+            .expect("a pane of this machine");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert!(
+            matches!(app.overlay, Overlay::Project(_)),
+            "{:?}",
+            toast_of(&app)
+        );
+    }
+
+    /// Under a filter the rows are the ones that match, and `n` aims at the machine of the selected one.
+    /// Mutation: as the flat list's.
+    #[test]
+    fn n_under_a_filter_aims_at_the_selected_rows_machine() {
+        let rig = Rig::new(None);
+        let mut app = rig.app();
+        app.filter = Some(crate::tui::input::Input::new("photos"));
+        app.rebuild();
+        select(&mut app, "studio:%8");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            prompt_title(&app).as_deref(),
+            Some(words::new_session_prompt("studio").as_str()),
+            "{:?}",
+            toast_of(&app)
+        );
+        let _ = press(&mut app, KeyCode::Esc);
+        let local = app
+            .snap
+            .spaces
+            .iter()
+            .find(|s| s.machine.is_none())
+            .expect("a session of this machine")
+            .session_name
+            .clone();
+        app.filter = Some(crate::tui::input::Input::new(&local));
+        app.rebuild();
+        app.sel = local_session_row(&app);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert!(
+            matches!(app.overlay, Overlay::Project(_)),
+            "{:?}",
+            toast_of(&app)
+        );
+    }
+
+    /// The header line of a machine, as the real row building makes it, aims at that machine: studio asks for a
+    /// folder, pi (away) says why it cannot.
+    /// Mutation: `machine_of_row` loses its `Row::Machine(Some(at))` arm.
+    #[test]
+    fn n_on_a_machines_header_line_from_the_real_rows_aims_at_that_machine() {
+        let rig = Rig::new(None);
+        let header_of = |app: &App, name: &str| {
+            app.rows
+                .rows
+                .iter()
+                .position(|row| matches!(row, Row::Machine(Some(at)) if app.snap.machines[*at].name == name))
+                .unwrap_or_else(|| panic!("no header line for {name}"))
+        };
+        let mut app = rig.app();
+        app.sel = header_of(&app, "studio");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert_eq!(
+            prompt_title(&app).as_deref(),
+            Some(words::new_session_prompt("studio").as_str()),
+            "{:?}",
+            toast_of(&app)
+        );
+        let mut away = app_over(&rig.cfg, five_and_two("idle", false));
+        away.enter_app_mode(None, None);
+        away.sel = header_of(&away, "pi");
+        let _ = press(&mut away, KeyCode::Char('n'));
+        assert!(matches!(away.overlay, Overlay::None));
+        assert!(
+            toast_of(&away).unwrap().starts_with("pi is not connected"),
+            "{:?}",
+            toast_of(&away)
+        );
+    }
+
     /// This Mac's `pre_close` is asked for this Mac's row and never for a machine's.
     /// Mutation: `Feed::perform` stops sending a machine's action to `perform_remote`.
     #[test]

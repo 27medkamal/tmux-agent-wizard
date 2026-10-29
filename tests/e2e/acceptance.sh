@@ -3814,6 +3814,7 @@ echo "-- remote: taw app lists a machine, goes into it and back, the doorway, an
 rm_dir="$DIR/remote"; mkdir -p "$rm_dir/calls" "$rm_dir/far-bin" "$rm_dir/studio/home" "$rm_dir/studio/config" "$rm_dir/studio/state"
 rm_far="taw-e2e-remote-$$"                  # studio's tmux socket name
 rm_app_s="rm-app-$$"; rm_hand_s="rm-hand-$$" # the outer sessions that host the app and a hand-attached client
+rm_far_hand_s="rm-farhand-$$"                 # the outer session of a client attached by hand to studio's own server
 rm_dead=0                                   # 1 once a step the next ones stand on did not happen
 rm_far_file=""; rm_config_saved=""
 rm_q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
@@ -3968,6 +3969,7 @@ rm_cleanup() {
   command sleep 0.3
   outer kill-session -t "=$rm_app_s" 2>/dev/null
   outer kill-session -t "=$rm_hand_s" 2>/dev/null
+  outer kill-session -t "=$rm_far_hand_s" 2>/dev/null
   rm_track_calls
   for e in ${RM_TRACKED[@]+"${RM_TRACKED[@]}"}; do
     rest=${e#* }
@@ -4146,6 +4148,64 @@ tm kill-session -t "$rm_pin" 2>/dev/null
 check "(e) this Mac's sessions are as they were" "$rm_sessions_before" "$(tm list-sessions -F '#{session_id} #{session_name}')"
 fi
 [ "$rm_e_dead" = 0 ] || echo "  SKIP  (e) the steps after the one that did not happen"
+fi
+
+# --- (g) n on studio's row: a session made on studio itself, with no client of studio's moved. A client of studio's
+# own is attached by hand to garden first (a person at that machine), because `taw open` without --no-switch would
+# move a client of the server it runs on. The folder is typed as `~/<name>`, which is studio's own home (the far
+# taw expands it), and its session is named for it: the app goes in once its row is in the list (the cursor stayed
+# on the row n was pressed on), which is studio's tmux on the screen at that session. Studio's client ends then
+# (as (e) does), the session is ended, and the list is back for the step after this one.
+rm_g_name="rmnew"; rm_g_hand=""   # short: the status line of studio's tmux cuts a session's name at 10 characters; studio's home is this run's alone
+rm_g_hand_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_g_hand" '$1 == p { print $2 }'; }
+rm_g_app_at() { rm_far_tm list-clients -F '#{client_pid} #{session_name}' 2>/dev/null | awk -v p="$rm_g_hand" '$1 != p { print $2 }'; }
+rm_g_session_there() { rm_far_tm list-sessions -F '#{session_name}' 2>/dev/null | grep -qxF "$rm_g_name"; }
+rm_g_asked() { local n=$(($1 + 1)) c=0 f; while [ "$n" -le "$(rm_calls)" ]; do f="$rm_dir/calls/$n"; tr '\0' ' ' < "$f" | grep -qF "'open' '--json' '--no-switch' '--' " && c=$((c+1)); n=$((n+1)); done; echo "$c"; }
+rm_g_row_gone() { ! rm_has "$rm_g_name"; }
+if rm_live "(g) n on studio's row"; then
+mkdir -p "$rm_h/$rm_g_name"
+rm_g_cmd="exec env -i"
+for rm_w in "${rm_far_env[@]}"; do rm_g_cmd="$rm_g_cmd $(rm_q "$rm_w")"; done
+rm_g_cmd="$rm_g_cmd $(rm_q "PATH=$rm_far_path") TERM=xterm-256color $(rm_q "$rm_dir/tmux-quiet") -L $rm_far attach-session -t '=garden'"
+outer new-session -d -s "$rm_far_hand_s" -x 160 -y 40 "$rm_g_cmd"
+rm_wait 8000 rm_far_clients_are 1
+rm_g_hand=$(rm_far_tm list-clients -F '#{client_pid}' 2>/dev/null | head -1)
+[ -z "$rm_g_hand" ] || rm_track hand "$rm_g_hand"
+check "(g) a client of studio's own is attached by hand, to garden" "garden" "$(rm_g_hand_at)"
+[ "$(rm_g_hand_at)" = garden ] || rm_dead=1
+if [ "$rm_dead" = 0 ]; then
+  rm_tab_to gardener 4
+  check "(g) the cursor is on a live row of studio" "gardener" "$(rm_selected | grep -o gardener)"
+  rm_g_calls=$(rm_calls)
+  rm_press n
+  rm_see "(g) n on a row of studio asks for a folder on studio" "new session on studio"
+fi
+if [ "$rm_dead" = 0 ]; then
+  # shellcheck disable=SC2088  # typed as it is, a tilde: studio's taw expands it
+  rm_press -l "~/$rm_g_name"
+  rm_press Enter
+  rm_wait 15000 rm_g_session_there
+  check "(g) studio's own server has the session" "1" "$(rm_g_session_there && echo 1 || echo 0)"
+  check "(g) studio's taw was asked as the app asks it: open --json --no-switch -- <the folder>" "1" "$(rm_g_asked "$rm_g_calls")"
+  rm_see "(g) the app goes into the session: studio's tmux is on the screen, at it" "[$rm_g_name]"
+fi
+if [ "$rm_dead" = 0 ]; then
+  rm_wait 10000 rm_far_clients_are 2
+  check "(g) studio's server has two clients: the one attached by hand and the app's" "2" "$(rm_far_clients)"
+  check "(g) the client attached by hand has not moved: it is still on garden" "garden" "$(rm_g_hand_at)"
+  check "(g) the app's client is on the new session" "$rm_g_name" "$(rm_g_app_at)"
+  rm_far_tm detach-client -s "$rm_g_name"
+  rm_see "(g) with the app's client gone, the app's list is back" " taw app"
+fi
+check "(g) the client attached by hand never moved, to the end" "garden" "$(rm_g_hand_at)"
+# Studio is as it was: the session ended, the hand's terminal ended, and the list without the row (a wait for the
+# toast to go as well, which names the session).
+rm_far_tm kill-session -t "=$rm_g_name" 2>/dev/null
+outer kill-session -t "=$rm_far_hand_s" 2>/dev/null
+[ "$rm_dead" != 0 ] || rm_wait 12000 rm_g_row_gone
+[ "$rm_dead" != 0 ] || check "(g) studio's list no longer names the session" "1" "$(rm_g_row_gone && echo 1 || echo 0)"
+rm_wait 8000 rm_far_clients_are 0
+check "(g) studio's server has no client left" "0" "$(rm_far_clients)"
 fi
 
 # --- (f) the machine dropping off while the app's list is open. The feed of studio (the stand-in's call that runs

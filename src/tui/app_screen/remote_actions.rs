@@ -135,6 +135,14 @@ impl RemoteActions {
         self.flights.contains_key(machine)
     }
 
+    /// Whether the verb in flight for `machine` was given up on: its reply was given (`TimedOut`) and the slot is
+    /// held only until its thread has ended its ssh.
+    pub(super) fn given_up(&self, machine: &str) -> bool {
+        self.flights
+            .get(machine)
+            .is_some_and(|flight| flight.given_up)
+    }
+
     /// Whether nothing is in flight.
     #[cfg(test)]
     pub(super) fn is_idle(&self) -> bool {
@@ -510,7 +518,7 @@ impl Rows {
     /// worktree) a route to go in by, which the screen follows. An answer that comes when the token is not the
     /// one sent, or the cursor has left the row it was for, or something else is open, says only its toast.
     pub(super) fn settle(&mut self, app: &mut App) -> Vec<Route> {
-        self.settle_lists(app);
+        self.settle_lists(app, Instant::now());
         let now = app.wall_ms();
         let finished = self.worker.poll(Instant::now());
         let mut routes = Vec::new();
@@ -626,8 +634,8 @@ impl Rows {
     }
 
     /// What the machines answered their pickers' asks for folders, handed to the app ([`App::far_answered`]).
-    fn settle_lists(&mut self, app: &mut App) {
-        for done in self.lists.poll(Instant::now()) {
+    fn settle_lists(&mut self, app: &mut App, now: Instant) {
+        for done in self.lists.poll(now) {
             let machine = done.machine.as_str();
             let answer = match done.reply {
                 Reply::Done => match crate::machine::actions::candidates_offered(&done.stdout) {
@@ -777,6 +785,11 @@ impl Feed<'_> {
             return;
         };
         if self.remote.lists.busy(&machine) {
+            // An ask still on its way answers this one too. One that was given up on holds the slot only until
+            // its thread is over, and will never answer: this ask waits for the slot (it is put back).
+            if self.remote.lists.given_up(&machine) {
+                app.far_ask = Some(machine);
+            }
             return;
         }
         let Some(found) = self.machines.iter().find(|m| m.name == machine).cloned() else {
@@ -2349,6 +2362,133 @@ mod rows_tests {
             Some("studio"),
             "the taw was updated"
         );
+    }
+
+    fn far_list_of(name: &str, dir: &str) -> crate::tui::picker::FarList {
+        crate::tui::picker::FarList {
+            folders: vec![crate::tui::picker::FarFolder {
+                kind: "zoxide".into(),
+                name: name.into(),
+                dir: dir.into(),
+                session: None,
+            }],
+            truncated: false,
+            sessions_error: None,
+        }
+    }
+
+    /// Gives up on the lists in flight as if 100 s had passed, and waits until their threads are over.
+    fn give_up_lists(feed: &mut Feed, app: &mut App) {
+        feed.remote
+            .settle_lists(app, Instant::now() + Duration::from_secs(100));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while feed.remote.listing("studio") {
+            assert!(
+                Instant::now() < deadline,
+                "the ask's thread did not end in 20 s"
+            );
+            let _ = feed.remote.settle(app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Another machine's answer never fills this machine's picker (it is kept for that machine's next n), and an
+    /// answer that comes after Esc changes nothing on screen and is kept for the next n there.
+    /// Mutation: `far_answered` fills any open picker (the `far.machine == machine` guard goes).
+    #[test]
+    fn an_answer_for_another_machine_or_after_esc_does_not_touch_the_picker() {
+        let rig = Rig::new(None);
+        let mut app = rig.app();
+        select(&mut app, "studio:$4");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        app.far_answered(
+            "pi",
+            FarAnswer::Folders(far_list_of("~/on-pi", "/home/pi/on-pi")),
+        );
+        assert_eq!(
+            far_state(&app),
+            ("studio".to_string(), Vec::new(), true, None),
+            "studio's picker is as it was, still asking"
+        );
+        assert!(
+            app.far_folders.contains_key("pi"),
+            "pi's list is kept for pi"
+        );
+        let _ = press(&mut app, KeyCode::Esc);
+        app.far_answered(
+            "studio",
+            FarAnswer::Folders(far_list_of("~/late", "/home/studio/late")),
+        );
+        assert!(matches!(app.overlay, Overlay::None), "nothing opens");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        assert_eq!(far_state(&app).1, ["~/late"], "the next n shows it at once");
+    }
+
+    /// A second n while the ask is in flight makes no second ask.
+    #[test]
+    fn a_second_n_while_the_ask_is_in_flight_asks_nothing_more() {
+        let rig = Rig::new(None);
+        let _hang = rig.fake(FOLDERS, 0, true);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _ = press(&mut app, KeyCode::Char('n'));
+        feed.ask_for_folders(&mut app);
+        wait_for_sent(&rig, 3);
+        let _ = press(&mut app, KeyCode::Esc);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        feed.ask_for_folders(&mut app);
+        assert!(
+            feed.remote.listing("studio"),
+            "the first ask is still on its way"
+        );
+        assert_eq!(rig.sent(), ["session", "candidates", "--json"], "one ask");
+        give_up_lists(&mut feed, &mut app);
+    }
+
+    /// After an ask timed out, the next n asks again: the slot may still be held by the given-up thread, and the
+    /// ask is put back until it is free, so the picker is filled and does not say asking for ever.
+    /// Mutation: `ask_for_folders` does not put the ask back when the flight is given up.
+    #[test]
+    fn the_far_picker_asks_again_after_a_timed_out_ask() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let hang = rig.fake(FOLDERS, 0, true);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        feed.ask_for_folders(&mut app);
+        wait_for_sent(&rig, 3);
+        feed.remote
+            .settle_lists(&mut app, Instant::now() + Duration::from_secs(100));
+        let (_, _, asking, said) = far_state(&app);
+        assert!(!asking);
+        assert_eq!(
+            said.as_deref(),
+            Some(words::timed_out("studio", 20).as_str())
+        );
+        let _ = press(&mut app, KeyCode::Esc);
+        drop(hang);
+        let _answers = rig.fake(FOLDERS, 0, false);
+        let _ = press(&mut app, KeyCode::Char('n'));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while far_state(&app).1.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "still asking after a timed-out ask: {:?}",
+                far_state(&app)
+            );
+            feed.ask_for_folders(&mut app);
+            let _ = feed.remote.settle(&mut app);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(far_state(&app).1.len(), 3);
+    }
+
+    fn wait_for_sent(rig: &Rig, lines: usize) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while rig.sent().len() < lines {
+            assert!(Instant::now() < deadline, "the far command did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// A local row still opens this Mac's picker, a machine that is away says why, and the popup says the row is

@@ -1515,6 +1515,33 @@ mod tests {
         assert!(changes(&log).is_empty());
     }
 
+    /// `--no-switch` makes or finds a session and moves no client, so with no directory it has no picker
+    /// to fall back on: it is refused, as a usage error (exit 2, `invalid_argument` under `--json`), and
+    /// nothing is made.
+    #[test]
+    fn no_switch_with_no_terms_is_refused() {
+        for json in [false, true] {
+            for terms in [vec![], vec!["  ".to_string()]] {
+                let w = world();
+                let (tmux, log) = stub_tmux(&w.root, true);
+                let ctx = stub_ctx(tmux);
+
+                let Err(err) = open_with(&ctx, &terms, json, true, &here(&w, true)) else {
+                    panic!("no failure: {terms:?} json {json}")
+                };
+
+                assert_eq!(
+                    why(&err),
+                    "--no-switch needs a directory or a zoxide term",
+                    "{terms:?} json {json}"
+                );
+                assert_eq!(code_for(&err), "invalid_argument", "json {json}");
+                assert_eq!(exit_code(&err), 2, "json {json}");
+                assert!(changes(&log).is_empty(), "json {json}");
+            }
+        }
+    }
+
     /// Inside tmux with nothing to open, the popup is opened the way the plugin's key opens
     /// it, told to start on the picker.
     #[test]

@@ -3691,3 +3691,57 @@ fn a_pane_a_client_on_a_grouped_session_shows_is_marked_seen() {
         agent_state_of(&mac, "one")
     );
 }
+
+/// The session the app came from is kept by its id. A session row lands by its id, but a directory the filter lists
+/// lands by the name of the session it opens (`=alpha`). Renamed while the person was on the list, and its old name
+/// given to another session, the session the app came from is still the one prefix + L goes back to. Kept by the
+/// landing's name, the client's last session would be the new session of that name.
+#[test]
+fn the_session_the_app_came_from_is_kept_by_its_id_through_a_rename() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    let projects = mac.work_dir().join("projects");
+    std::fs::create_dir_all(projects.join("alpha")).unwrap();
+    mac.write_config(&format!(
+        "[ui]\nprojects_in_filter = true\n\n[sessions]\nzoxide = false\nproject_dirs = [\"{}\"]\n",
+        projects.display()
+    ));
+    two_sessions(&mac);
+    let term = terminal(120);
+    type_app(
+        &term,
+        &mac,
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    // Into the session of the directory, which the app creates and lands on by its name.
+    press(&term, &["/"]);
+    press(&term, &["a", "l", "p", "h", "a"]);
+    expect_terminal(&term, "the directory listed", |screen| {
+        screen.contains("alpha")
+    });
+    press(&term, &["Enter"]);
+    let (pid, name, first, _) = new_client_sessions(&mac, 0);
+    assert_eq!(first, "alpha", "the directory's session");
+    mac.tmux_ok(&["detach-client", "-t", &name]);
+    expect_terminal(&term, "the list again", |screen| {
+        screen.contains(" taw app") && screen.contains("beta")
+    });
+    mac.tmux_ok(&["rename-session", "-t", "=alpha", "uno"]);
+    mac.tmux_ok(&["new-session", "-d", "-s", "alpha"]);
+    expect_terminal(&term, "the renamed session listed", |screen| {
+        screen.contains("uno")
+    });
+    // Into beta by the filter (a session row lands by its id): the client's last session is the one it came from.
+    press(&term, &["/", "b", "e", "t", "a", "Enter"]);
+    let (_, _, second, last) = new_client_sessions(&mac, pid);
+    assert_eq!(second, "beta", "the second landing");
+    assert_eq!(
+        last, "uno",
+        "the client's last session is the one it came from, which has another name now"
+    );
+}

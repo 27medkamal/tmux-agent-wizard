@@ -1174,9 +1174,14 @@ mod rows_tests {
 
     /// Settles until studio's verb has answered; the routes the answers made.
     fn answered(feed: &mut Feed, app: &mut App) -> Vec<Route> {
+        answered_by(feed, app, "studio")
+    }
+
+    /// Settles until `machine`'s verb has answered; the routes the answers made.
+    fn answered_by(feed: &mut Feed, app: &mut App, machine: &str) -> Vec<Route> {
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut routes = Vec::new();
-        while feed.remote.busy("studio") {
+        while feed.remote.busy(machine) {
             assert!(
                 Instant::now() < deadline,
                 "no answer in 20 s; toast {:?}",
@@ -2266,6 +2271,92 @@ mod rows_tests {
             matches!(app.current(), Some(Row::Session(s)) if app.snap.spaces[*s].session_id == newest)
         );
         assert!(feed.remote.awaiting.is_none());
+    }
+
+    /// There is one wait for a made session, and the newest `n` owns it: `n` on studio, then on pi, both answered,
+    /// goes in to pi's session only, and studio's wait is gone.
+    /// Mutation: a wait is set only when there is none (`self.awaiting.is_none()` guards the assignment).
+    #[test]
+    fn the_newest_ns_wait_replaces_an_older_one() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        feed.machines.push(Machine {
+            name: "pi".into(),
+            ssh: "pi".into(),
+            taw: None,
+        });
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "newbie");
+        let pi = app
+            .snap
+            .spaces
+            .iter()
+            .find(|s| s.session_id.starts_with("pi:"))
+            .expect("a session of pi");
+        let (pi_id, pi_name) = (pi.session_id.clone(), pi.session_name.clone());
+        select(&mut app, &pi_id);
+        fs::write(
+            rig.path("envelope.txt"),
+            format!(
+                "{}\n",
+                OPENED.replace("garden\",\"created", &format!("{pi_name}\",\"created"))
+            ),
+        )
+        .unwrap();
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "pi".into(),
+                term: "y".into(),
+            },
+        );
+        let routes = answered_by(&mut feed, &mut app, "pi");
+        assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { machine, target, .. } if machine == "pi" && Some(target.as_str()) == pi_id.strip_prefix("pi:")),
+            "{routes:?}"
+        );
+        assert!(feed.remote.awaiting.is_none(), "studio's wait is gone");
+        // The row studio made shows now: nothing goes in to it.
+        list_session(&mut app, "newbie", true);
+        assert!(feed.remote.settle(&mut app).is_empty());
+    }
+
+    /// A second `n` on the same row, answered before the first one's row showed, takes over the one wait: when
+    /// both rows show, the app goes in to the second only.
+    /// Mutation: a wait is set only when there is none (`self.awaiting.is_none()` guards the assignment).
+    #[test]
+    fn a_second_n_on_the_same_row_replaces_the_first_ones_wait() {
+        let rig = Rig::new(None);
+        let (mut feed, mut app) = (rig.feed(), rig.app());
+        select(&mut app, "studio:$4");
+        let _fake = made_not_yet_shown(&rig, &mut feed, &mut app, "first");
+        fs::write(
+            rig.path("envelope.txt"),
+            format!(
+                "{}\n",
+                OPENED.replace("garden\",\"created", "second\",\"created")
+            ),
+        )
+        .unwrap();
+        send(
+            &mut feed,
+            &mut app,
+            &Action::NewRemoteSession {
+                machine: "studio".into(),
+                term: "y".into(),
+            },
+        );
+        assert!(answered(&mut feed, &mut app).is_empty());
+        list_session(&mut app, "first", true);
+        list_session(&mut app, "second", true);
+        let second = app.snap.spaces.last().unwrap().session_id.clone();
+        let routes = feed.remote.settle(&mut app);
+        assert_eq!(routes.len(), 1, "{routes:?}");
+        assert!(
+            matches!(&routes[0], Route::Attach { target, .. } if Some(target.as_str()) == second.strip_prefix("studio:")),
+            "{routes:?}"
+        );
     }
 
     /// This Mac's `pre_close` is asked for this Mac's row and never for a machine's.

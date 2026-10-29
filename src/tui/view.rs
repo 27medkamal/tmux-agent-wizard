@@ -1171,7 +1171,7 @@ fn session_lines(
         } else {
             Vec::new()
         };
-        return prefixed(prefix, template_lines(template, space, ctx));
+        return prefixed(prefix, None, template_lines(template, space, ctx));
     }
     let theme = &app.theme;
     let indicators = app.cfg.ui.status_indicators;
@@ -1287,7 +1287,20 @@ fn pane_lines(
         } else {
             Vec::new()
         };
-        return prefixed(prefix, template_lines(template, agent, ctx));
+        // A tree row that is not the last carries the tree line on down through its further
+        // lines: the same six columns, with the connector's own `\u{2502}` under its `\u{251c}`.
+        let rest = if app.flat_now() || last {
+            None
+        } else {
+            prefix.get(prefix.len().wrapping_sub(2)).map(|connector| {
+                vec![
+                    Span::raw("    "),
+                    Span::styled("\u{2502}", connector.style),
+                    Span::raw(" "),
+                ]
+            })
+        };
+        return prefixed(prefix, rest, template_lines(template, agent, ctx));
     }
     let theme = &app.theme;
     let dim = Style::default().fg(theme.dim);
@@ -1735,10 +1748,14 @@ fn now_secs() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// `lines` with `prefix` in front of the first, and as many blank columns in front of each of
-/// the others, so a template that draws more than one line for a row keeps them under its first.
-/// No prefix leaves the lines as they are.
-fn prefixed(prefix: Vec<Span<'static>>, lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+/// `lines` with `prefix` in front of the first, and `rest` (or as many blank columns when it is
+/// `None`) in front of each of the others, so a template that draws more than one line for a row
+/// keeps them under its first. No prefix leaves the lines as they are.
+fn prefixed(
+    prefix: Vec<Span<'static>>,
+    rest: Option<Vec<Span<'static>>>,
+    lines: Vec<Line<'static>>,
+) -> Vec<Line<'static>> {
     if prefix.is_empty() {
         return lines;
     }
@@ -1754,7 +1771,8 @@ fn prefixed(prefix: Vec<Span<'static>>, lines: Vec<Line<'static>>) -> Vec<Line<'
             let mut spans = if at == 0 {
                 prefix.clone()
             } else {
-                vec![Span::raw(" ".repeat(width))]
+                rest.clone()
+                    .unwrap_or_else(|| vec![Span::raw(" ".repeat(width))])
             };
             spans.extend(line.spans);
             Line::from(spans)

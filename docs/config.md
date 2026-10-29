@@ -144,7 +144,8 @@ The keys taw adds to herdr's, or reads with another default or meaning, with the
 | `[hooks] pre_close`, `pre_worktree_remove` | *(unset)* | commands taw waits for before a close or a worktree removal; a non-zero exit refuses |
 | `[hooks] timeout_seconds` | `30` | how long an event hook may run before taw stops it; `0` means no limit |
 
-Row templates are still herdr's, unchanged:
+Row templates use herdr's format. These are the defaults, and while your rows equal them taw draws its own
+columns (below); set different rows to draw from the template instead:
 
 ```toml
 [ui.sidebar.agents]
@@ -157,8 +158,10 @@ rows = [["state_icon", "workspace"], ["branch", "git_status"]]
 ```
 
 A row drawn from a template keeps what the popup puts in front of every row while `[ui] labels` is on: a session's
-number and its `*` or `-` flag, and an agent's letter and tree connector, so the keys stay on screen. The template
-draws what follows them. With `[ui] labels = false` the rows are the template's alone.
+number and its `*` or `-` flag, and an agent's letter and tree connector (in the flat list, the row's number), so the
+keys stay on screen. When an agent's template draws more than one line, the tree line runs down through the further
+lines of every row but the last. The template draws what follows. With `[ui] labels = false` the rows are the
+template's alone.
 
 A token can be styled inline, `{ token = "workspace", fg = "#89b4fa", bold = true }`
 (`fg` is `#rrggbb`, `#rgb` or a colour name), and can carry up to 16 `rules`, conditions

@@ -341,6 +341,174 @@ rows = [["state_icon", "agent"]]
     );
 }
 
+/// The flat list has no tree: a template row keeps the number and a space, so the glyph is where
+/// a built-in flat row has it.
+#[test]
+fn a_flat_agent_template_keeps_the_number_at_column_one_and_the_glyph_at_column_three() {
+    let cfg = config(
+        r##"[ui]
+layout = "flat"
+agent_panel_sort = "sessions"
+[ui.sidebar.agents]
+rows = [["state_icon", "agent"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, x) = find(&screen, "\u{23f5} claude");
+    assert_eq!(
+        x, 3,
+        "the glyph follows the number and a space: {}",
+        screen[y]
+    );
+    let number = screen[y].chars().nth(1).expect("a column 1");
+    assert!(
+        number.is_ascii_digit(),
+        "the number sits at column 1: {:?}",
+        screen[y]
+    );
+}
+
+/// A session template of two rows: the second line is under the first, four columns in, where
+/// the name starts (the number, a space, the flag, a space).
+#[test]
+fn a_two_line_session_template_starts_its_second_line_four_columns_in() {
+    let cfg = config("[ui.sidebar.sessions]\nrows = [[\"workspace\"], [\"branch\"]]\n");
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, x) = find(&screen, "1 * mobile");
+    assert_eq!(x, 1);
+    assert!(
+        screen[y + 1].starts_with("\u{2502}    master"),
+        "the branch is under the name: {:?}",
+        screen[y + 1]
+    );
+}
+
+/// A session whose every token is hidden still shows its number and flag: the key works.
+#[test]
+fn a_session_row_a_hide_rule_empties_keeps_its_number_and_its_flag() {
+    let cfg = config(
+        r##"[ui.sidebar.sessions]
+rows = [[{ token = "branch", rules = [{ equals = "master", hide = true }] }]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+
+    let (y, x) = find(&screen, "1 * ");
+    assert_eq!(x, 1, "{}", screen[y]);
+    let tree = screen[y]
+        .split('\u{2502}')
+        .nth(1)
+        .expect("the tree's cells");
+    assert_eq!(
+        tree.trim_end(),
+        "1 *",
+        "nothing but the prefix: {:?}",
+        screen[y]
+    );
+}
+
+/// The prefix a template row draws is the one a built-in row draws, style and all: the number,
+/// the flag, the letter, and the connector in its own weight and colour (the open window's bold
+/// and white, your session's accent, the dim rest). Compared cell by cell against the frame with
+/// no template, with the cursor on each of the first rows in turn.
+#[test]
+fn a_template_rows_prefix_is_styled_as_a_built_in_rows_is() {
+    let built_in = config("");
+    let templated = config(
+        r##"[ui.sidebar.sessions]
+rows = [["workspace"]]
+[ui.sidebar.agents]
+rows = [["state_icon", "agent"]]
+"##,
+    );
+    for steps in 0..12 {
+        let mut one = app(&built_in);
+        let mut other = app(&templated);
+        one.move_by(steps);
+        other.move_by(steps);
+        let a = frame(&mut one, W, H);
+        let b = frame(&mut other, W, H);
+        let screen = lines_of(&a);
+        let mut compared = 0;
+        for y in 0..H {
+            for x in 1..=5u16 {
+                let (old, new) = (&a[(x, y)], &b[(x, y)]);
+                let connector = matches!(old.symbol(), "\u{251c}" | "\u{2514}");
+                if x == 5 && !connector {
+                    continue;
+                }
+                compared += 1;
+                assert_eq!(
+                    (old.symbol(), old.style()),
+                    (new.symbol(), new.style()),
+                    "cursor {steps}, cell ({x}, {y}) of:\n{}",
+                    screen.join("\n")
+                );
+            }
+        }
+        assert!(compared > 100, "the comparison saw {compared} cells");
+    }
+}
+
+/// The docs' two-line agent template, one token fewer in its first line (the docs' own rows are
+/// herdr's defaults, which taw draws as its built-in rows; the agents depth, so every row is the
+/// template's, not a shell's built-in one): the tree line runs down through a row's second line,
+/// under its `\u{251c}`, and the last row of a session ends it with a blank.
+#[test]
+fn a_two_line_agent_template_keeps_the_tree_line_through_every_row_but_the_last() {
+    let cfg = config(
+        r##"[ui]
+depth = "agents"
+[ui.sidebar.agents]
+rows = [["state_icon", "tab"], ["agent"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let buffer = frame(&mut app, W, H);
+    let screen = lines_of(&buffer);
+
+    let mut seen_through = 0;
+    let mut seen_blank = 0;
+    for y in 0..screen.len() - 1 {
+        let cell = |x: u16, y: usize| buffer[(x, y as u16)].symbol().to_string();
+        if cell(5, y) == "\u{251c}" {
+            assert_eq!(
+                cell(5, y + 1),
+                "\u{2502}",
+                "the tree line runs on under a row that is not the last:\n{}",
+                screen.join("\n")
+            );
+            assert_eq!(
+                buffer[(5, (y + 1) as u16)].style(),
+                buffer[(5, y as u16)].style(),
+                "in the connector's own style"
+            );
+            seen_through += 1;
+        } else if cell(5, y) == "\u{2514}" {
+            // Under a session's last row: a blank under the template's second line, or the next
+            // header (a parked worktree's row has one line). Never a tree line.
+            assert_ne!(
+                cell(5, y + 1),
+                "\u{2502}",
+                "the last row of a session ends the line:\n{}",
+                screen.join("\n")
+            );
+            if cell(5, y + 1) == " " {
+                seen_blank += 1;
+            }
+        }
+    }
+    assert!(
+        seen_through > 3 && seen_blank >= 2,
+        "{seen_through} {seen_blank}"
+    );
+}
+
 /// A token's `rules` in a real frame (herdr v0.9.1, `configuration.mdx`): a `$load` token
 /// that reports `90` is red and bold, one that reports `12` is not, and a `$machine` token
 /// hidden by `equals = "Local"` takes its whole row with it, so the agent that reports

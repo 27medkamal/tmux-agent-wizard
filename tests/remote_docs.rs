@@ -706,6 +706,7 @@ fn the_docs_say_taw_opens_no_switch_and_dir_and_the_far_ns_limits() {
     for needle in [
         "only while the cursor stays on the row `n` was pressed on",
         "it gives up after 5 s",
+        "The taw on that machine needs taw 0.1.3 or newer for it",
     ] {
         assert!(
             machines.contains(needle),

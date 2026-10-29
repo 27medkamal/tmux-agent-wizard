@@ -756,12 +756,15 @@ fn the_window_is_160_columns_by_34_rows_sized_to_the_viewport() {
         .expect("the homepage's try rule");
     for part in [
         "width: min(calc(100vw - 3rem), 1600px)",
-        "left: 50%",
-        "translateX(-50%)",
+        "margin-left: calc(50% - min(50vw - 1.5rem, 800px))",
         "scroll-margin-top: 3rem",
     ] {
         assert!(rule.contains(part), "the try rule lacks {part:?}: {rule}");
     }
+    assert!(
+        !rule.contains("translateX") && !rule.contains("left: 50%"),
+        "the try box is centred by a transform again: {rule}"
+    );
 }
 
 /// Whether `node` runs here. The smoke run below needs it; a machine without it prints a skip

@@ -304,8 +304,12 @@
    width less a small margin, at most 1600 px, centred on the page. The popup sizes itself to this width and to the
    viewport's height, and #try scrolls to just under the site header, so the whole window shows at once. */
 .taw-hero-try {
-  position: relative; left: 50%; transform: translateX(-50%);
+  position: relative;
   width: min(calc(100vw - 3rem), 1600px); margin: 1.6rem 0 0; text-align: left; scroll-margin-top: 3rem;
+  /* Centred by a margin, not a transform: at an odd width the frame still starts on a half pixel, but it is laid
+     out like any other box instead of drawn as a moved layer, whose text can blur. Half the width above is
+     min(50vw - 1.5rem, 800px). */
+  margin-left: calc(50% - min(50vw - 1.5rem, 800px));
 }
 .taw-try-narrow { display: none; width: 100%; height: auto; }
 /* Under 700 px the live popup is hidden and the recording shows in its place. */

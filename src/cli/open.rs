@@ -421,20 +421,23 @@ pub(crate) fn usable_came_from<'a>(
     target: &str,
 ) -> Option<&'a str> {
     let came_from = came_from?;
-    let id_of = |session: &str| {
-        tmux.run(&[
-            "display-message",
-            "-p",
-            "-t",
-            &format!("{session}:"),
-            "#{session_id}",
-        ])
-        .ok()
-        .map(|id| id.trim().to_string())
-        .filter(|id| !id.is_empty())
-    };
-    let from = id_of(came_from)?;
-    (id_of(target).as_deref() != Some(from.as_str())).then_some(came_from)
+    let from = session_id_of(tmux, came_from)?;
+    (session_id_of(tmux, target).as_deref() != Some(from.as_str())).then_some(came_from)
+}
+
+/// The session id (`$3`) of the session `session` names (an id, or `=name`), `None` when there is none. A name
+/// is not kept as a way to come back to a session: it can be renamed, and the name given to another.
+pub(crate) fn session_id_of(tmux: &Tmux, session: &str) -> Option<String> {
+    tmux.run(&[
+        "display-message",
+        "-p",
+        "-t",
+        &format!("{session}:"),
+        "#{session_id}",
+    ])
+    .ok()
+    .map(|id| id.trim().to_string())
+    .filter(|id| !id.is_empty())
 }
 
 /// Replaces this process with `command`, so the terminal becomes the tmux client. Only a
@@ -569,6 +572,16 @@ mod tests {
             None,
             "same by name"
         );
+    }
+
+    /// The id of a session is read from its id or its name, and is none when the session is gone.
+    #[test]
+    fn a_session_is_kept_by_its_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = sessions_tmux(dir.path(), &[("=api", "$5"), ("$5", "$5")]);
+        assert_eq!(session_id_of(&tmux, "=api").as_deref(), Some("$5"));
+        assert_eq!(session_id_of(&tmux, "$5").as_deref(), Some("$5"));
+        assert_eq!(session_id_of(&tmux, "=gone"), None);
     }
 
     // ---------------------------------------------------------------- helpers

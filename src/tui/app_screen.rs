@@ -947,7 +947,8 @@ impl Feed<'_> {
         let came_from =
             crate::cli::open::usable_came_from(self.tmux, came_from.as_deref(), &landing.target);
         let mut command = crate::cli::open::attach_from(self.tmux, came_from, &landing.target);
-        self.last_attached = Some(landing.target.clone());
+        // Kept by its id: a name can be renamed, and the name given to another session.
+        self.last_attached = crate::cli::open::session_id_of(self.tmux, &landing.target);
         // tmux's client prints its exit line (`[detached (from session api)]`) on its standard output, which is the
         // terminal the list is drawn on again, so the line showed until the list's first frame. The client draws
         // through its standard input and says what went wrong on its standard error: only the line is held back,

@@ -60,11 +60,11 @@ function load(html, opts = {}) {
   const docEl = new El('html'); const body = new El('body'); const mainEl = new El('main');
   const document = { documentElement: docEl, body, getElementById: id => byId[id] || (byId[id] = new El('div', { id })), querySelector: s => (s === '#ordertable tbody' ? orderBody : s === 'main' ? mainEl : null), querySelectorAll: s => { const m = s.match(/^input\[name=(\w+)\]$/); if (m) return radios.filter(r => r.attrs.name === m[1]); if (s === '[data-sc]') return buttons; return []; }, addEventListener: (t, f) => docListeners.push([t, f]), createElement: t => new El(t) };
   const mq = q => ({ matches: q.includes('max-width: 599px') ? !!opts.phone : false, addEventListener() {} });
-  const parentWin = opts.frame ? { innerHeight: opts.parentH || 860, document: { querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 48 }) }), body: { getAttribute: () => null } }, getComputedStyle: () => ({ scrollMarginTop: '60px' }), addEventListener: (t, f) => (winListeners['p' + t] = winListeners['p' + t] || []).push(f) } : null;
+  const parentWin = opts.frame ? { innerHeight: opts.parentH || 860, document: { querySelector: () => ({ getBoundingClientRect: () => ({ bottom: 48 }) }), body: { getAttribute: () => null } }, getComputedStyle: () => ({ scrollMarginTop: '60px' }), addEventListener: (t, f, o) => { const list = (winListeners['p' + t] = winListeners['p' + t] || []); list.push(f); if (o && o.signal) o.signal.addEventListener('abort', () => { const i = list.indexOf(f); if (i >= 0) list.splice(i, 1); }); } } : null;
   const window = { location: { search: opts.embed ? '?embed=1' : '' }, matchMedia: mq, scrollY: 0, innerHeight: opts.innerH || 860, frameElement: opts.frame ? { parentElement: new El('div'), style: {} } : null, addEventListener: (t, f) => (winListeners[t] = winListeners[t] || []).push(f) };
   window.parent = parentWin || window;
   class KeyboardEvent { constructor(t, e) { Object.assign(this, e); this.type = t; } }
-  class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } }
+  class MutationObserver { constructor(f) { this.f = f; } observe(t) { if (t === term) observers.push(this.f); } disconnect() {} }
   const sizeObservers = [];
   class ResizeObserver { constructor(f) { this.f = f; } observe() { sizeObservers.push(this.f); this.f(); } }
   const ctx = { AbortController, document, window, KeyboardEvent, MutationObserver, ResizeObserver, URLSearchParams, Intl, TextEncoder, getComputedStyle: () => ({ fontFamily: 'mono' }), setTimeout, clearTimeout, Date: { now: () => clock }, console };
@@ -80,6 +80,10 @@ function load(html, opts = {}) {
     scenario(sc) { const b = buttons.find(x => x.dataset.sc === sc); if (!b) throw new Error('no scenario ' + sc); b.fire('click', {}); },
     click(line) { const row = term.rows[line]; term.fire('click', { target: { closest: s => (s === '.row' ? row : null) } }); },
     rightClick(line) { const row = term.rows[line]; term.fire('contextmenu', { preventDefault() {}, target: { closest: s => (s === '.row' ? row : null) } }); },
+    // The frame's own pagehide, as the browser sends it: `persisted` is true when the page goes into the back/forward cache.
+    pagehide(persisted) { for (const f of (winListeners.pagehide || [])) f({ persisted }); },
+    // A resize of the parent window alone (the frame's own resize listeners stay quiet).
+    parentResize() { for (const f of (winListeners.presize || [])) f(); },
     resize() { for (const f of (winListeners.resize || [])) f(); for (const f of (winListeners.presize || [])) f(); for (const f of sizeObservers) f(); },
     text() { return (term.rows || []).map(r => r.innerHTML.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&amp;/g, '&')); },
     rows() { return (term.rows || []).map(r => r.innerHTML); },
@@ -345,6 +349,21 @@ for (const cols of [160, 100, 60]) {
     }
     if (!(fonts[100] > fonts[160])) note(way, `the font size at 100 columns (${fonts[100]}) is not larger than at 160 (${fonts[160]})`);
   }
+}
+
+// 10. What the frame hangs on its parent window goes when the frame is removed (pagehide, persisted false: a parent
+// resize then reads no layout), and stays when the page only goes into the back/forward cache (persisted true: a
+// parent resize still sizes the window, so Back finds a page that follows the parent).
+for (const persisted of [true, false]) {
+  const where = `the embedded page after pagehide, persisted ${persisted}`;
+  const p = loadPage(where, { embed: true, frame: true }, 160);
+  if (!p) continue;
+  if (!step(p, 160, where, () => { p.pagehide(persisted); })) continue;
+  const before = p.measures();
+  p.parentResize();
+  const reads = p.measures() - before;
+  if (persisted && reads === 0) note(where, 'a parent resize does not size the window after a pagehide that kept the page');
+  if (!persisted && reads !== 0) note(where, `${reads} layout reads on a parent resize after the frame was removed`);
 }
 
 if (problems.size) {

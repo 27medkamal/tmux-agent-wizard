@@ -1366,9 +1366,10 @@
   window.addEventListener('resize', refit);
   if (document.fonts) { document.fonts.addEventListener('loadingdone', refit); if (document.fonts.ready) document.fonts.ready.then(refit); }
   // Everything the frame hangs on its parent window goes when the frame does (the homepage keeps its window across
-  // pages), so a visit leaves nothing behind.
+  // pages), so a visit leaves nothing behind. A page that only goes into the
+  // back/forward cache (persisted) keeps them, since nothing hangs them again when Back brings it back.
   const gone = new AbortController(); let themeWatch = null;
-  window.addEventListener('pagehide', () => { gone.abort(); if (themeWatch) themeWatch.disconnect(); });
+  window.addEventListener('pagehide', e => { if (e.persisted) return; gone.abort(); if (themeWatch) themeWatch.disconnect(); });
   if (EMBED) try { window.parent.addEventListener('resize', refit, { signal: gone.signal }); } catch (e) { }
   const themeOf = () => {
     try { const scheme = window.parent.document.body.getAttribute('data-md-color-scheme'); if (scheme) return scheme === 'slate' ? 'dark' : 'light'; } catch (e) { }

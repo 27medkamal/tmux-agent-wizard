@@ -6552,3 +6552,215 @@ fn a_match_drawn_in_full_after_multi_character_graphemes_does_not_light_the_cut(
     let cut = &buffer[(screen[y][..end].chars().count() as u16, y as u16)];
     assert_ne!(cut.fg, theme.yellow, "the cut is not lit: {}", screen[y]);
 }
+
+// ------------------------------------------------------------------ template columns
+
+/// The two templates of scripts/demo/start.sh: an agent row is its state, its agent and its own
+/// title; a session row is its name and its branch, and main is hidden.
+const DEMO_ROWS: &str = r##"[ui.sidebar.agents]
+rows = [["state_icon", "agent", { token = "terminal_title_stripped", rules = [
+  { equals = "codex", hide = true },
+  { equals = "Gemini CLI", hide = true },
+] }]]
+
+[ui.sidebar.sessions]
+rows = [["workspace", { token = "branch", rules = [{ equals = "main", hide = true }] }]]
+"##;
+
+/// The screen line holding `needle`, and the column `needle` starts at.
+fn start_of(screen: &[String], needle: &str) -> usize {
+    let (y, x) = find(screen, needle);
+    assert!(x > 0, "{}", screen[y]);
+    x
+}
+
+#[test]
+fn template_titles_start_at_one_column_whatever_the_agents_name() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    let claude = start_of(&screen, "Tidy page styles");
+    // codex is shorter than claude, gemini the same: the title of a row with a shorter name is
+    // not drawn one column to its left.
+    assert_eq!(
+        start_of(&screen, "fix flaky tests"),
+        claude,
+        "{}",
+        screen.join("\n")
+    );
+    assert_eq!(
+        start_of(&screen, "Migrate auth"),
+        claude,
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn template_branches_start_at_one_column_across_session_rows() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    // mobile's `master` and web's `feat/invoices`: names of three and six letters.
+    assert_eq!(
+        start_of(&screen, "master"),
+        start_of(&screen, "feat/invoices"),
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn the_current_sessions_name_starts_where_the_others_do() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    // `1 * mobile` against `2   web` and `3   infra`: the flag takes the column a space does.
+    let (_, mobile) = find(&screen, "1 * mobile");
+    let name = mobile + 4;
+    assert_eq!(start_of(&screen, "web"), name, "{}", screen.join("\n"));
+    assert_eq!(start_of(&screen, "infra"), name, "{}", screen.join("\n"));
+}
+
+#[test]
+fn a_name_longer_than_the_cap_pushes_only_its_own_row() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let mut snap = app.snap.clone();
+    snap.spaces[1].session_name = "w".repeat(30);
+    app.set_snapshot(snap);
+    let screen = drawn(&mut app, W, H);
+    let name = column_of(&screen[find(&screen, "master").0], "mobile");
+    // The column is the cap wide (24) and a space; the long name's own row goes past it.
+    assert_eq!(
+        start_of(&screen, "master"),
+        name + 25,
+        "{}",
+        screen.join("\n")
+    );
+    assert_eq!(
+        start_of(&screen, "feat/invoices"),
+        name + 31,
+        "{}",
+        screen.join("\n")
+    );
+}
+
+#[test]
+fn a_token_hidden_in_the_middle_leaves_its_column_blank() {
+    let cfg = config(
+        r##"[ui.sidebar.sessions]
+rows = [["workspace", { token = "branch", rules = [{ equals = "master", hide = true }] }, "git_status"]]
+"##,
+    );
+    let mut app = app(&cfg);
+    let screen = drawn(&mut app, W, H);
+    // mobile's branch is hidden, and its status still starts where web's does: `feat/invoices`
+    // is the widest branch, so the status is 14 columns after the name column's end.
+    let status = start_of(&screen, "\u{b1}1");
+    assert_eq!(
+        start_of(&screen, "\u{b1}3 \u{2191}1"),
+        status,
+        "{}",
+        screen.join("\n")
+    );
+    assert_eq!(start_of(&screen, "+2"), status, "{}", screen.join("\n"));
+}
+
+#[test]
+fn no_template_row_ends_in_spaces() {
+    // The agents depth: every row is a template's, a plain pane's own row has its own padding.
+    let cfg = config(&format!("[ui]\ndepth = \"agents\"\n{DEMO_ROWS}"));
+    let app = app(&cfg);
+    let rows = tree_lines(&app);
+    assert!(rows.len() > 5, "rows to check");
+    for line in rows.into_iter().flatten() {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, text.trim_end(), "{text:?}");
+    }
+}
+
+#[test]
+fn padding_carries_no_colour_on_a_hot_row() {
+    let cfg = templated("\"state_icon\", \"agent\", \"tab\"");
+    let mut app = app(&cfg);
+    let done = app.theme.state_color(Some(AgentState::Done));
+    let buffer = frame(&mut app, W, H);
+    let lines = lines_of(&buffer);
+    // codex is done and unseen, so hot; its name is a letter shorter than claude's.
+    let (y, _) = find(&lines, "fix flaky tests");
+    let y = y - 1;
+    let x = column_of(&lines[y], "codex");
+    assert_eq!(buffer[(x as u16, y as u16)].fg, done, "{}", lines[y]);
+    assert_eq!(buffer[(x as u16 + 4, y as u16)].fg, done, "{}", lines[y]);
+    for pad in [5, 6] {
+        let cell = &buffer[(x as u16 + pad, y as u16)];
+        assert_eq!(cell.symbol(), " ", "{}", lines[y]);
+        assert_ne!(cell.fg, done, "padding at +{pad}: {}", lines[y]);
+    }
+    assert_eq!(
+        buffer[(x as u16 + 7, y as u16)].fg,
+        done,
+        "the tab: {}",
+        lines[y]
+    );
+}
+
+#[test]
+fn rows_scrolled_out_of_view_still_set_the_columns() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let mut snap = app.snap.clone();
+    // infra's claude, the last agent: far below what a short popup shows.
+    snap.agents
+        .iter_mut()
+        .filter(|a| a.pane_id == "%341")
+        .for_each(|a| {
+            a.display = Some("reviewer".to_string());
+        });
+    app.set_snapshot(snap);
+    let tall = drawn(&mut app, W, H);
+    let short = drawn(&mut app, W, 12);
+    assert!(
+        !short.iter().any(|l| l.contains("reviewer")),
+        "the long name is not on screen:\n{}",
+        short.join("\n")
+    );
+    let title = start_of(&short, "Tidy page styles");
+    assert_eq!(title, start_of(&tall, "Tidy page styles"));
+    // claude, a space, then the title after `reviewer` (eight columns) and its space.
+    let name = column_of(&short[find(&short, "Tidy page styles").0], "claude");
+    assert_eq!(title, name + 9, "{}", short.join("\n"));
+}
+
+#[test]
+fn a_filter_that_drops_the_longest_name_narrows_the_column() {
+    let cfg = config(DEMO_ROWS);
+    let mut app = app(&cfg);
+    let mut snap = app.snap.clone();
+    snap.agents
+        .iter_mut()
+        .filter(|a| a.pane_id == "%341")
+        .for_each(|a| {
+            a.display = Some("reviewer-bot".to_string());
+        });
+    app.set_snapshot(snap);
+    let before = drawn(&mut app, W, H);
+    let wide = start_of(&before, "fix flaky tests");
+    app.filter = Some(Input::new("flaky"));
+    app.rebuild();
+    let after = drawn(&mut app, W, H);
+    assert!(
+        !after.iter().any(|l| l.contains("reviewer-bot")),
+        "{}",
+        after.join("\n")
+    );
+    // reviewer-bot is twelve columns and codex five: the column is the longest
+    // name that is still shown.
+    assert_eq!(
+        start_of(&after, "fix flaky tests"),
+        wide - 7,
+        "{}",
+        after.join("\n")
+    );
+}

@@ -163,6 +163,8 @@ keys stay on screen. When an agent's template draws more than one line, the tree
 lines of every row but the last. The template draws what follows. With `[ui] labels = false` the rows are the
 template's alone.
 
+The tokens of a row line up in columns down the list: each token position is a column across the rows drawn from the same template line (session rows with the sessions template, agent rows with the agents template, a template of several lines line by line). A column is as wide as the widest value in it, up to 24 columns (the agent's name up to 16), measured over every row the list holds, so scrolling moves nothing, and over the rows a filter keeps. Every token but the last one on a row is padded to its column; a longer value pushes only its own row's later tokens. No row ends in spaces, and the padding has no colour.
+
 An agent row that needs you is drawn in its state's colour, bold while it is blocked, as the popup's own rows are: every token with no `fg` of its own that none of its `rules` restyled.
 
 A token can be styled inline, `{ token = "workspace", fg = "#89b4fa", bold = true }`
@@ -186,7 +188,7 @@ rule has exactly one condition: `equals`, `contains` or `starts_with` for text (
 unless `ignore_case = true`, which folds ASCII letters only), or `gt` or `lt` for a number
 (finite, compared strictly, and the whole text must be the number: `90` is over `gt = 80`,
 `90%` is not). The text is the token's whole value, before it is cut to fit the row.
-`hide = true` removes the token and the space before it, and a row left with no token is
+`hide = true` removes the token: in the middle of a row it leaves its column blank, so the tokens after it stay in line, and at the end of a row it leaves nothing. A row left with no token is
 not drawn. `state_icon` and `git_status` take no rules. A rule that is wrong, with two
 conditions or none, an unknown one (`regex`), a threshold that is not finite, or a
 seventeenth rule, is a config error, and `taw config check` says which. A key a token

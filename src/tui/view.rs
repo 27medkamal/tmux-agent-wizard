@@ -774,9 +774,13 @@ fn view_chip(app: &App) -> Option<String> {
 /// a configured `rows` template asks for more.
 fn tree_lines(app: &App) -> Vec<Vec<Line<'static>>> {
     let defaults = Sidebar::default();
+    // Every row's template tokens, measured over all the rows the list holds (not only the ones
+    // in view) so that a column does not move as the list scrolls.
+    let columns = template_columns(app, &defaults);
     let ctx = rows::Ctx {
         theme: &app.theme,
         indicators: app.cfg.ui.status_indicators,
+        columns: &columns,
     };
     // The rows that wear a letter, and those of them that are lit (the cursor's session's while
     // they are keys, or while the query is that session's number): worked out once for the
@@ -1787,6 +1791,45 @@ fn prefixed(
             Line::from(spans)
         })
         .collect()
+}
+
+/// The columns the template rows of the whole list line up in: each session row measured against
+/// the sessions template, each agent row against its agent's, over every row the list holds, the
+/// ones a filter dropped excluded.
+fn template_columns(app: &App, defaults: &Sidebar) -> rows::Columns {
+    let mut columns = rows::Columns::default();
+    let indicators = app.cfg.ui.status_indicators;
+    let above = app.rows.first_project().unwrap_or(app.rows.rows.len());
+    for row in app.rows.rows.iter().take(above) {
+        match row {
+            Row::Session(space) => {
+                if let Some(space) = app.snap.spaces.get(*space)
+                    && let Some(template) = rows::spaces_template(&app.cfg.ui.sidebar, defaults)
+                {
+                    for line in template {
+                        columns.measure(line, space, indicators);
+                    }
+                }
+            }
+            Row::Pane(pane) => {
+                if let Some(agent) = app
+                    .snap
+                    .panes
+                    .get(*pane)
+                    .and_then(|p| p.agent)
+                    .and_then(|a| app.snap.agents.get(a))
+                    && let Some(template) =
+                        rows::agents_template(&app.cfg.ui.sidebar, defaults, agent.kind.as_deref())
+                {
+                    for line in template {
+                        columns.measure(line, agent, indicators);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    columns
 }
 
 /// One entry's configured rows, herdr's way; `hot` is the style of an agent that needs you

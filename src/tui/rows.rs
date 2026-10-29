@@ -8,8 +8,11 @@
 //! disappears from the line rather than printing a placeholder, which is what keeps a
 //! herdr config with tokens we have no source for (workspace metadata, say) readable.
 
+use std::collections::HashMap;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use crate::config::{RowToken, RowsConfig, Sidebar, StatusIndicators, TokenStyle};
 use crate::tui::data::{self, AgentRow, Snapshot, SpaceRow};
@@ -21,6 +24,55 @@ use crate::tui::tree;
 pub struct Ctx<'a> {
     pub theme: &'a Theme,
     pub indicators: StatusIndicators,
+    /// The columns every row of the list lines up in ([`Columns`]).
+    pub columns: &'a Columns,
+}
+
+/// The widest a token's column grows: a longer value pushes the rest of its own row alone.
+const COLUMN_CAP: usize = 24;
+/// The same for the agent's name, which is a word and stays narrower.
+const AGENT_CAP: usize = 16;
+
+/// How wide each token position of a row template is across the rows drawn from it, so that the
+/// rows of one list line up in columns: the widest value in the position, up to a cap. Measured
+/// over every row the list holds (not the ones in view), so scrolling moves nothing.
+///
+/// A template line is told by its address: rows drawn from one line of one template share its
+/// columns, whatever machine they came from.
+#[derive(Default)]
+pub struct Columns {
+    widths: HashMap<usize, Vec<usize>>,
+}
+
+impl Columns {
+    /// Takes one row of `tokens` into account.
+    pub fn measure(
+        &mut self,
+        tokens: &[RowToken],
+        src: &dyn TokenSource,
+        indicators: StatusIndicators,
+    ) {
+        let widths = self
+            .widths
+            .entry(tokens.as_ptr() as usize)
+            .or_insert_with(|| vec![0; tokens.len()]);
+        for (at, cell) in cells(tokens, src, indicators).iter().enumerate() {
+            if let Some(part) = cell {
+                let cap = if part.token.token == "agent" {
+                    AGENT_CAP
+                } else {
+                    COLUMN_CAP
+                };
+                widths[at] = widths[at].max(part.text.width().min(cap));
+            }
+        }
+    }
+
+    fn of(&self, tokens: &[RowToken]) -> Option<&[usize]> {
+        self.widths
+            .get(&(tokens.as_ptr() as usize))
+            .map(Vec::as_slice)
+    }
 }
 
 /// A row of the sidebar, seen as a bag of named tokens.
@@ -32,11 +84,13 @@ pub trait TokenSource {
     fn token_color(&self, name: &str, theme: &Theme) -> Color;
 }
 
-/// Renders one configured row to a styled line: token texts joined by single spaces,
-/// each span coloured by its inline `fg` when set and by the row's own default
-/// otherwise, with `bold`/`dim` applied on top. A token's `rules` are read first: the first
-/// one its text meets lays its style over the token's own, or hides the token, and its
-/// separator goes with it (a row with none left is an empty line, which callers drop).
+/// Renders one configured row to a styled line: token texts, each span coloured by its inline
+/// `fg` when set and by the row's own default otherwise, with `bold`/`dim` applied on top. Every
+/// token but the last one shown is padded to its column ([`Columns`]) and followed by a space; the
+/// padding is plain, and a token a rule hid (or that has no text) in the middle leaves its column
+/// blank, so the tokens after it stay in line. A row ends in no padding. A token's `rules` are read
+/// first: the first one its text meets lays its style over the token's own, or hides the token
+/// (a row with none left is an empty line, which callers drop).
 pub fn render_row(tokens: &[RowToken], src: &dyn TokenSource, ctx: &Ctx) -> Line<'static> {
     render_row_with(tokens, src, ctx, None)
 }
@@ -50,11 +104,21 @@ pub fn render_row_with(
     ctx: &Ctx,
     hot: Option<Style>,
 ) -> Line<'static> {
+    let cells = cells(tokens, src, ctx.indicators);
+    let Some(last) = cells.iter().rposition(Option::is_some) else {
+        return Line::default();
+    };
+    let columns = ctx.columns.of(tokens);
     let mut spans: Vec<Span<'static>> = Vec::new();
-    for part in parts(tokens, src, ctx.indicators) {
-        if !spans.is_empty() {
-            spans.push(Span::raw(" "));
-        }
+    for (at, cell) in cells.into_iter().enumerate().take(last + 1) {
+        let wanted = columns.and_then(|c| c.get(at)).copied().unwrap_or(0);
+        let Some(part) = cell else {
+            // A column nothing on this row fills: blank, unless no row fills it either.
+            if wanted > 0 {
+                spans.push(Span::raw(" ".repeat(wanted + 1)));
+            }
+            continue;
+        };
         let own = part.token.own_style();
         let mut style = match hot {
             Some(hot) if own.fg.is_none() && part.style == own => hot,
@@ -71,7 +135,11 @@ pub fn render_row_with(
         if part.style.dim == Some(true) {
             style = style.add_modifier(Modifier::DIM);
         }
+        let pad = wanted.saturating_sub(part.text.width());
         spans.push(Span::styled(part.text, style));
+        if at < last {
+            spans.push(Span::raw(" ".repeat(pad + 1)));
+        }
     }
     Line::from(spans)
 }
@@ -82,8 +150,9 @@ pub fn row_text(
     src: &dyn TokenSource,
     indicators: StatusIndicators,
 ) -> String {
-    parts(tokens, src, indicators)
+    cells(tokens, src, indicators)
         .into_iter()
+        .flatten()
         .map(|part| part.text)
         .collect::<Vec<_>>()
         .join(" ")
@@ -97,17 +166,17 @@ struct Part<'t> {
     style: TokenStyle,
 }
 
-/// The tokens of one row that actually have something to show. Rendering and plain text must
-/// agree on which tokens are skipped, so both go through here: a token with no text is
-/// skipped, and so is one a rule hides.
-fn parts<'t>(
+/// Each token of a row, in order: what it shows, or `None` when it has nothing to show. Rendering
+/// and plain text must agree on which tokens are skipped, so both go through here: a token with no
+/// text is skipped, and so is one a rule hides.
+fn cells<'t>(
     tokens: &'t [RowToken],
     src: &dyn TokenSource,
     indicators: StatusIndicators,
-) -> Vec<Part<'t>> {
+) -> Vec<Option<Part<'t>>> {
     tokens
         .iter()
-        .filter_map(|token| {
+        .map(|token| {
             let text = src.token_text(&token.token, indicators)?;
             if text.is_empty() {
                 return None;
@@ -312,7 +381,12 @@ mod tests {
     }
 
     fn ctx<'a>(theme: &'a Theme, indicators: StatusIndicators) -> Ctx<'a> {
-        Ctx { theme, indicators }
+        // No columns measured: every row is as wide as its own tokens.
+        Ctx {
+            theme,
+            indicators,
+            columns: Box::leak(Box::default()),
+        }
     }
 
     fn theme() -> Theme {

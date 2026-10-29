@@ -127,16 +127,16 @@ fn candidates(ctx: &Ctx) -> anyhow::Result<Value> {
 
 /// The picker's rows for this machine's own sessions.
 pub(crate) fn offered_here(ctx: &Ctx, home: &Path, zoxide: &[String]) -> anyhow::Result<Here> {
-    // No server, or a socket that is not there, means no sessions. Any other failure of tmux, or a tmux
-    // that does not answer within the bound, is told in `sessions_error`: the folders are still this
-    // machine's and are listed, none of them as `session`.
+    // No server (no socket, or a socket with nothing behind it) means no sessions. Any other failure
+    // of tmux, or a tmux that does not answer within the bound, is told in `sessions_error`: the
+    // folders are still this machine's and are listed, none of them as `session`.
     let deadline = Instant::now() + SESSIONS_BOUND;
     let mut sessions_error = None;
     let sessions = ctx
         .tmux
         .list_sessions_by(Some(deadline))
         .unwrap_or_else(|e| {
-            if !no_sessions(&e) {
+            if !crate::tmux::no_server(&e) {
                 log::warn!("session candidates: tmux did not list the sessions: {e:#}");
                 sessions_error = Some(match e.downcast_ref::<crate::tmux::CommandFailed>() {
                     Some(failed) => failed.reason(),
@@ -171,14 +171,6 @@ const SESSIONS_BOUND: Duration = Duration::from_secs(3);
 pub(crate) struct Here {
     pub list: picker::OfferedList,
     pub sessions_error: Option<String>,
-}
-
-/// Whether tmux's failure means this machine has no sessions: a server that is not running, or a
-/// socket that is not there. Nothing else does.
-fn no_sessions(err: &anyhow::Error) -> bool {
-    let text = format!("{err:#}");
-    text.contains("no server running")
-        || (text.contains("error connecting to") && text.contains("(No such file or directory)"))
 }
 
 fn candidate_json(row: &picker::Offered) -> Value {

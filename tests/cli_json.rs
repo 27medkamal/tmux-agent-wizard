@@ -8539,6 +8539,55 @@ fn session_candidates_says_when_tmux_fails() {
     }
 }
 
+/// A socket file with no server behind it, left by a server that died, is "no server" as it is
+/// everywhere else in taw: the folders are listed and there is no `sessions_error`.
+#[test]
+fn session_candidates_reads_a_stale_tmux_socket_as_no_server() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let f = Fixture::start();
+    let c = Candidates::new(&f, true);
+    let uid = String::from_utf8(Command::new("id").arg("-u").output().unwrap().stdout).unwrap();
+    let tmpdir = tempfile::tempdir().unwrap();
+    let dir = tmpdir.path().join(format!("tmux-{}", uid.trim()));
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let name = "stale";
+    // Bind, then drop: the file stays, nothing listens.
+    drop(std::os::unix::net::UnixListener::bind(dir.join(name)).unwrap());
+    assert!(dir.join(name).exists());
+
+    let args = ["session", "candidates", "--json"];
+    let tmp = tmpdir.path().display().to_string();
+    let (code, stdout, stderr) = c.run_env(&f, name, &[("TMUX_TMPDIR", &tmp)], &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    assert!(
+        env["result"].get("sessions_error").is_none(),
+        "a stale socket is no server: {env}"
+    );
+    assert_eq!(
+        env["result"]["candidates"].as_array().unwrap().len(),
+        5,
+        "{env}"
+    );
+
+    // Some tmux builds word the same refusal as an error connecting; it is no server too.
+    let tmux = c.bin.path().join("tmux-refused");
+    let said = format!(
+        "error connecting to {} (Connection refused)",
+        dir.join(name).display()
+    );
+    write_hook(&tmux, &format!("echo '{said}' >&2\nexit 1"));
+    let tmux = tmux.display().to_string();
+    let (code, stdout, stderr) = c.run_env(&f, name, &[("TAW_TMUX_BIN", &tmux)], &args);
+    assert_eq!(code, 0, "{stderr}");
+    let env = parse_envelope(&args, &stdout, &stderr);
+    assert!(
+        env["result"].get("sessions_error").is_none(),
+        "{said}: {env}"
+    );
+}
+
 /// A tmux that does not answer within the bound is cut off and reaped: the verb answers with the
 /// folders and a `sessions_error`, and no tmux is left running.
 #[test]

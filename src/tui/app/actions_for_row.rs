@@ -798,8 +798,8 @@ impl App<'_> {
     }
 
     /// `n`: on a row of another machine, a session is made on that machine: the app opens that machine's picker,
-    /// filled from its taw ([`Self::open_far_picker`]; an older taw there gets the prompt for a folder or a zoxide
-    /// term instead, [`Self::far_answered`]), and the popup, which has no connection
+    /// filled from its taw ([`Self::open_far_picker`]; an older taw there is told to be updated instead,
+    /// [`Self::far_answered`]), and the popup, which has no connection
     /// to a machine, says the row is read only, as it does for `r`, `x` and `w`. A machine that is not
     /// connected says why, in the app too. Everywhere else it is this machine's picker ([`Self::open_project_picker`]).
     pub(super) fn new_session(&mut self) {
@@ -819,16 +819,10 @@ impl App<'_> {
     /// `n` on a row of `machine`, another machine, in the app: that machine's picker, at once, with the folders
     /// it gave last in this run (none the first time) while the screen asks it again ([`Self::take_far_ask`]).
     fn open_far_picker(&mut self, machine: &str) {
-        // A taw that answered "older" this run goes straight to step 1's prompt; the ask still goes, so a taw
+        // A taw that answered "older" this run is told to be updated at once; the ask still goes, so a taw
         // updated meanwhile gets the picker at the next `n`.
         if self.far_old.contains(machine) {
-            self.overlay = Overlay::Prompt(Prompt::new(
-                PromptKind::NewSessionOn {
-                    machine: machine.to_string(),
-                },
-                words::new_session_prompt(machine),
-                String::new(),
-            ));
+            self.toast(words::update_taw_to_make_sessions(machine));
             self.far_ask = Some(machine.to_string());
             return;
         }
@@ -845,9 +839,9 @@ impl App<'_> {
     }
 
     /// What `machine` answered when its picker asked for its folders. A list is kept for the next `n` there and
-    /// fills its picker when that is open; an older taw (no `session candidates`) turns the open picker into
-    /// the prompt for a folder or a zoxide term, with what was typed; any other failure is shown in the
-    /// picker in the far error's own words. A picker that is closed, or another machine's, is left alone.
+    /// fills its picker when that is open; an older taw (no `session candidates`) closes the open picker and
+    /// says to update that taw (a later `n` there says it at once, [`Self::open_far_picker`]); any other failure
+    /// is shown in the picker in the far error's own words. A picker that is closed, or another machine's, is left alone.
     pub(crate) fn far_answered(&mut self, machine: &str, answer: FarAnswer) {
         match &answer {
             FarAnswer::Folders(folders) => {
@@ -870,14 +864,8 @@ impl App<'_> {
             FarAnswer::Folders(folders) => picker.set_far_answer(Ok(folders)),
             FarAnswer::Said(said) => picker.set_far_answer(Err(said)),
             FarAnswer::OldTaw => {
-                let typed = picker.input.value().to_string();
-                self.overlay = Overlay::Prompt(Prompt::new(
-                    PromptKind::NewSessionOn {
-                        machine: machine.to_string(),
-                    },
-                    words::new_session_prompt(machine),
-                    typed,
-                ));
+                self.overlay = Overlay::None;
+                self.toast(words::update_taw_to_make_sessions(machine));
             }
         }
     }
@@ -987,13 +975,6 @@ impl App<'_> {
             return None;
         };
         let result = match prompt.kind.clone() {
-            // An empty line does nothing: the prompt stays as it is.
-            PromptKind::NewSessionOn { .. } if text.trim().is_empty() => return None,
-            PromptKind::NewSessionOn { machine } => Ok(Action::NewRemoteSession {
-                machine,
-                term: text.trim().to_string(),
-                exact: false,
-            }),
             PromptKind::NewWorktree { workspace } => {
                 if text.is_empty() {
                     Err("enter a branch".to_string())

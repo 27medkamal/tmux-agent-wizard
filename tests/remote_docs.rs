@@ -727,7 +727,7 @@ fn the_docs_say_taw_opens_no_switch_and_dir_and_the_far_ns_limits() {
 /// The docs say what `n` on another machine's row does in the app now (that machine's picker, filled from its taw,
 /// kept per run, filtered here) and what an older taw there gets instead, in the words the app shows.
 #[test]
-fn the_docs_say_the_far_n_opens_that_machines_picker_and_an_older_taw_gets_the_prompt() {
+fn the_docs_say_the_far_n_opens_that_machines_picker_and_an_older_taw_is_told_to_update() {
     let machines = flat(&read("docs/machines.md"));
     for needle in [
         "opens that machine's picker at once, titled `new session on studio`",
@@ -736,7 +736,8 @@ fn the_docs_say_the_far_n_opens_that_machines_picker_and_an_older_taw_gets_the_p
         "a later `n` there shows it at once and asks again",
         "nothing typed is completed over ssh",
         "`studio has more folders than it listed`",
-        "A taw there older than `taw session candidates` turns the picker into the prompt `new session on studio: a folder or a zoxide term`",
+        "its answer closes the picker and the toast says `update taw on studio to make sessions there from here`",
+        "for the rest of the run `n` on that machine says it at once",
     ] {
         assert!(
             machines.contains(needle),

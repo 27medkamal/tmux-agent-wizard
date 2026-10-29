@@ -334,8 +334,8 @@ pub struct App<'a> {
     pub far_folders: std::collections::HashMap<String, crate::tui::picker::FarList>,
     /// The machine whose folders `n` asked for, until the screen sends the ask ([`App::take_far_ask`]).
     pub far_ask: Option<String>,
-    /// The machines whose taw answered that it is older than `session candidates`, for this run: `n` there opens
-    /// step 1's prompt at once. A later list from the machine takes it off (a taw updated during the run).
+    /// The machines whose taw answered that it is older than `session candidates`, for this run: `n` there says
+    /// to update it at once. A later list from the machine takes it off (a taw updated during the run).
     pub far_old: std::collections::HashSet<String>,
     /// The directories the `/` filter lists under the sessions while it is open and
     /// `[ui] projects_in_filter` is on: what the project picker would list for the query,

@@ -151,7 +151,7 @@ pub struct FarList {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FarAnswer {
     Folders(FarList),
-    /// The taw there is older than `session candidates`: the app asks for a folder or a term instead.
+    /// The taw there is older than `session candidates`: the app closes the picker and says to update it there.
     OldTaw,
     /// Any other failure, in the words to show.
     Said(String),

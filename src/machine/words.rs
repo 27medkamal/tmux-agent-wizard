@@ -345,11 +345,6 @@ pub fn on_machine(machine: &str, target: &str) -> String {
     format!("{machine} \u{b7} {target}")
 }
 
-/// The title of the prompt `n` opens on a row of `machine`: the session is made there.
-pub fn new_session_prompt(machine: &str) -> String {
-    format!("new session on {machine}: a folder or a zoxide term")
-}
-
 /// The title of the picker `n` opens on a row of `machine` in the app, filled from that machine's taw.
 pub fn far_picker_title(machine: &str) -> String {
     format!(" new session on {machine} ")

@@ -966,7 +966,7 @@ fn the_keeper_writes_a_connected_machines_file_again_with_each_beat() {
                 &serde_json::json!({"spaces": [{"session_id": "$1", "session_name": "one"}]}),
             ),
         ],
-        "while :; do echo '{\"type\":\"ping\"}'; sleep 0.2; done",
+        &pinging_until_it_is_let_go(dir.path()),
     );
     let timing = Timing {
         lease_every: Duration::from_millis(400),
@@ -985,6 +985,43 @@ fn the_keeper_writes_a_connected_machines_file_again_with_each_beat() {
             file.last_seen.is_some_and(|at| at > seen) && file.received_at == Some(received_at)
         })
     });
+    // The test ends what it started: with the keeper dropped the feed is let go, and it ends, as a real feed
+    // does when its standard input closes (its pids were written when it began).
+    drop(machines);
+    let pids = pids_of(dir.path(), "pinger.pids");
+    assert_eq!(pids.len(), 2, "the stand-in's pids: {pids:?}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while pids.iter().any(|pid| alive(*pid)) {
+        assert!(
+            Instant::now() < deadline,
+            "the stand-in feed is still running after its keeper went: {pids:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The tail of a stand-in feed that pings until it is let go: it ends when its standard input closes (the keeper
+/// that held it is dropped or gone, which is how a real `taw machine feed` ends) and when its reader is gone. A
+/// loop of pings with no end outlived its test for hours as a process of its own, at 14 to 18 percent of a core.
+/// The pids of the script and of its pinger are written to `pinger.pids` in `dir`.
+fn pinging_until_it_is_let_go(dir: &Path) -> String {
+    format!(
+        "echo $$ > '{pids}'\n\
+         ( while :; do echo '{{\"type\":\"ping\"}}' || exit 0; sleep 0.2; done ) &\n\
+         echo $! >> '{pids}'\n\
+         cat > /dev/null\n\
+         kill $! 2> /dev/null",
+        pids = dir.join("pinger.pids").display()
+    )
+}
+
+/// The pids written to `name` in `dir`, one a line (none while it is not there yet).
+fn pids_of(dir: &Path, name: &str) -> Vec<u32> {
+    std::fs::read_to_string(dir.join(name))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
 }
 
 /// The keeper takes this machine's lease at its start and keeps it with each offer; while it runs, another

@@ -942,9 +942,12 @@ impl Feed<'_> {
                 // What the landing made (a session, a worktree) is in the list when it is back: going in
                 // shows it, so it is not read a second time here.
                 Ok(landing) => self.go_in(app, screen, landing)?,
+                // The screen has said `loading` since before the landing: the list is drawn at once from the one
+                // read, the keys typed meanwhile dropped, as a come-back draws it.
                 Err(words) => {
                     app.toast(words);
                     self.show(self.tmux, app);
+                    self.list_after_hop(app, screen);
                 }
             }
             return Ok(());
@@ -1018,7 +1021,10 @@ impl Feed<'_> {
                     self.show_at(app, pane);
                     self.list_after_hop(app, screen);
                 }
-                None => self.show(self.tmux, app),
+                None => {
+                    self.show(self.tmux, app);
+                    self.list_after_hop(app, screen);
+                }
             }
             return Ok(Step::Done);
         }
@@ -1193,9 +1199,10 @@ impl Feed<'_> {
         }
     }
 
-    /// A hop that was refused after an attach has the list drawn at once, as [`Feed::came_back`] draws it: the
-    /// screen says `loading` from the attach, no read comes before the draw (the loop's tick, due after a long
-    /// attach, would read first), and keys typed meanwhile were aimed at nothing.
+    /// A hop that was refused after an attach, a first attach whose session was gone and a landing that failed have
+    /// the list drawn at once, as [`Feed::came_back`] draws it: the screen says `loading` from the attach, no read
+    /// comes before the draw (the loop's tick, due after a long attach, would read first), and keys typed
+    /// meanwhile were aimed at nothing.
     fn list_after_hop(&mut self, app: &mut App, screen: &mut impl Lending) {
         screen.drain();
         screen.list(app);
@@ -3434,7 +3441,7 @@ mod tests {
         assert!(events[1].starts_with("away"), "{events:?}");
     }
 
-    /// A refusal (the session is gone) after the loading frame leaves the list's toast, as before: nothing is lent.
+    /// A refusal (the session is gone) after the loading frame leaves the list's toast, drawn at once: nothing is lent.
     #[test]
     fn a_session_that_is_gone_says_so_after_the_loading_frame_and_lends_nothing() {
         use crate::cli::test_support::{Stub, stub_tmux};
@@ -3464,7 +3471,15 @@ mod tests {
         .unwrap();
 
         let events = screen.events();
-        assert_eq!(events.len(), 1, "only the frame, nothing lent: {events:?}");
+        let kinds: Vec<&str> = events
+            .iter()
+            .map(|e| e.split(' ').next().unwrap_or(""))
+            .collect();
+        assert_eq!(
+            kinds,
+            ["loading", "drain", "list"],
+            "the frame, then the list at once, nothing lent: {events:?}"
+        );
         assert!(
             app.toast
                 .as_ref()
@@ -3785,6 +3800,73 @@ mod tests {
             events.iter().any(|e| e.starts_with("loading (loading ")),
             "the hop got as far as the session: {events:?}"
         );
+        assert_the_list_is_drawn_at_once(&events, reads);
+    }
+
+    /// The first attach from the list whose session went meanwhile: the screen says `loading <session>`, the one
+    /// read after the words shows what is there now, and the list is drawn at once, the keys typed at the frame
+    /// dropped, as a come-back draws it.
+    #[test]
+    fn a_first_attach_to_a_session_that_is_gone_draws_the_list_at_once() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                session_gone: true,
+                ..Stub::default()
+            },
+        );
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+        feed.go_in(
+            &mut app,
+            &mut screen,
+            actions::Landing {
+                target: "$3".into(),
+                pane: None,
+                note: None,
+            },
+        )
+        .unwrap();
+        let events = screen.events();
+        assert!(
+            events.iter().any(|e| e.starts_with("loading (loading ")),
+            "{events:?}"
+        );
+        let reads = calls(&log).iter().filter(|call| is_list_read(call)).count();
+        assert_eq!(reads, 1, "one read, the gone session's: {events:?}");
+        assert_the_list_is_drawn_at_once(&events, reads);
+    }
+
+    /// A landing that failed (nothing to go to): the same. The landing's own look for a stop and the toast's read
+    /// come first; no read comes after the list is drawn.
+    #[test]
+    fn a_landing_that_failed_draws_the_list_at_once() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+        feed.perform(
+            Path::new("/nonexistent/taw"),
+            &mut app,
+            &mut screen,
+            &actions::Action::NextUp { own: None },
+        )
+        .unwrap();
+        let events = screen.events();
+        assert!(
+            events.iter().any(|e| e.starts_with("loading (loading")),
+            "{events:?}"
+        );
+        let reads = calls(&log).iter().filter(|call| is_list_read(call)).count();
         assert_the_list_is_drawn_at_once(&events, reads);
     }
 

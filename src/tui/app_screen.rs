@@ -369,11 +369,10 @@ pub fn run_app(
         resolved.theme,
         settings,
         came_from,
+        back.is_some(),
         go.as_ref().map(|target| (target, machine::GO_WAIT)),
         Screen::enter,
     )?;
-    // Started by the doorway: the keys that end the app say they go back to tmux.
-    app.back_to_tmux = back.is_some();
     // The theme is the one the client's light or dark mode asks for from the first frame (`auto_switch`); `shown` is
     // the name on screen, for the ticks to compare with.
     let mut shown = cfg.theme.name.clone();
@@ -481,16 +480,21 @@ fn open_app<'c, S: Lending>(
 /// [`open_app`], then the go `taw app --go` asked for ([`Feed::go_first`], waiting up to the given time for its
 /// machine), all before the first frame of the loop is drawn: `run_app` draws its first frame only after this
 /// returns, so the go comes first.
+#[allow(clippy::too_many_arguments)]
 fn open_going<'c, S: Lending>(
     feed: &mut Feed<'_>,
     cfg: &'c Config,
     theme: super::theme::Theme,
     settings: String,
     came_from: Option<String>,
+    back_to_tmux: bool,
     go: Option<(&GoTarget, Duration)>,
     enter: impl FnOnce() -> anyhow::Result<S>,
 ) -> anyhow::Result<(App<'c>, S)> {
     let (mut app, mut screen) = open_app(feed, cfg, theme, settings, came_from, enter)?;
+    // Started by the doorway: the keys that end the app say they go back to tmux. Set before the go, whose come-back
+    // draws the list.
+    app.back_to_tmux = back_to_tmux;
     if let Some((target, wait)) = go {
         feed.go_first(&mut app, &mut screen, target, wait)?;
     }
@@ -3366,7 +3370,10 @@ mod tests {
         fn list(&mut self, app: &mut App) {
             // Whether the preview on screen is the one of the row the cursor is on.
             let agrees = app.preview_shows() == app.preview_pane().as_deref();
-            self.note(&format!("list preview_agrees={agrees}"));
+            self.note(&format!(
+                "list preview_agrees={agrees} back_to_tmux={}",
+                app.back_to_tmux
+            ));
         }
     }
 
@@ -3777,6 +3784,43 @@ mod tests {
             "the hop got as far as the session: {events:?}"
         );
         assert_the_list_is_drawn_at_once(&events, reads);
+    }
+
+    /// With `taw app --go` from the doorway the first frame of the list, drawn by the go's come-back before the loop
+    /// starts, already has the end-key hint that says the keys go back to tmux; without a doorway it has none.
+    #[test]
+    fn the_go_first_frame_has_the_end_key_hint_when_a_doorway_started_it() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        for back in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+            let paths = paths_in(dir.path());
+            let cfg = Config::default();
+            let mut feed = feed_over(&tmux, &cfg, &paths);
+            let screen = Seen::new(&log);
+            let events = screen.events.clone();
+            let go = GoTarget::Pane("%5".into());
+            open_going(
+                &mut feed,
+                &cfg,
+                theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+                String::new(),
+                None,
+                back,
+                Some((&go, Duration::from_secs(1))),
+                || Ok(screen),
+            )
+            .unwrap();
+            let events = events.borrow().clone();
+            let list = events
+                .iter()
+                .find(|e| e.starts_with("list"))
+                .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+            assert!(
+                list.contains(&format!("back_to_tmux={back}")),
+                "back {back}: {events:?}"
+            );
+        }
     }
 
     /// A landing that makes a session (a project opened) says `loading` before its first call to tmux, the

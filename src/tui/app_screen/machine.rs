@@ -2690,6 +2690,7 @@ mod tests {
             theme,
             String::new(),
             None,
+            false,
             Some((&go, GO_WAIT)),
             || {
                 entered.borrow_mut().push("enter".to_string());

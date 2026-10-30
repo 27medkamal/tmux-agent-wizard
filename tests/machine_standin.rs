@@ -388,3 +388,109 @@ fn under_the_gate_the_far_side_finds_the_nets_stubs_before_the_real_programs() {
         }
     }
 }
+
+/// Ends the processes a test started, by pid, when the test ends in any way (a red run leaves nothing behind).
+struct KillPids(Vec<u32>);
+
+impl Drop for KillPids {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            // SAFETY: a pid this test's own run started; signal 9 to it only.
+            unsafe { libc::kill(*pid as i32, libc::SIGKILL) };
+        }
+    }
+}
+
+fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 only looks whether the process is there.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// A stand-in that hangs ends once its parent has gone, whatever its parent's pid answers. The parent here ends with
+/// no drop and no signal and is NOT reaped (a zombie), so its pid still answers `kill -0`, as a pid does that the
+/// system handed to another process: a stand-in that only looked whether that pid is there stayed for hours as an
+/// orphan of its own.
+#[test]
+fn a_hanging_stand_in_ends_when_its_parent_is_gone_though_the_pid_still_answers() {
+    let studio = FarSide::new("studio");
+    let stand_in = StandIn::new(&[&studio]);
+    stand_in.fail_as("studio", Failure::Hang);
+    // The parent starts the stand-in in the background, waits until it has recorded its call (so that it is in
+    // its wait), and ends; this test does not wait for it.
+    let recorded = stand_in.log.join("1.pid");
+    let mut parent = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(
+            r#""$0" studio 'taw machine feed' </dev/null >/dev/null 2>&1 &
+until [ -s "$1" ]; do sleep 0.05; done"#,
+        )
+        .arg(&stand_in.bin)
+        .arg(&recorded)
+        .spawn()
+        .unwrap();
+    let parent_pid = parent.id();
+    let mut guard = KillPids(vec![]);
+    assert!(
+        common::wait_for(
+            || stand_in.pids().len() == 1,
+            std::time::Duration::from_secs(20)
+        ),
+        "the stand-in never recorded its pid"
+    );
+    let pid = stand_in.pids()[0];
+    guard.0.push(pid);
+    assert!(
+        common::wait_for(|| !alive(pid), std::time::Duration::from_secs(20)),
+        "the stand-in {pid} is still running, its parent gone"
+    );
+    // The parent ended and was not reaped, and its pid still answers: the stand-in did not end for want of it.
+    assert!(alive(parent_pid), "the parent's pid does not answer");
+    let state = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &parent_pid.to_string()])
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&state.stdout)
+            .trim()
+            .starts_with('Z'),
+        "the parent is not a zombie: {:?}",
+        String::from_utf8_lossy(&state.stdout)
+    );
+    parent.wait().unwrap();
+}
+
+/// A stand-in that hangs and cannot run `sleep` ends, and does not spin at a core's speed for as long as its parent
+/// is there.
+#[test]
+fn a_hanging_stand_in_that_cannot_sleep_ends() {
+    let studio = FarSide::new("studio");
+    let stand_in = StandIn::new(&[&studio]);
+    stand_in.fail_as("studio", Failure::Hang);
+    // A PATH with `mkdir` (the stand-in makes its call folder with it) and nothing else.
+    let bin = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink("/bin/mkdir", bin.path().join("mkdir")).unwrap();
+    let mut child = stand_in
+        .command()
+        .args(["studio", "taw machine feed"])
+        .env("PATH", bin.path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let _guard = KillPids(vec![child.id()]);
+    assert!(
+        common::wait_for(
+            || stand_in.pids().len() == 1,
+            std::time::Duration::from_secs(20)
+        ),
+        "the stand-in never recorded its pid"
+    );
+    assert!(
+        common::wait_for(
+            || matches!(child.try_wait(), Ok(Some(_))),
+            std::time::Duration::from_secs(20)
+        ),
+        "the stand-in spins on, with no sleep to run"
+    );
+}

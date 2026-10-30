@@ -3755,6 +3755,10 @@ fn the_session_the_app_came_from_is_kept_by_its_id_through_a_rename() {
     );
 }
 
+/// The line a test shell writes after its `stty -a` output, so that a test reads the output only once it is whole (the
+/// shell's redirect creates the file empty before `stty` writes).
+const STTY_DONE: &str = "STTY-DONE";
+
 /// A tmux that stands in for the client the app lends the terminal to, and logs the terminal's modes at every call
 /// it sees: `<dir>/log` gets one line per call (`<first word> <mode words>`, the words `stty` says for `icanon` and
 /// `echo` and their negations, read from the controlling terminal). An `attach-session` is the stand-in client: it
@@ -3811,7 +3815,10 @@ fn a_key_typed_while_the_terminal_is_lent_is_read_by_the_client_and_shown_nowher
         &term,
         &mac,
         &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
-        &format!("app --child; stty -a >'{}'", modes.display()),
+        &format!(
+            "app --child; stty -a >'{0}'; echo {STTY_DONE} >>'{0}'",
+            modes.display()
+        ),
         &mac.work_dir().join("err"),
         &mac.work_dir().join("status"),
     );
@@ -3855,11 +3862,11 @@ fn a_key_typed_while_the_terminal_is_lent_is_read_by_the_client_and_shown_nowher
     press(&term, &["C-c"]);
     assert!(
         wait_for(
-            || std::fs::read_to_string(&modes)
-                .is_ok_and(|text| text.contains("lflags") || text.contains("echo")),
+            || std::fs::read_to_string(&modes).is_ok_and(|text| text.contains(STTY_DONE)),
             Duration::from_secs(20)
         ),
-        "the shell never ran stty:\n{}",
+        "the shell never finished stty (file: {:?}):\n{}",
+        std::fs::read_to_string(&modes).unwrap_or_default(),
         terminal_screen(&term)
     );
     let words = std::fs::read_to_string(&modes).unwrap();
@@ -3886,7 +3893,10 @@ fn the_supervisor_gives_the_shell_back_a_terminal_that_shows_what_is_typed() {
         &term,
         &mac,
         &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
-        &format!("app; stty -a >'{}'", modes.display()),
+        &format!(
+            "app; stty -a >'{0}'; echo {STTY_DONE} >>'{0}'",
+            modes.display()
+        ),
         &mac.work_dir().join("err"),
         &mac.work_dir().join("status"),
     );
@@ -3918,10 +3928,11 @@ fn the_supervisor_gives_the_shell_back_a_terminal_that_shows_what_is_typed() {
     signal(supervisor, libc::SIGTERM);
     assert!(
         wait_for(
-            || std::fs::read_to_string(&modes).is_ok(),
+            || std::fs::read_to_string(&modes).is_ok_and(|text| text.contains(STTY_DONE)),
             Duration::from_secs(20)
         ),
-        "the shell never ran stty:\n{}",
+        "the shell never finished stty (file: {:?}):\n{}",
+        std::fs::read_to_string(&modes).unwrap_or_default(),
         terminal_screen(&term)
     );
     let words = std::fs::read_to_string(&modes).unwrap();

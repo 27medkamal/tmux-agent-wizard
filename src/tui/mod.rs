@@ -919,6 +919,9 @@ impl Lending for Screen {
             .map_err(|e| anyhow::anyhow!("entering the screen again: {e}"))?;
         // The screen is entered again: from here it is this one's to put away.
         LENT.store(false, Ordering::SeqCst);
+        // The clear asks the terminal where the cursor is, and crossterm's answer to that takes its own raw mode and
+        // puts it back. That is harmless here: the terminal is raw already, so crossterm reads raw and puts raw
+        // back (never the cooked modes), and the found modes are not touched.
         self.terminal
             .clear()
             .map_err(|e| anyhow::anyhow!("clearing the screen: {e}"))

@@ -478,9 +478,9 @@ impl Feed<'_> {
             self.hub.poll(Instant::now());
             self.take_announced();
         }
-        // The wait read nothing, so what was typed meanwhile, with the screen saying `loading`, is still queued: dropped before
-        // the terminal is lent, or it would reach the machine's pane through the ssh (a `y` or Enter can answer
-        // an agent's prompt there). An app that must end drops nothing, as after an open.
+        // The wait read nothing, so what was typed meanwhile, with the screen saying `loading`, is still queued:
+        // dropped before the terminal is lent, or it would reach the machine's pane through the ssh (a `y` or
+        // Enter can answer an agent's prompt there). An app that must end drops nothing, as after an open.
         drain_unless_ended(screen, super::must_end(self));
         // A machine that is live and has delivered its state, and whose state holds no pane, session or window
         // of that id, has none: said as a gone target is, with nothing attached. With no state yet, or the id
@@ -2545,9 +2545,10 @@ mod tests {
         }
     }
 
-    /// What was typed while the screen said `loading` during the wait for the machine is dropped before the terminal is lent
-    /// (the drain is logged before the away), as the open path does; an app that must end drops nothing and lends
-    /// nothing (the seam of `must_end`: the drain's look is its first check, since a live machine is not waited for).
+    /// What was typed while the screen said `loading` during the wait for the machine is dropped before the terminal
+    /// is lent (the drain is logged before the away), as the open path does; an app that must end drops nothing and
+    /// lends nothing (the seam of `must_end`: the drain's look is its first check, since a live machine is not waited
+    /// for).
     #[test]
     fn going_first_drops_what_was_typed_during_the_wait_before_the_terminal_is_lent() {
         let dir = tempfile::tempdir().unwrap();

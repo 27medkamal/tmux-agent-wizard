@@ -478,7 +478,7 @@ impl Feed<'_> {
             self.hub.poll(Instant::now());
             self.take_announced();
         }
-        // The wait read nothing, so what was typed meanwhile at the blank screen is still queued: dropped before
+        // The wait read nothing, so what was typed meanwhile, with the screen saying `loading`, is still queued: dropped before
         // the terminal is lent, or it would reach the machine's pane through the ssh (a `y` or Enter can answer
         // an agent's prompt there). An app that must end drops nothing, as after an open.
         drain_unless_ended(screen, super::must_end(self));
@@ -2545,7 +2545,7 @@ mod tests {
         }
     }
 
-    /// What was typed at the blank screen during the wait for the machine is dropped before the terminal is lent
+    /// What was typed while the screen said `loading` during the wait for the machine is dropped before the terminal is lent
     /// (the drain is logged before the away), as the open path does; an app that must end drops nothing and lends
     /// nothing (the seam of `must_end`: the drain's look is its first check, since a live machine is not waited for).
     #[test]

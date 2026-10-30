@@ -468,7 +468,9 @@ fn a_hanging_stand_in_that_cannot_sleep_ends() {
     let studio = FarSide::new("studio");
     let stand_in = StandIn::new(&[&studio]);
     stand_in.fail_as("studio", Failure::Hang);
-    // A PATH with `mkdir` (the stand-in makes its call folder with it) and nothing else.
+    // A PATH with `mkdir` (the stand-in makes its call folder with it) and nothing else: no `sleep`. The parent check
+    // runs `/bin/ps` by its absolute path, so it is made on this PATH too, and the end comes from the `sleep` that
+    // cannot run, which is what this test means.
     let bin = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("/bin/mkdir", bin.path().join("mkdir")).unwrap();
     let mut child = stand_in

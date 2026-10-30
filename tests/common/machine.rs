@@ -234,12 +234,12 @@ unknown() {{
 }}
 # Stays up until whatever ran this has gone, so that a test that forgets to end it leaves nothing for long. A pid
 # that still answers is no proof the parent is there (the pid may be another process by now, or the parent ended and
-# nobody has reaped it), so each turn also asks the system who the parent is, and a `sleep` that cannot run ends it
-# as well (it would otherwise spin).
+# nobody has reaped it), so each turn also asks the system who the parent is (`/bin/ps`, by its path, whatever the
+# PATH), and a `sleep` that cannot run ends it as well (it would otherwise spin).
 until_orphaned() {{
   p=$PPID
   while kill -0 "$p" 2>/dev/null; do
-    now=$(echo $(ps -o ppid= -p $$ 2>/dev/null))
+    now=$(echo $(/bin/ps -o ppid= -p $$ 2>/dev/null))
     [ -z "$now" ] || [ "$now" = "$p" ] || exit 0
     sleep 1 & wait $! || [ $? -gt 128 ] || exit 0
   done

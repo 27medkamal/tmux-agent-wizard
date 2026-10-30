@@ -4709,6 +4709,23 @@ mod tests {
         }
     }
 
+    /// The pids a test started and has not reaped: killed by pid (never by name) when the test panics.
+    struct Running(Vec<libc::pid_t>);
+    impl Running {
+        /// `pid` has been waited for: it is no longer this guard's to kill (its number may be another process's).
+        fn reaped(&mut self, pid: libc::pid_t) {
+            self.0.retain(|held| *held != pid);
+        }
+    }
+    impl Drop for Running {
+        fn drop(&mut self) {
+            for pid in &self.0 {
+                // SAFETY: a process this test started and has not yet waited for, so its pid is still its own.
+                unsafe { libc::kill(*pid, libc::SIGKILL) };
+            }
+        }
+    }
+
     /// `ClientGuard::start` gives the guard it forks the modes the app found, for a client of this Mac as well as an
     /// ssh: the app (the process that called `start`) ends, the guard ends the client and puts the found modes back on
     /// the terminal, whose foreground group is the one it had at the attach. Run in a forked session that has a pty as
@@ -4731,6 +4748,8 @@ mod tests {
             0,
             "no pseudo terminal"
         );
+        // Not inherited by a process another test starts meanwhile: it would hold the pipe's end open.
+        close_on_exec(&[master, slave]);
         let found = crate::tui::read_modes(slave).expect("no modes to read");
         let echo = || crate::tui::read_modes(master).unwrap().c_lflag & libc::ECHO != 0;
         assert!(echo(), "found with echo (the positive half)");
@@ -4742,14 +4761,18 @@ mod tests {
             .spawn()
             .unwrap();
         let client_pid = client.id() as libc::pid_t;
+        // Kills what is still running by pid when the test panics; each pid is taken out once it is reaped.
+        let mut running = Running(vec![client_pid]);
         let mut hold = [-1, -1];
         // SAFETY: `pipe` writes the two descriptors.
         assert_eq!(unsafe { libc::pipe(hold.as_mut_ptr()) }, 0);
+        close_on_exec(&hold);
         crate::tui::FOUND_HERE.with(|here| here.set(Some(Some(found))));
         // SAFETY: the forked children call only async-signal-safe functions, `start` (a fork and a few reads) and
         // `_exit`, and never return into the test.
         let leader = unsafe { libc::fork() };
         assert!(leader >= 0, "fork failed");
+        running.0.push(leader);
         if leader == 0 {
             // SAFETY: as above.
             unsafe {
@@ -4776,19 +4799,23 @@ mod tests {
         unsafe { libc::close(hold[0]) };
         // The guard sees its parent gone, hangs the client up (the test reaps it) and puts the modes back.
         let ended = client.wait().unwrap();
+        running.reaped(client_pid);
         let until = Instant::now() + Duration::from_secs(10);
         while !echo() && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(20));
         }
         let back = echo();
-        // SAFETY: closing the write end ends the leader's wait; `waitpid` of the leader this test forked; the pty.
+        // SAFETY: closing the write end ends the leader's wait, and the leader this test forked is killed by pid
+        // before it is waited for, so that no descriptor another process holds can keep the wait going; the pty.
         unsafe {
             libc::close(hold[1]);
+            libc::kill(leader, libc::SIGKILL);
             let mut status = 0;
             libc::waitpid(leader, &mut status, 0);
             libc::close(master);
             libc::close(slave);
         }
+        running.reaped(leader);
         crate::tui::FOUND_HERE.with(|here| here.set(None));
         assert!(!ended.success(), "the client was not hung up: {ended:?}");
         assert!(back, "the guard did not put the found modes back");

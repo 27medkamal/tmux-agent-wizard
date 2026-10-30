@@ -863,26 +863,27 @@ pub fn current_client_and_app(
     ask_app: bool,
 ) -> anyhow::Result<(String, Option<AppClient>)> {
     use anyhow::Context;
-    let known = if ask_app { known_apps(paths) } else { None };
-    let Some(known) = known else {
-        let name = tmux
-            .run(&["display-message", "-p", "#{client_name}"])
-            .context("finding the client the popup opens on")?;
-        return Ok((name.trim().to_string(), None));
-    };
-    // Only machine attaches are recorded: the name is asked first, as always, so that with no client nothing else is
-    // asked, and the records are looked at (checked against `list-clients`, dead ones removed) only for a client
-    // that is there; when none of them is left, nothing more is asked.
-    if known.records.is_empty() {
+    // The call shape comes from a look that removes nothing: a record of a dead app is removed only once there is a
+    // client, as it was before this verb asked about the app.
+    if !(ask_app && an_app_runs(paths)) {
+        // At most machine attaches are recorded: the name is asked first, as always, so that with no client nothing
+        // else is asked and nothing is removed, and the records are read (dead ones removed, the attaches checked
+        // against `list-clients`) only for a client that is there; when none of them is left, nothing more is asked.
         let name = tmux
             .run(&["display-message", "-p", "#{client_name}"])
             .context("finding the client the popup opens on")?;
         let name = name.trim().to_string();
-        if name.is_empty() {
+        if name.is_empty() || !ask_app {
+            return Ok((name, None));
+        }
+        let Some(known) = known_apps(paths) else {
+            return Ok((name, None));
+        };
+        if known.records.is_empty() && known.attached.is_empty() {
             return Ok((name, None));
         }
         let known = known.settled(paths, tmux);
-        if known.attached.is_empty() {
+        if known.records.is_empty() && known.attached.is_empty() {
             return Ok((name, None));
         }
         let (_, said) =
@@ -890,10 +891,30 @@ pub fn current_client_and_app(
         return Ok((name, said.and_then(|said| app_client_in(known, said))));
     }
     // An app runs: the name and the rest come in one call. With no client tmux says no pid, so there is nothing to
-    // look up and the attach records are neither checked nor removed.
+    // look up and no record is read, checked or removed.
     let (name, said) = ask_client(tmux, None).context("finding the client the popup opens on")?;
-    let app = said.and_then(|said| app_client_in(known.settled(paths, tmux), said));
+    if name.is_empty() {
+        return Ok((name, None));
+    }
+    let app = known_apps(paths)
+        .zip(said)
+        .and_then(|(known, said)| app_client_in(known.settled(paths, tmux), said));
     Ok((name, app))
+}
+
+/// Whether an app that is alive has a record, looked at without changing anything (`read_app_records` removes the
+/// record of an app that was killed).
+fn an_app_runs(paths: &Paths) -> bool {
+    std::fs::read_dir(paths.apps_dir()).is_ok_and(|dir| {
+        dir.flatten().any(|entry| {
+            let name = entry.file_name().into_string().ok();
+            let pid = name
+                .as_deref()
+                .and_then(|name| name.strip_suffix(".json"))
+                .and_then(|pid| pid.parse::<u32>().ok());
+            pid.is_some_and(|pid| read_app_record(paths, pid).is_some() && app_alive(pid))
+        })
+    })
 }
 
 /// What is known of the apps from the files alone: the records of the apps that run and the machine attaches.
@@ -2560,6 +2581,47 @@ mod tests {
         assert_eq!(name, "/dev/ttys001");
         assert_eq!(verbs(&log), ["display-message", "list-clients"]);
         assert!(read_attached(&paths, "/dev/ttys042").is_none());
+    }
+
+    /// With no client, a record of an app that was killed (its process and its supervisor gone) is not removed on the
+    /// way: the call shape comes from a look that removes nothing, and records are judged only for a client that is
+    /// there, as before. The answer and the tmux calls are the old ones: one `display-message`, no `list-clients`.
+    #[test]
+    fn with_no_client_a_dead_app_record_is_left_where_it_is() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let dead = a_dead_pid();
+        let mut killed = record(dead);
+        killed.supervisor = a_dead_pid();
+        write_app_record(&paths, &killed);
+        let verbs = |log: &std::path::Path| -> Vec<String> {
+            calls(log).iter().map(|call| call[0].clone()).collect()
+        };
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                clients: false,
+                ..Stub::default()
+            },
+        );
+        let (name, app) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!((name.as_str(), app), ("", None));
+        assert_eq!(verbs(&log), ["display-message"]);
+        assert!(
+            read_app_record(&paths, dead).is_some(),
+            "the record was removed with no client there"
+        );
+
+        // Positive half: with a client the same record is judged and goes, as it always did.
+        let again = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(again.path(), &Stub::default());
+        let (name, _) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!(name, "/dev/ttys001");
+        assert!(
+            read_app_record(&paths, dead).is_none(),
+            "a client is there: the dead record goes"
+        );
     }
 
     /// The same with machine attaches recorded and no app: with no client the name is the one call and the records

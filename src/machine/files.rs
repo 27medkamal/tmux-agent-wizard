@@ -863,11 +863,7 @@ pub fn current_client_and_app(
     ask_app: bool,
 ) -> anyhow::Result<(String, Option<AppClient>)> {
     use anyhow::Context;
-    let known = if ask_app {
-        known_apps(paths, tmux)
-    } else {
-        None
-    };
+    let known = if ask_app { known_apps(paths) } else { None };
     let Some(known) = known else {
         let name = tmux
             .run(&["display-message", "-p", "#{client_name}"])
@@ -875,21 +871,36 @@ pub fn current_client_and_app(
         return Ok((name.trim().to_string(), None));
     };
     let (name, said) = ask_client(tmux, None).context("finding the client the popup opens on")?;
-    let app = said.and_then(|said| app_client_in(&known, said));
+    // With no client there is nothing to look up: the records are not judged and `list-clients` is not asked.
+    if name.is_empty() {
+        return Ok((name, None));
+    }
+    let app = said.and_then(|said| app_client_in(known.settled(paths, tmux), said));
     Ok((name, app))
 }
 
-/// What is known of the apps without asking tmux: the records of the apps that run and the machine attaches whose
-/// client is still there.
+/// What is known of the apps from the files alone: the records of the apps that run and the machine attaches.
+/// The attaches are not yet checked against the clients tmux has ([`KnownApps::settled`]).
 struct KnownApps {
     records: Vec<AppRecord>,
     attached: Vec<AttachedRecord>,
 }
 
-/// The apps there are, `None` when no app runs and nothing is attached.
-fn known_apps(paths: &Paths, tmux: &crate::tmux::Tmux) -> Option<KnownApps> {
+impl KnownApps {
+    /// The same, with the attaches whose client is still there ([`attached_with_a_client`]): asked of tmux (and
+    /// dead records removed) only now that there is a client to look up.
+    fn settled(mut self, paths: &Paths, tmux: &crate::tmux::Tmux) -> KnownApps {
+        if !self.attached.is_empty() {
+            self.attached = attached_with_a_client(paths, tmux);
+        }
+        self
+    }
+}
+
+/// The apps there are, `None` when no app runs and no attach is recorded: read from files, nothing asked of tmux.
+fn known_apps(paths: &Paths) -> Option<KnownApps> {
     let records = read_app_records(paths);
-    let attached = attached_with_a_client(paths, tmux);
+    let attached = read_attached_records(paths);
     (!(records.is_empty() && attached.is_empty())).then_some(KnownApps { records, attached })
 }
 
@@ -930,17 +941,17 @@ fn app_client_named(
     tmux: &crate::tmux::Tmux,
     client: Option<&str>,
 ) -> Option<(String, AppClient)> {
-    let known = known_apps(paths, tmux)?;
+    let known = known_apps(paths)?;
     let (name, said) = ask_client(tmux, client).ok()?;
     let client = client.map_or(name, str::to_string);
     if client.is_empty() {
         return None;
     }
-    app_client_in(&known, said?).map(|app| (client, app))
+    app_client_in(known.settled(paths, tmux), said?).map(|app| (client, app))
 }
 
 /// The app `said` (a client's pid, pane and terminal) belongs to, by the records of `known`.
-fn app_client_in(known: &KnownApps, said: ClientSaid) -> Option<AppClient> {
+fn app_client_in(known: KnownApps, said: ClientSaid) -> Option<AppClient> {
     if !known.records.is_empty()
         && let Some(parent) = parent_pid(said.pid)
         && let Some(app) = app_client_with(&known.records, said.pid, parent, said.pane.clone())
@@ -1070,13 +1081,32 @@ fn parent_of(pid: u32) -> Parent {
             size,
         )
     };
+    // `errno` is read only for a call that wrote nothing: it is that call's own then.
+    let errno = if wrote <= 0 {
+        std::io::Error::last_os_error().raw_os_error()
+    } else {
+        None
+    };
+    parent_from_call(wrote, size, info.pbi_ppid, errno)
+}
+
+/// What `proc_pidinfo` said, as [`Parent`]: the whole `size` written is the answer; nothing written with `ESRCH` is
+/// a pid that is gone; anything else (another error, or a short write, which leaves an old `errno` behind) is a
+/// failure and `ps` is to be asked.
+#[cfg(target_os = "macos")]
+fn parent_from_call(
+    wrote: libc::c_int,
+    size: libc::c_int,
+    ppid: u32,
+    errno: Option<i32>,
+) -> Parent {
     if wrote == size {
-        return Parent::Is(info.pbi_ppid);
+        Parent::Is(ppid)
+    } else if wrote <= 0 && errno == Some(libc::ESRCH) {
+        Parent::Gone
+    } else {
+        Parent::Failed
     }
-    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-        return Parent::Gone;
-    }
-    Parent::Failed
 }
 
 #[cfg(target_os = "linux")]
@@ -2469,6 +2499,52 @@ mod tests {
         assert_eq!(parse_client_line("").0, "");
     }
 
+    /// With no client at all the popup's open stops at the empty name, as it always did: one call, and the attach
+    /// records are neither checked against `list-clients` nor removed. With a client, the same records are checked.
+    #[test]
+    fn with_no_client_the_records_are_not_judged() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        // A record that is old and dead, which a check against `list-clients` would remove.
+        let mut dead = attached_record("/dev/ttys042", "holder", 0);
+        dead.at = 1_700_000_000_000;
+        write_attached(&paths, &dead).unwrap();
+        write_app_record(&paths, &record(std::process::id()));
+        let verbs = |log: &std::path::Path| -> Vec<String> {
+            calls(log).iter().map(|call| call[0].clone()).collect()
+        };
+
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                clients: false,
+                ..Stub::default()
+            },
+        );
+        let (name, app) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!((name.as_str(), app), ("", None));
+        assert_eq!(verbs(&log), ["display-message"]);
+        assert!(
+            read_attached(&paths, "/dev/ttys042").is_some(),
+            "judged and removed"
+        );
+
+        // Positive half: with a client, `list-clients` is asked and the dead record goes.
+        let again = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(
+            again.path(),
+            &Stub {
+                client_pid: 4242,
+                ..Stub::default()
+            },
+        );
+        let (name, _) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!(name, "/dev/ttys001");
+        assert_eq!(verbs(&log), ["display-message", "list-clients"]);
+        assert!(read_attached(&paths, "/dev/ttys042").is_none());
+    }
+
     /// The parent of a process is asked of the system: this process's own, a child's (this process), and none for
     /// a process that is gone.
     #[test]
@@ -2485,8 +2561,26 @@ mod tests {
         let pid = child.id();
         child.kill().unwrap();
         child.wait().unwrap();
-        assert_eq!(parent_pid(pid), None, "a pid that is gone");
+        // A pid that is gone has no parent; one the system handed out again at once has another's, never ours.
+        assert_ne!(parent_pid(pid), Some(me), "a pid that is gone");
         assert_eq!(parent_pid(u32::MAX - 1), None);
+    }
+
+    /// A short write is a failure whatever `errno` held from before; only a call that wrote nothing, with `ESRCH`,
+    /// is a pid that went.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_short_write_of_the_system_is_a_failure_not_a_gone_pid() {
+        let esrch = Some(libc::ESRCH);
+        assert_eq!(parent_from_call(100, 100, 9, None), Parent::Is(9));
+        assert_eq!(parent_from_call(0, 100, 0, esrch), Parent::Gone);
+        assert_eq!(parent_from_call(-1, 100, 0, esrch), Parent::Gone);
+        assert_eq!(parent_from_call(40, 100, 0, None), Parent::Failed);
+        assert_eq!(parent_from_call(40, 100, 0, esrch), Parent::Failed);
+        assert_eq!(
+            parent_from_call(0, 100, 0, Some(libc::EPERM)),
+            Parent::Failed
+        );
     }
 
     /// `ps` is a fallback for a system that cannot be asked, and is not run otherwise.

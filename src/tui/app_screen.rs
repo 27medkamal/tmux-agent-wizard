@@ -1160,6 +1160,8 @@ impl Feed<'_> {
             }
             return Ok(());
         }
+        // The list stays up for no tmux call: the screen says where it goes before it asks for the pane.
+        screen.loading(&app.theme, &going_words(&app.snap, pane));
         match actions::land_on_pane(self.tmux, pane) {
             Some(landing) => self.go_in(app, screen, landing)?,
             None => {
@@ -3396,6 +3398,28 @@ mod tests {
             calls(&log).iter().any(|call| call[0] == "new-session"),
             "the session was made, after the frame"
         );
+    }
+
+    /// Back says `loading` before it asks tmux for the pane it goes in at.
+    #[test]
+    fn back_says_loading_before_it_asks_tmux_for_its_pane() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+
+        feed.go_back_in(&mut app, &mut screen, "%5").unwrap();
+
+        let events = screen.events();
+        assert!(
+            events[0].starts_with("loading (") && events[0].ends_with("calls=0 reads=0"),
+            "the first thing is the frame, before any call: {events:?}"
+        );
+        assert!(!calls(&log).is_empty(), "tmux was asked after the frame");
     }
 
     /// The line this Mac's key back wrote is found by the one look, and its pane is where the cursor goes.

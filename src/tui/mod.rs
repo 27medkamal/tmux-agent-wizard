@@ -879,14 +879,19 @@ impl Steps {
     }
 }
 
-/// What [`Screen::away`] does to the modes of the terminal `fd`: the lent modes, in one call, from raw mode.
+/// What [`Screen::away`] does to the modes of the terminal `fd`: the lent modes, in one call, from raw mode, and
+/// raw mode is off ([`RAW`]): the change of modes and its note are one unit, so that nothing can come between them.
 fn away_modes(fd: libc::c_int, found: Option<&libc::termios>) {
     Steps { fd }.lend(found);
+    RAW.store(false, Ordering::SeqCst);
 }
 
-/// What [`Screen::back`] does to the modes of the terminal `fd`: raw mode, in one call, from the lent modes.
+/// What [`Screen::back`] does to the modes of the terminal `fd`: raw mode, in one call, from the lent modes, and
+/// raw mode is on ([`RAW`]) once it is set; the change of modes and its note are one unit.
 fn back_modes(fd: libc::c_int, found: Option<&libc::termios>) -> std::io::Result<()> {
-    Steps { fd }.raw(found)
+    Steps { fd }.raw(found)?;
+    RAW.store(true, Ordering::SeqCst);
+    Ok(())
 }
 
 /// The app's own raw mode on the screen's terminal ([`tty_fd`]), from [`note_found_modes`]: the same modes
@@ -894,9 +899,7 @@ fn back_modes(fd: libc::c_int, found: Option<&libc::termios>) -> std::io::Result
 /// modes and [`Screen::back`] from the lent modes straight to raw. Nothing is flushed: what was typed is kept.
 pub(crate) fn enter_raw() -> std::io::Result<()> {
     let found = note_found_modes();
-    Steps { fd: tty_fd() }.raw(found.as_ref())?;
-    RAW.store(true, Ordering::SeqCst);
-    Ok(())
+    back_modes(tty_fd(), found.as_ref())
 }
 
 /// Puts the `found` modes on the screen's terminal if raw mode is on, and turns it off: the end of [`enter_raw`].
@@ -927,7 +930,6 @@ impl Lending for Screen {
         // typed, and the terminal is never put through modes with echo between the two.
         put_screen_away();
         away_modes(tty_fd(), found_modes().as_ref());
-        RAW.store(false, Ordering::SeqCst);
         LENT.store(true, Ordering::SeqCst);
     }
 
@@ -936,7 +938,6 @@ impl Lending for Screen {
         // between, where a key typed would be shown.
         back_modes(tty_fd(), found_modes().as_ref())
             .map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
-        RAW.store(true, Ordering::SeqCst);
         execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
             .map_err(|e| anyhow::anyhow!("entering the screen again: {e}"))?;
         // The screen is entered again: from here it is this one's to put away.
@@ -1174,6 +1175,41 @@ mod tests {
         let before = calls();
         assert!(steps.raw(None).is_err());
         assert_eq!(calls(), before, "modes were set from nothing");
+    }
+
+    /// Each change of modes that the screen makes and its note of whether raw mode is on are one unit: after
+    /// `back_modes` raw mode is on and the terminal is raw, after `away_modes` raw mode is off and the terminal shows
+    /// nothing typed, and a `back_modes` that fails (no found modes) notes nothing. The note is what `leave_raw` goes
+    /// by, so a note that is out of step puts the found modes on a lent terminal, or leaves a raw one.
+    #[test]
+    fn a_change_of_modes_and_the_note_of_raw_mode_are_one_unit() {
+        let pty = Pty::open();
+        let found = super::read_modes(pty.slave).unwrap();
+        let raw_is = || super::RAW.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            super::back_modes(pty.slave, None).is_err(),
+            "raw mode from nothing"
+        );
+        assert!(!raw_is(), "a failed raw mode was noted as on");
+        super::back_modes(pty.slave, Some(&found)).unwrap();
+        assert!(raw_is(), "raw mode was not noted after back_modes");
+        assert_eq!(
+            pty.lflag() & (libc::ICANON | libc::ECHO),
+            0,
+            "the terminal is not raw (the positive half)"
+        );
+        super::away_modes(pty.slave, Some(&found));
+        assert!(!raw_is(), "raw mode was still noted after away_modes");
+        assert_eq!(
+            pty.lflag() & libc::ECHO,
+            0,
+            "away_modes left echo on (or the found modes between)"
+        );
+        assert_eq!(pty.lflag() & libc::ICANON, libc::ICANON, "and cooked");
+        super::back_modes(pty.slave, Some(&found)).unwrap();
+        assert!(raw_is(), "raw mode was not noted after the second back");
+        assert_eq!(pty.lflag() & (libc::ICANON | libc::ECHO), 0, "not raw");
+        super::RAW.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The found modes are the ones put back however often the terminal's modes were changed meanwhile, and a lent

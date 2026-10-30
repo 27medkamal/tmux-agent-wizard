@@ -3943,6 +3943,72 @@ fn the_supervisor_gives_the_shell_back_a_terminal_that_shows_what_is_typed() {
     );
 }
 
+/// A child killed while a client has the terminal leaves it without echo, and the supervisor that is told to end
+/// while that client still has the terminal puts back the modes it found: its own last step, since no child started
+/// after the signal to find them (the supervisor passes the signal to the client, waits for it, and ends).
+#[test]
+fn a_supervisor_told_to_end_while_a_client_has_the_terminal_gives_the_shell_back_echo() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let dir = mac.work_dir().join("lends");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tmux = lending_tmux(&dir);
+    let modes = dir.join("modes");
+    type_app_env(
+        &term,
+        &mac,
+        &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
+        &format!(
+            "app; stty -a >'{0}'; echo {STTY_DONE} >>'{0}'",
+            modes.display()
+        ),
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    let (child, supervisor) = the_app(&mac);
+    press(&term, &["Enter"]);
+    assert!(
+        wait_for(|| dir.join("up").exists(), Duration::from_secs(20)),
+        "the stand-in client never got the terminal:\n{}",
+        terminal_screen(&term)
+    );
+    // The child dies with the client attached and the terminal lent (no echo).
+    signal(child, libc::SIGKILL);
+    assert!(
+        wait_for(
+            // SAFETY: signal 0 only asks whether the pid is there.
+            || unsafe { libc::kill(child as libc::pid_t, 0) } != 0,
+            Duration::from_secs(20)
+        ),
+        "the supervisor never reaped the killed child:\n{}",
+        terminal_screen(&term)
+    );
+    // The client still has the terminal (it waits for `go`, which is never written): the supervisor is told to end.
+    assert!(
+        !dir.join("go").exists(),
+        "the client was let go before the signal"
+    );
+    signal(supervisor, libc::SIGTERM);
+    assert!(
+        wait_for(
+            || std::fs::read_to_string(&modes).is_ok_and(|text| text.contains(STTY_DONE)),
+            Duration::from_secs(20)
+        ),
+        "the shell never finished stty (file: {:?}):\n{}",
+        std::fs::read_to_string(&modes).unwrap_or_default(),
+        terminal_screen(&term)
+    );
+    let words = std::fs::read_to_string(&modes).unwrap();
+    let words: Vec<&str> = words.split([' ', ';', '\n']).collect();
+    assert!(
+        words.contains(&"echo") && !words.contains(&"-echo"),
+        "the shell got a terminal that shows nothing typed: {words:?}"
+    );
+}
+
 /// Raw mode is taken before the app's first call to tmux, so a key typed while the app starts is not echoed: every
 /// call the app makes finds the terminal not line by line.
 #[test]

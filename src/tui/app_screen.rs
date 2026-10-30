@@ -988,7 +988,7 @@ impl Feed<'_> {
     ///
     /// `hop` is the pane the cursor goes to when the attach is a hop (the next stop of a walk, after an attach that
     /// ended): a session that is gone then shows the list at once ([`Feed::list_after_hop`]), since the screen says
-    /// `loading` only because of that attach. `None` for the first attach, from the list, where the loop draws.
+    /// `loading` only because of that attach. `None` for the first attach, from the list, whose gone session also draws the list at once.
     fn go_in_once(
         &mut self,
         app: &mut App,

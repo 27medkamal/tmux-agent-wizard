@@ -612,17 +612,12 @@ impl Feed<'_> {
     /// This Mac's sessions and closed worktrees. No tmux server is an empty list, not an error, and
     /// the snapshot has no current or previous session: the app has no client whose they would be.
     fn read_local(&mut self) {
-        match data::build_without_client(self.tmux, self.cfg, &self.git) {
+        // With `[theme] auto_switch` and a pane of its own, the theme of the client that shows this pane comes in the
+        // same tmux call as the list (`Snapshot::client_theme`); otherwise none is asked.
+        match data::build_without_client(self.tmux, self.cfg, &self.git, self.own_pane.as_deref()) {
             Ok((snap, sessions)) => {
                 self.local.snap = for_app(snap);
                 self.local.sessions = sessions;
-                // The theme of the client that shows this pane, only when the theme follows the terminal.
-                if self.cfg.theme.auto_switch {
-                    self.local.snap.client_theme = self
-                        .own_pane
-                        .as_deref()
-                        .and_then(|pane| data::read_pane_theme(self.tmux, pane));
-                }
             }
             Err(err) => {
                 if !crate::tmux::no_server(&err) {
@@ -2861,8 +2856,9 @@ mod tests {
     }
 
     /// With `[theme] auto_switch` on, a tick of the app inside tmux asks for the theme of the client that shows its
-    /// own pane, by the pane (one `display-message`), and the screen it shows carries the answer, so that the app
-    /// draws the theme of that mode; outside tmux (no pane) it asks nothing and keeps `name`.
+    /// own pane, by the pane (a `display-message` at the end of the tick's one call), and the screen it shows
+    /// carries the answer, so that the app draws the theme of that mode; outside tmux (no pane) it asks nothing and
+    /// keeps `name`.
     #[test]
     fn a_tick_of_the_app_follows_the_theme_of_the_client_showing_its_pane() {
         use crate::cli::test_support::{Stub, calls, stub_tmux};
@@ -2891,7 +2887,7 @@ mod tests {
         );
         assert_eq!(shown, "nord");
 
-        // In a pane: one question about it, and the dark name is drawn.
+        // In a pane: one question about it, in the call that lists, and the dark name is drawn.
         feed.own_pane = Some("%5".to_string());
         feed.tick(&tmux, &mut app);
         super::super::follow_theme(&cfg, &paths, Path::new("taw"), &mut app, &mut shown);
@@ -2900,8 +2896,9 @@ mod tests {
             .filter(|call| call.iter().any(|word| word == "#{client_theme}"))
             .collect();
         assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(asked[0][0], "list-panes", "{asked:?}");
         assert_eq!(
-            asked[0],
+            asked[0][asked[0].len() - 5..],
             ["display-message", "-p", "-t", "%5", "#{client_theme}"]
         );
         assert_eq!(app.snap.client_theme.as_deref(), Some("dark"));
@@ -2910,6 +2907,79 @@ mod tests {
             app.theme,
             theme::resolve("dracula", &cfg.theme.custom).theme
         );
+    }
+
+    /// With `[theme] auto_switch` and a pane of its own, the pane's light or dark question rides in the one call
+    /// that reads the list: every tick, and every read after a come-back or an action (`show`), is one process, never
+    /// the list and then the theme. The theme read from that call is the one the screen gets.
+    #[test]
+    fn with_auto_switch_and_an_own_pane_a_tick_is_one_tmux_call() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg: Config = toml::from_str("[theme]\nauto_switch = true\n").unwrap();
+        let mut app = App::new(
+            &cfg,
+            theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+            String::new(),
+            Snapshot::default(),
+        );
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.server = "4211 1790000000".to_string();
+        feed.own_pane = Some("%5".to_string());
+
+        feed.tick(&tmux, &mut app);
+        let ticked = calls(&log);
+        assert_eq!(ticked.len(), 1, "a tick is one tmux call: {ticked:?}");
+        assert_eq!(ticked[0][0], "list-panes");
+        assert_eq!(app.snap.client_theme.as_deref(), Some("dark"));
+
+        std::fs::write(&log, "").unwrap();
+        feed.show(&tmux, &mut app);
+        assert_eq!(calls(&log).len(), 1, "a read after a come-back too");
+        assert_eq!(app.snap.client_theme.as_deref(), Some("dark"));
+    }
+
+    /// With `auto_switch` off, the one call holds no theme question, pane or no pane.
+    #[test]
+    fn without_auto_switch_the_call_holds_no_theme_question() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        assert!(!cfg.theme.auto_switch);
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.own_pane = Some("%5".to_string());
+        feed.read_local();
+        let read = calls(&log);
+        assert_eq!(read.len(), 1, "{read:?}");
+        assert!(
+            read[0].iter().all(|word| !word.contains("client_theme")),
+            "{read:?}"
+        );
+        assert_eq!(feed.local.snap.client_theme, None);
+    }
+
+    /// The start with `auto_switch` and a pane of its own is the theme question (it is needed to draw the loading
+    /// frame in the right theme) and one read, whose call asks the theme again in itself: two processes, not three.
+    #[test]
+    fn the_start_with_auto_switch_is_the_theme_question_and_one_read() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg: Config = toml::from_str("[theme]\nauto_switch = true\n").unwrap();
+        let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.own_pane = Some("%5".to_string());
+        let (app, Unlent) =
+            open_app(&mut feed, &cfg, theme, String::new(), None, || Ok(Unlent)).unwrap();
+        let started = calls(&log);
+        let verbs: Vec<&str> = started.iter().map(|call| call[0].as_str()).collect();
+        assert_eq!(verbs, ["display-message", "list-panes"], "{started:?}");
+        assert_eq!(app.snap.client_theme.as_deref(), Some("dark"));
     }
 
     /// What the machines announce does not pile up: a tick takes the toasts and the attach ends and drops them.

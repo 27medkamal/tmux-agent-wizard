@@ -567,18 +567,23 @@ pub fn build(
     origin: Option<&str>,
     client: Option<&str>,
 ) -> anyhow::Result<Snapshot> {
-    build_with(t, cfg, git, origin, Some(client)).map(|(snapshot, _)| snapshot)
+    build_with(t, cfg, git, origin, Some(client), None).map(|(snapshot, _)| snapshot)
 }
 
 /// [`build`] for a screen that has no client at all (`taw app`): no client is looked for, and none is
 /// asked for its last session, which costs two tmux calls on every tick and which nobody would use. The
 /// sessions of the same read come with it, for whoever needs them (the app's first cursor).
+///
+/// `own_pane` is the pane the app runs in: with `[theme] auto_switch` on and a pane, the theme of the client that
+/// shows it is asked at the end of the same call ([`read_pane_theme`]'s question, in one process with the list) and
+/// is [`Snapshot::client_theme`]. With auto_switch off, or no pane, no theme is asked.
 pub fn build_without_client(
     t: &Tmux,
     cfg: &Config,
     git: &GitWorker,
+    own_pane: Option<&str>,
 ) -> anyhow::Result<(Snapshot, Vec<SessionInfo>)> {
-    build_with(t, cfg, git, None, None)
+    build_with(t, cfg, git, None, None, own_pane)
 }
 
 /// [`build`], with `client` as `Some(<what build was given>)` when a client's last session is to be read,
@@ -589,15 +594,21 @@ fn build_with(
     git: &GitWorker,
     origin: Option<&str>,
     client: Option<Option<&str>>,
+    own_pane: Option<&str>,
 ) -> anyhow::Result<(Snapshot, Vec<SessionInfo>)> {
     // The client to ask is found first (a `taw ui` typed in a pane picks one of those attached), and asked in
     // the call that reads the list.
     let asked = client.and_then(|named| ask_client(t, named, cfg.theme.auto_switch));
-    let listing = t.read_listing(
-        asked
-            .as_ref()
-            .map(|(name, format)| (name.as_str(), *format)),
-    )?;
+    // The app's own pane is asked for its theme instead of a client, and only when the theme follows the terminal.
+    let pane_theme = own_pane.filter(|_| cfg.theme.auto_switch);
+    let listing = match pane_theme {
+        Some(pane) => t.read_listing_of_pane(pane, PANE_THEME_FORMAT)?,
+        None => t.read_listing(
+            asked
+                .as_ref()
+                .map(|(name, format)| (name.as_str(), *format)),
+        )?,
+    };
     let (view, view_error) = read_view(listing.option(agent_view::OPTION));
     let Listing {
         mut panes,
@@ -631,7 +642,9 @@ fn build_with(
     snapshot.view_error = view_error;
     // The client's own idea of "last session" beats the timestamps when it can be read:
     // it is per client, so two screens each go back to their own place.
-    if let Some(said) = said {
+    if pane_theme.is_some() {
+        snapshot.client_theme = said.as_deref().and_then(parse_pane_theme);
+    } else if let Some(said) = said {
         let read = parse_client_read(
             &said,
             &sessions,
@@ -689,8 +702,16 @@ fn ask_client(t: &Tmux, client: Option<&str>, with_theme: bool) -> Option<(Strin
 /// auto_switch` on.
 pub fn read_pane_theme(t: &Tmux, pane: &str) -> Option<String> {
     let said = t
-        .run(&["display-message", "-p", "-t", pane, "#{client_theme}"])
+        .run(&["display-message", "-p", "-t", pane, PANE_THEME_FORMAT])
         .ok()?;
+    parse_pane_theme(&said)
+}
+
+/// What [`read_pane_theme`] asks, in a call of its own or at the end of the app's one-call read.
+const PANE_THEME_FORMAT: &str = "#{client_theme}";
+
+/// The answer to [`PANE_THEME_FORMAT`]: the word, `None` when it came back empty (tmux before 3.6 has no such format).
+fn parse_pane_theme(said: &str) -> Option<String> {
     Some(said.trim().to_string()).filter(|theme| !theme.is_empty())
 }
 

@@ -947,7 +947,7 @@ fn a_read_of_the_list_starts_tmux_once() {
             .count()
     };
 
-    let app = data::build_without_client(&t, &cfg, &git).unwrap().0;
+    let app = data::build_without_client(&t, &cfg, &git, None).unwrap().0;
     assert_eq!(started(), 1, "the app's read");
     let plain = data::build(&s.0, &cfg, &git, None, None).unwrap();
     let names = |snap: &data::Snapshot| {

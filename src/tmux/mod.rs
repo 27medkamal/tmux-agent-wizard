@@ -241,6 +241,19 @@ impl Tmux {
     /// failed on it instead costs only that answer: the markers before it are all there, and the listing is read
     /// from them.
     pub fn read_listing(&self, client: Option<(&str, &str)>) -> anyhow::Result<Listing> {
+        self.read_listing_asking(client.map(|(name, format)| ("-c", name, format)))
+    }
+
+    /// [`Tmux::read_listing`] with `format` read for the client tmux finds for `pane` (`display-message -t <pane>`) at
+    /// the end of the same call: the app's own pane, whose client has the light or dark mode the app follows. A pane
+    /// that is gone fails that question only, as a client that is gone does.
+    pub fn read_listing_of_pane(&self, pane: &str, format: &str) -> anyhow::Result<Listing> {
+        self.read_listing_asking(Some(("-t", pane, format)))
+    }
+
+    /// The call of [`Tmux::read_listing`]: `ask` is the flag naming what `display-message` is asked about, its name
+    /// and the format.
+    fn read_listing_asking(&self, ask: Option<(&str, &str, &str)>) -> anyhow::Result<Listing> {
         let pane_format = pane_listing_format();
         let window_format = window_listing_format();
         let session_format = session_listing_format();
@@ -274,7 +287,7 @@ impl Tmux {
             "show-options",
             "-g",
         ];
-        if let Some((name, format)) = client {
+        if let Some((flag, name, format)) = ask {
             args.extend_from_slice(&[
                 ";",
                 "display-message",
@@ -283,17 +296,17 @@ impl Tmux {
                 ";",
                 "display-message",
                 "-p",
-                "-c",
+                flag,
                 name,
                 format,
             ]);
         }
         let output = self.output_of(&args, None)?;
         let out = String::from_utf8_lossy(&output.stdout);
-        if !(output.status.success() || (client.is_some() && has_mark(&out, LIST_MARKS[3]))) {
+        if !(output.status.success() || (ask.is_some() && has_mark(&out, LIST_MARKS[3]))) {
             return Err(failed(&self.bin, &args, &output).into());
         }
-        parse_listing(&out, client.is_some())
+        parse_listing(&out, ask.is_some())
     }
 
     /// Lists attached clients (empty when none are attached).
@@ -1833,6 +1846,24 @@ mod tests {
         );
         let err = tmux.read_listing(ask).unwrap_err();
         assert!(no_server(&err), "{err:#}");
+    }
+
+    /// A pane's question is the last of the call, asked by the pane (`-t`), and its answer is the listing's client
+    /// answer: the list and the pane's theme in one process.
+    #[test]
+    fn a_pane_asked_in_the_call_answers_after_the_list() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let listing = tmux.read_listing_of_pane("%5", "#{client_theme}").unwrap();
+        assert_eq!(listing.client.as_deref(), Some("dark"));
+        assert_eq!(listing.sessions.len(), 1);
+        let made = calls(&log);
+        assert_eq!(made.len(), 1, "{made:?}");
+        assert_eq!(
+            made[0][made[0].len() - 5..],
+            ["display-message", "-p", "-t", "%5", "#{client_theme}"]
+        );
     }
 
     /// A reply cut short is an error and no half of a listing.

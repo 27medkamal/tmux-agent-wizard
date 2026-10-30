@@ -3398,9 +3398,13 @@ mod tests {
     }
 
     /// A call of the stand-in tmux that is a read of the list: the one-call read ([`Tmux::read_listing`]) starts
-    /// with `list-panes`. Every count of reads in these tests counts by this.
+    /// with `list-panes` and has a `;` followed by `list-sessions` in the same call, which a bare `list-panes -a`
+    /// (NextUp's look for a stop) does not. Every count of reads in these tests counts by this.
     fn is_list_read(call: &[String]) -> bool {
         call[0] == "list-panes"
+            && call
+                .windows(2)
+                .any(|pair| pair[0] == ";" && pair[1] == "list-sessions")
     }
 
     /// A screen that notes what it is done, in order, with the number of calls and of reads (see [`is_list_read`])
@@ -3937,6 +3941,7 @@ mod tests {
             "{events:?}"
         );
         let reads = calls(&log).iter().filter(|call| is_list_read(call)).count();
+        assert_eq!(reads, 1, "one read, the toast's: {events:?}");
         assert_the_list_is_drawn_at_once(&events, reads);
     }
 

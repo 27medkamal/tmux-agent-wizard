@@ -770,7 +770,20 @@ pub(crate) fn note_found_modes() -> Option<libc::termios> {
 /// The modes [`note_found_modes`] kept: none before it was called, or when the terminal could not be read. Never
 /// reads the terminal, so it is safe in a panic hook, where the terminal's modes are the raw ones.
 pub(crate) fn found_modes() -> Option<libc::termios> {
+    // A test says what this thread found (the real ones are per process and set once).
+    #[cfg(test)]
+    if let Some(found) = FOUND_HERE.with(std::cell::Cell::get) {
+        return found;
+    }
     FOUND.get().copied().flatten()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What [`found_modes`] answers on this thread, when a test has set it (`Some(None)` is a terminal that could not
+    /// be read).
+    pub(crate) static FOUND_HERE: std::cell::Cell<Option<Option<libc::termios>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// The modes of the terminal on `fd`, if it can be read.

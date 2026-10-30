@@ -4260,6 +4260,91 @@ mod tests {
         }
     }
 
+    /// `ClientGuard::start` gives the guard it forks the modes the app found, for a client of this Mac as well as an
+    /// ssh: the app (the process that called `start`) ends, the guard ends the client and puts the found modes back on
+    /// the terminal, whose foreground group is the one it had at the attach. Run in a forked session that has a pty as
+    /// its terminal; the process that calls `start` is not the session's leader, so that its end leaves the terminal
+    /// alive for the guard (the leader waits on a pipe until the test is done).
+    #[test]
+    fn the_guard_started_for_a_local_client_puts_the_found_modes_back() {
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+        assert_eq!(
+            unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "no pseudo terminal"
+        );
+        let found = crate::tui::read_modes(slave).expect("no modes to read");
+        let echo = || crate::tui::read_modes(master).unwrap().c_lflag & libc::ECHO != 0;
+        assert!(echo(), "found with echo (the positive half)");
+        // What the client's end leaves: the lent modes.
+        crate::tui::set_modes(slave, &crate::tui::lent_modes(&found));
+        assert!(!echo(), "lent without echo (the positive half)");
+        let mut client = Command::new("/bin/sh")
+            .args(["-c", "exec sleep 30"])
+            .spawn()
+            .unwrap();
+        let client_pid = client.id() as libc::pid_t;
+        let mut hold = [-1, -1];
+        // SAFETY: `pipe` writes the two descriptors.
+        assert_eq!(unsafe { libc::pipe(hold.as_mut_ptr()) }, 0);
+        crate::tui::FOUND_HERE.with(|here| here.set(Some(Some(found))));
+        // SAFETY: the forked children call only async-signal-safe functions, `start` (a fork and a few reads) and
+        // `_exit`, and never return into the test.
+        let leader = unsafe { libc::fork() };
+        assert!(leader >= 0, "fork failed");
+        if leader == 0 {
+            // SAFETY: as above.
+            unsafe {
+                libc::close(hold[1]);
+                libc::setsid();
+                libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
+                libc::dup2(slave, 0);
+                let app = libc::fork();
+                if app == 0 {
+                    // The app: starts the guard of the client, then ends without ending the guard.
+                    let guard = ClientGuard::start(client_pid, 0, false);
+                    std::mem::forget(guard);
+                    libc::_exit(0);
+                }
+                let mut status = 0;
+                libc::waitpid(app, &mut status, 0);
+                // Held until the test has looked: the terminal is this session's, and its leader's end takes it.
+                let mut byte = 0u8;
+                libc::read(hold[0], std::ptr::addr_of_mut!(byte).cast(), 1);
+                libc::_exit(0);
+            }
+        }
+        // SAFETY: closing the read end this process has no use for.
+        unsafe { libc::close(hold[0]) };
+        // The guard sees its parent gone, hangs the client up (the test reaps it) and puts the modes back.
+        let ended = client.wait().unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !echo() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let back = echo();
+        // SAFETY: closing the write end ends the leader's wait; `waitpid` of the leader this test forked; the pty.
+        unsafe {
+            libc::close(hold[1]);
+            let mut status = 0;
+            libc::waitpid(leader, &mut status, 0);
+            libc::close(master);
+            libc::close(slave);
+        }
+        crate::tui::FOUND_HERE.with(|here| here.set(None));
+        assert!(!ended.success(), "the client was not hung up: {ended:?}");
+        assert!(back, "the guard did not put the found modes back");
+    }
+
     /// The cooked modes are set again on a terminal an ssh left raw: ICANON, ECHO, OPOST and ICRNL, which a shell
     /// needs, come back. The terminal is a pty of the test's own; the app's call passes standard input.
     #[test]

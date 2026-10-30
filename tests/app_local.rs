@@ -3931,3 +3931,33 @@ fn the_supervisor_gives_the_shell_back_a_terminal_that_shows_what_is_typed() {
         "the shell got a terminal that shows nothing typed: {words:?}"
     );
 }
+
+/// Raw mode is taken before the app's first call to tmux, so a key typed while the app starts is not echoed: every
+/// call the app makes finds the terminal not line by line.
+#[test]
+fn raw_mode_is_on_before_the_apps_first_call_to_tmux() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let dir = mac.work_dir().join("lends");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tmux = lending_tmux(&dir);
+    type_app_env(
+        &term,
+        &mac,
+        &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
+        "app --child",
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    let _ = the_app(&mac);
+    let log = std::fs::read_to_string(dir.join("log")).unwrap_or_default();
+    let first = log.lines().next().unwrap_or_default().to_string();
+    assert!(
+        first.split_whitespace().any(|word| word == "-icanon"),
+        "the first call to tmux found the terminal line by line: {first:?}\nlog:\n{log}"
+    );
+    press(&term, &["q"]);
+}

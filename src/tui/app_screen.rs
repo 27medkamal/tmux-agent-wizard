@@ -264,6 +264,25 @@ fn end_by_seam() -> bool {
     })
 }
 
+/// Raw mode taken at the start of the app, before its first read. Dropping it puts the modes back (raw mode off is a
+/// no-op when the screen did that already), so every way out of `run_app` before the screen is entered gives the
+/// shell a terminal that shows what is typed. [`Screen::enter`] finds raw mode on, and keeps it.
+struct EarlyRaw;
+
+impl EarlyRaw {
+    fn take() -> EarlyRaw {
+        let _ = crossterm::terminal::enable_raw_mode();
+        EarlyRaw
+    }
+}
+
+impl Drop for EarlyRaw {
+    fn drop(&mut self) {
+        // Not after a lent end: the terminal is the shell's or the client's then (raw mode is off, and this does nothing).
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
 /// Runs the app until the user leaves, and says how: [`AppEnd::Back`] or [`AppEnd::Leave`].
 ///
 /// `came_from` is the pane of the row the screen opens on (the one you came out of), when there is
@@ -285,6 +304,10 @@ pub fn run_app(
 ) -> anyhow::Result<AppEnd> {
     catch_signals();
     start_watchdog(paths);
+    // Raw mode before the first read, so that a key typed while the app starts is not echoed onto the plain screen;
+    // it waits in the terminal's queue and the list reads it. The alternate screen is entered just before the first
+    // frame, as before. Declared before the screen, so that an early error gives the shell its modes back.
+    let _early_raw = EarlyRaw::take();
     let resolved = theme::resolve(&cfg.theme.name, &cfg.theme.custom);
     for warning in &resolved.warnings {
         log::warn!("theme: {warning}");

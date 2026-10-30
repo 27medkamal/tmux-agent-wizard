@@ -4009,12 +4009,31 @@ fn a_supervisor_told_to_end_while_a_client_has_the_terminal_gives_the_shell_back
     );
 }
 
+/// `text` without its escape sequences (`ESC [` up to a final byte, and `ESC` with one byte after it): what a
+/// terminal would show of what the popup wrote, in the order it wrote it.
+fn without_escapes(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+        } else if chars.next_if_eq(&'[').is_some() {
+            while chars.next_if(|c| !('\x40'..='\x7e').contains(c)).is_some() {}
+            chars.next();
+        } else {
+            chars.next();
+        }
+    }
+    out
+}
+
 /// `taw ui` typed in a pane with its standard input not a terminal (`</dev/null`, or the end of a pipe) takes raw
 /// mode on the controlling terminal as crossterm's did, and puts the modes found there back as it ends, so the
 /// shell shows what is typed. Where crossterm's event reader can poll `/dev/tty` (Linux) the popup lists the
 /// sessions and `q` ends it; where it cannot (macOS: kqueue, "Failed to initialize input reader") it ends at its first
 /// read of a key, and the terminal is put back all the same. What it never says is that raw mode could not be
-/// entered.
+/// entered. The popup draws on standard output, which the command sends to the `said` file, so the list is looked for
+/// there (its text, with the escape sequences taken out), not on the terminal's screen.
 #[test]
 fn taw_ui_with_standard_input_that_is_not_a_terminal_takes_raw_mode_and_puts_the_found_modes_back()
 {
@@ -4041,9 +4060,11 @@ fn taw_ui_with_standard_input_that_is_not_a_terminal_takes_raw_mode_and_puts_the
     let mut asked_to_end = false;
     let done = wait_for(
         || {
-            let screen = terminal_screen(&term);
-            // The list is up (Linux): raw mode, so one key ends it, with no Enter after it.
-            if !asked_to_end && screen.contains("beta") && !screen.contains("/dev/null") {
+            // The list is up (Linux): drawn into the file, and raw mode, so one key ends it, with no Enter after it.
+            if !asked_to_end
+                && without_escapes(&std::fs::read_to_string(&said).unwrap_or_default())
+                    .contains("beta")
+            {
                 asked_to_end = true;
                 press(&term, &["q"]);
             }

@@ -72,6 +72,30 @@ impl Default for Stub {
     }
 }
 
+/// The tail of a stand-in `tmux` script: the line is a sequence when it has words that are only `;`, and each
+/// command is run in order with the words up to the next `;` as its own, by the script's `one`, which ends the
+/// script with its status when a command fails (what the commands before it printed stays printed, nothing after it
+/// runs), as real tmux ends a sequence.
+const RUN_SEQUENCE: &str = r#"# The line is a sequence when it has words that are only `;`: each command is run in order, with the
+# words up to the next `;` as its own.
+run_first() {
+  _c=$1
+  shift
+  _m=$#
+  _k=0
+  while [ $_k -lt $_c ]; do set -- "$@" "$1"; shift; _k=$((_k + 1)); done
+  shift $((_m - _c))
+  one "$@"
+}
+while [ $# -gt 0 ]; do
+  c=0
+  for a in "$@"; do [ "$a" = ';' ] && break; c=$((c + 1)); done
+  [ $c -gt 0 ] && run_first "$c" "$@"
+  n=$((c + 1))
+  [ $n -gt $# ] && n=$#
+  shift $n
+done"#;
+
 /// The stand-in `tmux` in `dir`, and the log its calls are appended to: one record per call,
 /// each argument followed by `\x1f` and the record by `\x1e` and a line break. `Tmux::run` puts `-u` ahead of its arguments, and the
 /// stand-in drops it before it looks or logs, so a call reads as its verb and what follows.
@@ -145,6 +169,12 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
     } else {
         ":".to_string()
     };
+    // A read of the id of the session a `-t` names fails when the session is gone, as tmux fails it.
+    let session_id_read = if stub.session_gone {
+        r#"for a; do [ "$a" = -t ] && { echo "can't find session: $last" >&2; exit 1; }; done; echo '$3'"#
+    } else {
+        "echo '$3'"
+    };
     let body = format!(
         r#"#!/bin/sh
 [ "$1" = -u ] && shift
@@ -164,7 +194,8 @@ case "$1" in
       '#{{client_last_session}}') echo main ;;
       '#{{client_theme}}') echo dark ;;
       '#{{pane_id}}') echo '%5' ;;
-      '#{{session_id}}') echo '$3' ;;
+      '#{{session_id}}')
+        {session_id_read} ;;
       '#{{session_id}} #{{window_id}}') echo '$3 @1' ;;
       '#{{session_attached}}') echo '{attached}' ;;
       *'#{{'*) ;;
@@ -189,25 +220,7 @@ case "$1" in
 esac
 return 0
 }}
-# The line is a sequence when it has words that are only `;`: each command is run in order, with the
-# words up to the next `;` as its own.
-run_first() {{
-  _c=$1
-  shift
-  _m=$#
-  _k=0
-  while [ $_k -lt $_c ]; do set -- "$@" "$1"; shift; _k=$((_k + 1)); done
-  shift $((_m - _c))
-  one "$@"
-}}
-while [ $# -gt 0 ]; do
-  c=0
-  for a in "$@"; do [ "$a" = ';' ] && break; c=$((c + 1)); done
-  [ $c -gt 0 ] && run_first "$c" "$@"
-  n=$((c + 1))
-  [ $n -gt $# ] && n=$#
-  shift $n
-done
+{sequence}
 exit 0
 "#,
         log = log.display(),
@@ -217,6 +230,7 @@ exit 0
         says = stub.popup_says,
         client_pid = stub.client_pid,
         has_session = u8::from(stub.session_gone),
+        sequence = RUN_SEQUENCE,
     );
     std::fs::write(&script, body).unwrap();
     crate::test_exec::make_executable(&script);
@@ -231,31 +245,45 @@ exit 0
 
 /// A `tmux` stand-in that knows some sessions: `display-message -p -t <session>: '#{session_id}'` says the id of a
 /// session of `sessions` (target, as `$3` or `=name`, and its id) and fails for any other, as tmux does of a session
-/// that is gone; `has-session` is told the same way. Every call is logged as [`stub_tmux`] logs it.
+/// that is gone; `has-session` is told the same way, and `display-message -p <text>` prints the text. A line that is
+/// a sequence of commands is run as real tmux runs one ([`RUN_SEQUENCE`]). Every call is logged as [`stub_tmux`]
+/// logs it.
 pub(crate) fn sessions_tmux(dir: &Path, sessions: &[(&str, &str)]) -> (Tmux, PathBuf) {
     let log = dir.join("calls");
     let script = dir.join("tmux");
     let cases: String = sessions
         .iter()
-        .map(|(target, id)| format!("      '{target}'|'{target}:') echo '{id}'; exit 0 ;;\n"))
+        .map(|(target, id)| format!("      '{target}'|'{target}:') echo '{id}'; return 0 ;;\n"))
+        .collect();
+    let has_cases: String = sessions
+        .iter()
+        .map(|(target, _)| format!("      '{target}'|'{target}:') return 0 ;;\n"))
         .collect();
     let body = format!(
         r#"#!/bin/sh
 [ "$1" = -u ] && shift
 {{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\036\n'; }} >> '{log}'
+one() {{
 case "$1" in
   has-session)
     case "$3" in
-{cases}    esac
+{has_cases}    esac
+    echo "can't find session: $3" >&2
     exit 1 ;;
   display-message)
+    [ "$3" = -t ] || {{ [ "$2" = -p ] && echo "$3"; return 0; }}
     case "$4" in
 {cases}    esac
+    echo "can't find session: $4" >&2
     exit 1 ;;
 esac
+return 0
+}}
+{sequence}
 exit 0
 "#,
         log = log.display(),
+        sequence = RUN_SEQUENCE,
     );
     std::fs::write(&script, body).unwrap();
     crate::test_exec::make_executable(&script);

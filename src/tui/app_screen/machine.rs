@@ -2046,7 +2046,7 @@ mod tests {
     }
 
     /// A hop of this Mac's looks at whether the app must end before it does anything: with the app made to end at
-    /// that look no tmux call is made (no `has-session`, no `select-pane`) and the screen is not lent; the positive
+    /// that look no tmux call is made (no read of the session's id, no `select-pane`) and the screen is not lent; the positive
     /// half is the same hop with the app not ending, which does both.
     #[test]
     fn a_hop_to_a_pane_of_this_mac_looks_at_the_end_before_it_lends_the_terminal() {
@@ -2080,7 +2080,11 @@ mod tests {
             let touched = |word: &str| names.contains(&word);
             let lent = seen.borrow().iter().any(|what| what.starts_with("away"));
             assert_eq!(touched("select-pane"), !ends, "ends {ends}: {names:?}");
-            assert_eq!(touched("has-session"), !ends, "ends {ends}: {names:?}");
+            // Going in asks whether the session is there (and its id) in one `display-message`.
+            let asked = tmux_calls
+                .iter()
+                .any(|call| call.last().is_some_and(|word| word == "#{session_id}"));
+            assert_eq!(asked, !ends, "ends {ends}: {names:?}");
             assert_eq!(lent, !ends, "ends {ends}: {:?}", seen.borrow());
         }
     }

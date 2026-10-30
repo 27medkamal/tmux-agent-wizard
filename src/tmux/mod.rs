@@ -105,7 +105,7 @@ impl Tmux {
 
     /// Runs `tmux -u <args>` and returns everything it ended with, whether it succeeded or not: an
     /// error only when it could not be run, or did not end by `deadline` (killed and reaped).
-    fn output_of(
+    pub(crate) fn output_of(
         &self,
         args: &[&str],
         deadline: Option<Instant>,

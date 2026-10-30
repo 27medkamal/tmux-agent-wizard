@@ -425,6 +425,67 @@ pub(crate) fn usable_came_from<'a>(
     (session_id_of(tmux, target).as_deref() != Some(from.as_str())).then_some(came_from)
 }
 
+/// What one tmux call says of a way in: the id of the session the target names and the id of the session came from,
+/// each `None` when there is no such session.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Landed {
+    pub target_id: Option<String>,
+    pub from_id: Option<String>,
+}
+
+/// The line tmux prints between the two answers of [`landed`]: a session id never reads as it does.
+const LANDED_MARK: &str = "taw-landed";
+
+/// The ids of `target` and of `came_from` (each an id, or `=name`) from ONE tmux call, which is run before the client
+/// starts and costs 45 ms or more on a busy Mac: `display-message -p -t <target>: #{session_id}` and then, with a
+/// session came from, a mark and the same for it. tmux stops a sequence at the first command that fails, so the
+/// target comes first: a target that is gone ends the call with nothing printed, and a session came from that is gone
+/// still leaves the target's answer (and its failure is that session's id missing, which is what gone means here).
+/// A tmux that could not be run says none for both.
+pub fn landed(tmux: &Tmux, target: &str, came_from: Option<&str>) -> Landed {
+    let target_at = format!("{target}:");
+    let from_at = came_from.map(|from| format!("{from}:"));
+    let mut args = vec!["display-message", "-p", "-t", &target_at, "#{session_id}"];
+    if let Some(from_at) = &from_at {
+        args.extend_from_slice(&[
+            ";",
+            "display-message",
+            "-p",
+            LANDED_MARK,
+            ";",
+            "display-message",
+            "-p",
+            "-t",
+            from_at,
+            "#{session_id}",
+        ]);
+    }
+    let Ok(output) = tmux.output_of(&args, None) else {
+        return Landed::default();
+    };
+    let out = String::from_utf8_lossy(&output.stdout);
+    let mut lines = out.lines().map(str::trim);
+    let id = |line: Option<&str>| {
+        line.filter(|id| id.starts_with('$') && !id.is_empty())
+            .map(str::to_string)
+    };
+    let target_id = id(lines.next());
+    let from_id = if target_id.is_some() && lines.next() == Some(LANDED_MARK) {
+        id(lines.next())
+    } else {
+        None
+    };
+    Landed { target_id, from_id }
+}
+
+/// `came_from` when it names a session that is there ([`Landed::from_id`]) and is not the target, else `None`: the
+/// attach is then a plain one. The same answer as [`usable_came_from`], from the ids [`landed`] read.
+pub fn usable_from<'a>(came_from: Option<&'a str>, landed: &Landed) -> Option<&'a str> {
+    let came_from = came_from?;
+    let from = landed.from_id.as_deref()?;
+    (landed.target_id.as_deref() != Some(from)).then_some(came_from)
+}
+
 /// The session id (`$3`) of the session `session` names (an id, or `=name`), `None` when there is none. A name
 /// is not kept as a way to come back to a session: it can be renamed, and the name given to another.
 pub(crate) fn session_id_of(tmux: &Tmux, session: &str) -> Option<String> {
@@ -571,6 +632,57 @@ mod tests {
             usable_came_from(&tmux, Some("=api"), "$5"),
             None,
             "same by name"
+        );
+    }
+
+    /// One call reads both ids: each is none when its session is gone, a target that is gone leaves nothing, and
+    /// a session came from that is gone leaves the target's id.
+    #[test]
+    fn the_ids_of_a_way_in_are_read_in_one_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = sessions_tmux(dir.path(), &[("=api", "$5"), ("$5", "$5"), ("$4", "$4")]);
+        let ids = |l: &Landed| (l.target_id.clone(), l.from_id.clone());
+        let some = |a: &str, b: &str| (Some(a.to_string()), Some(b.to_string()));
+        assert_eq!(ids(&landed(&tmux, "=api", Some("$4"))), some("$5", "$4"));
+        assert_eq!(
+            ids(&landed(&tmux, "=api", Some("$9"))),
+            (Some("$5".to_string()), None),
+            "the session came from is gone"
+        );
+        assert_eq!(
+            ids(&landed(&tmux, "=gone", Some("$4"))),
+            (None, None),
+            "the target is gone"
+        );
+        assert_eq!(
+            ids(&landed(&tmux, "$5", None)),
+            (Some("$5".to_string()), None)
+        );
+        assert_eq!(calls(&log).len(), 4, "one call each");
+    }
+
+    /// The session came from is used when it is there and is not the target, as `usable_came_from` says.
+    #[test]
+    fn a_session_came_from_is_used_from_the_ids_read() {
+        let id = |s: &str| Some(s.to_string());
+        let landed = |target: Option<&str>, from: Option<&str>| Landed {
+            target_id: target.and_then(id),
+            from_id: from.and_then(id),
+        };
+        assert_eq!(
+            usable_from(Some("$4"), &landed(Some("$5"), Some("$4"))),
+            Some("$4")
+        );
+        assert_eq!(usable_from(None, &landed(Some("$5"), None)), None);
+        assert_eq!(
+            usable_from(Some("$9"), &landed(Some("$5"), None)),
+            None,
+            "gone"
+        );
+        assert_eq!(
+            usable_from(Some("=api"), &landed(Some("$5"), Some("$5"))),
+            None,
+            "the target"
         );
     }
 

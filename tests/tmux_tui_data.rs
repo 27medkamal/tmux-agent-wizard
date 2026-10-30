@@ -991,3 +991,53 @@ fn a_read_of_the_list_with_no_server_says_so() {
     let err = t.read_listing(None).unwrap_err();
     assert!(taw::tmux::no_server(&err), "{err:#}");
 }
+
+/// Going in asks tmux once: the ids of the target and of the session came from come from one call on a real
+/// server, the same ids the separate reads give, and a session gone on either side is told as before.
+#[test]
+fn the_ids_of_a_way_in_come_from_one_call() {
+    let (s, _) = two_workspaces();
+    let dir = tempfile::tempdir().unwrap();
+    let (t, log) = counting(&s.0, dir.path());
+    let id_of = |name: &str| {
+        s.0.run(&[
+            "display-message",
+            "-p",
+            "-t",
+            &format!("={name}:"),
+            "#{session_id}",
+        ])
+        .unwrap()
+        .trim()
+        .to_string()
+    };
+    let (api, docs) = (id_of("api"), id_of("docs"));
+    let started = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    let ids = |target: &str, from: Option<&str>| {
+        let landed = taw::cli::open::landed(&t, target, from);
+        (landed.target_id, landed.from_id)
+    };
+    let some = |id: &str| Some(id.to_string());
+
+    assert_eq!(ids("=api", Some(&docs)), (some(&api), some(&docs)));
+    assert_eq!(started(), 1, "both ids, one call");
+    assert_eq!(ids(&docs, Some("=api")), (some(&docs), some(&api)));
+    assert_eq!(ids("=api", None), (some(&api), None));
+    assert_eq!(
+        ids("=api", Some("$999")),
+        (some(&api), None),
+        "the session came from is gone, the target's id is still read"
+    );
+    assert_eq!(
+        ids("=nobody", Some(&docs)),
+        (None, None),
+        "the target is gone"
+    );
+    assert_eq!(ids("$999", None), (None, None));
+    assert_eq!(started(), 6);
+}

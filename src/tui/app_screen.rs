@@ -972,12 +972,11 @@ impl Feed<'_> {
         // while the app makes its calls and hands the terminal over.
         screen.loading(&app.theme, &going_words(&app.snap, &landing.target));
         // A session that went while the list was on the screen is told here, in words, before the screen
-        // is given away; `tmux attach` would say only that it exited 1 (its reason goes to the log).
-        if self
-            .tmux
-            .run_ok(&["has-session", "-t", &landing.target])
-            .is_err()
-        {
+        // is given away; `tmux attach` would say only that it exited 1 (its reason goes to the log). One call
+        // asks whether the target is there, its id, and whether the session came from is there.
+        let landed =
+            crate::cli::open::landed(self.tmux, &landing.target, self.last_attached.as_deref());
+        if landed.target_id.is_none() {
             app.toast("that session is gone");
             // Back landed here at its own pane, and that pane went with its session: the next Back is
             // the end of the app, not a second "that pane is gone".
@@ -992,11 +991,10 @@ impl Feed<'_> {
         // A new client has no last session: it is attached to the session the person came from and switched to
         // the target in the same command line, so that prefix + L goes back to it.
         let came_from = self.last_attached.take();
-        let came_from =
-            crate::cli::open::usable_came_from(self.tmux, came_from.as_deref(), &landing.target);
+        let came_from = crate::cli::open::usable_from(came_from.as_deref(), &landed);
         let mut command = crate::cli::open::attach_from(self.tmux, came_from, &landing.target);
         // Kept by its id: a name can be renamed, and the name given to another session.
-        self.last_attached = crate::cli::open::session_id_of(self.tmux, &landing.target);
+        self.last_attached = landed.target_id;
         let through_came_from = came_from.is_some();
         // tmux's client prints its exit line (`[detached (from session api)]`) on its standard output, which is the
         // terminal the list is drawn on again, so the line showed until the list's first frame. The client draws
@@ -2997,6 +2995,137 @@ mod tests {
         fn drain(&mut self) {}
     }
 
+    /// Goes in at `target` with `came_from` as the session the person came from, over a tmux that knows
+    /// `sessions` (target and id): the calls tmux got before the client started (the verbs and what follows), the
+    /// client's own command line (`attach-session`, and what follows it), the toast and the session kept for
+    /// the next way in.
+    fn going_in_over(
+        sessions: &[(&str, &str)],
+        came_from: Option<&str>,
+        target: &str,
+    ) -> (
+        Vec<Vec<String>>,
+        Vec<String>,
+        Option<String>,
+        Option<String>,
+    ) {
+        use crate::cli::test_support::{calls, sessions_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = sessions_tmux(dir.path(), sessions);
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
+        let mut app = App::new(&cfg, theme, String::new(), Snapshot::default());
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.last_attached = came_from.map(str::to_string);
+        feed.go_in(
+            &mut app,
+            &mut Unlent,
+            actions::Landing {
+                target: target.into(),
+                pane: None,
+                note: None,
+            },
+        )
+        .unwrap();
+        let all = calls(&log);
+        let at = all
+            .iter()
+            .position(|call| call[0] == "attach-session")
+            .unwrap_or(all.len());
+        let attach = all.get(at).cloned().unwrap_or_default();
+        let toast = app.toast.as_ref().map(|(words, _)| words.clone());
+        // What a gone target shows is the list read again, which is no part of going in.
+        let before: Vec<Vec<String>> = all[..at]
+            .iter()
+            .filter(|call| call[0] != "list-panes")
+            .cloned()
+            .collect();
+        (before, attach, toast, feed.last_attached.clone())
+    }
+
+    /// Going in asks tmux once before the client starts, whether there is a session the person came from or not:
+    /// the target's id and the id of the session came from are read in the same call.
+    #[test]
+    fn going_in_asks_tmux_once() {
+        let sessions = [("$3", "$3"), ("=api", "$3"), ("$4", "$4")];
+        for came_from in [None, Some("$4")] {
+            let (before, attach, toast, _) = going_in_over(&sessions, came_from, "=api");
+            assert_eq!(
+                before.len(),
+                1,
+                "came from {came_from:?}: tmux was asked {before:?}"
+            );
+            assert_eq!(toast, None, "{before:?}");
+            assert_eq!(attach[0], "attach-session", "the client started");
+        }
+    }
+
+    /// Going in says the same as before for every shape of target and of the session came from: the target as
+    /// `=name` or as an id, the session came from gone or the same session by another name, and a target that
+    /// is gone (told in words, nothing attached, the session kept for the next way in).
+    #[test]
+    fn going_in_says_what_it_said_with_one_call() {
+        let sessions = [("$3", "$3"), ("=api", "$3"), ("$4", "$4"), ("=web", "$4")];
+        let line = |parts: &[&str]| parts.iter().map(|p| (*p).to_string()).collect::<Vec<_>>();
+
+        // A target by name, a session came from by id: the client goes through it and switches, and the target's
+        // id is kept.
+        let (_, attach, toast, kept) = going_in_over(&sessions, Some("$4"), "=api");
+        assert_eq!(
+            attach,
+            line(&[
+                "attach-session",
+                "-t",
+                "$4",
+                ";",
+                "switch-client",
+                "-t",
+                "=api"
+            ])
+        );
+        assert_eq!((toast, kept.as_deref()), (None, Some("$3")));
+
+        // A target by id, the session came from by name.
+        let (_, attach, _, kept) = going_in_over(&sessions, Some("=web"), "$3");
+        assert_eq!(
+            attach,
+            line(&[
+                "attach-session",
+                "-t",
+                "=web",
+                ";",
+                "switch-client",
+                "-t",
+                "$3"
+            ])
+        );
+        assert_eq!(kept.as_deref(), Some("$3"));
+
+        // No session to come from: the plain attach.
+        let (_, attach, _, kept) = going_in_over(&sessions, None, "$3");
+        assert_eq!(attach, line(&["attach-session", "-t", "$3"]));
+        assert_eq!(kept.as_deref(), Some("$3"));
+
+        // The session came from is gone: the plain attach, and the target's id is kept all the same.
+        let (_, attach, toast, kept) = going_in_over(&sessions, Some("$9"), "=api");
+        assert_eq!(attach, line(&["attach-session", "-t", "=api"]));
+        assert_eq!((toast, kept.as_deref()), (None, Some("$3")));
+
+        // The session came from is the target (by id and by name): the plain attach.
+        let (_, attach, _, _) = going_in_over(&sessions, Some("=api"), "$3");
+        assert_eq!(attach, line(&["attach-session", "-t", "$3"]));
+        let (_, attach, _, _) = going_in_over(&sessions, Some("$3"), "=api");
+        assert_eq!(attach, line(&["attach-session", "-t", "=api"]));
+
+        // The target is gone: told in words, no client, and what was kept stays kept.
+        let (before, attach, toast, kept) = going_in_over(&sessions, Some("$4"), "=gone");
+        assert_eq!(toast.as_deref(), Some("that session is gone"));
+        assert!(attach.is_empty(), "nothing was attached: {attach:?}");
+        assert_eq!(before.len(), 1, "{before:?}");
+        assert_eq!(kept.as_deref(), Some("$4"));
+    }
+
     /// A landing that went in reads the sessions once when it is back, not twice (going in shows, and
     /// the landing that called it does not show again); one that did not land shows once too.
     #[test]
@@ -4503,7 +4632,7 @@ mod tests {
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\n[ \"$1\" = -u ] && shift\ncase \"$1\" in\n  has-session) exit 0 ;;\n  attach-session) echo $$ > '{}'; exec /bin/sleep 30 ;;\nesac\nexit 0\n",
+                "#!/bin/sh\n[ \"$1\" = -u ] && shift\ncase \"$1\" in\n  has-session) exit 0 ;;\n  display-message) echo '$3' ;;\n  attach-session) echo $$ > '{}'; exec /bin/sleep 30 ;;\nesac\nexit 0\n",
                 pid_file.display()
             ),
         )

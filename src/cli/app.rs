@@ -286,15 +286,45 @@ fn supervise_children(
         }
         // Whatever the child's client is, the terminal is its until it ends.
         let client = files::read_app_record(&ctx.paths, pid).map_or(0, |record| record.client_pid);
-        while files::app_alive(client) {
-            if let Some(signal) = pending() {
-                files::remove_app_record(&ctx.paths, pid);
-                return 128 + signal;
-            }
-            std::thread::sleep(LOOK);
+        let kept = *KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        if let ClientWait::Signalled(signal) = wait_for_client(client, LOOK, kept.as_ref(), pending)
+        {
+            files::remove_app_record(&ctx.paths, pid);
+            return 128 + signal;
         }
         files::remove_app_record(&ctx.paths, pid);
     }
+}
+
+/// What the wait for a dead child's client came to.
+#[derive(Debug, PartialEq, Eq)]
+enum ClientWait {
+    /// The client is gone (or there was none), and the modes the supervisor found are back.
+    Ended,
+    /// A `SIGHUP` or `SIGTERM` came for the supervisor while the client still ran.
+    Signalled(i32),
+}
+
+/// Waits, looking every `look`, for the client `client` that the child that died had, which has the terminal until it
+/// ends. When it has ended the modes the supervisor found (`kept`) are set again before the next child starts: a
+/// tmux client puts back the modes it found as it ends, which were the lent ones with no echo, and a child that
+/// started on those would take them for the shell's.
+fn wait_for_client(
+    client: u32,
+    look: Duration,
+    kept: Option<&KeptModes>,
+    pending: impl Fn() -> Option<i32>,
+) -> ClientWait {
+    while files::app_alive(client) {
+        if let Some(signal) = pending() {
+            return ClientWait::Signalled(signal);
+        }
+        std::thread::sleep(look);
+    }
+    if let Some(kept) = kept {
+        kept.put_back();
+    }
+    ClientWait::Ended
 }
 
 /// The terminal is put back in tmux when an app that the doorway started (`back` is the session the popup was opened
@@ -533,6 +563,96 @@ mod tests {
             libc::close(slave);
         }
         assert_eq!(back, libc::ECHO, "the supervisor put the found modes back");
+    }
+
+    /// A pty of the test's own and a way to read and set its echo.
+    struct Pty {
+        master: libc::c_int,
+        slave: libc::c_int,
+    }
+
+    impl Pty {
+        fn open() -> Pty {
+            let (mut master, mut slave) = (-1, -1);
+            // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+            let opened = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(opened, 0, "no pseudo terminal");
+            Pty { master, slave }
+        }
+
+        fn echo(&self) -> bool {
+            // SAFETY: `tcgetattr` on the slave just made and a `termios` of ours.
+            let modes = unsafe {
+                let mut modes: libc::termios = std::mem::zeroed();
+                assert_eq!(
+                    libc::tcgetattr(self.slave, &mut modes),
+                    0,
+                    "no modes to read"
+                );
+                modes
+            };
+            modes.c_lflag & libc::ECHO != 0
+        }
+
+        /// What a tmux client leaves as it ends: the modes it found, which show nothing typed.
+        fn leave_without_echo(&self) {
+            // SAFETY: as above, and `tcsetattr` of the slave with modes of ours.
+            unsafe {
+                let mut modes: libc::termios = std::mem::zeroed();
+                libc::tcgetattr(self.slave, &mut modes);
+                modes.c_lflag &= !(libc::ECHO | libc::ECHONL);
+                libc::tcsetattr(self.slave, libc::TCSANOW, &modes);
+            }
+        }
+    }
+
+    impl Drop for Pty {
+        fn drop(&mut self) {
+            for fd in [self.master, self.slave] {
+                // SAFETY: a descriptor `openpty` made for this test, closed once.
+                unsafe { libc::close(fd) };
+            }
+        }
+    }
+
+    /// A stand-in client: a process that runs `script`, reaped by a thread of the test as it ends (a zombie still
+    /// counts as there), and its pid.
+    fn stand_in_client(script: &str) -> (u32, std::thread::JoinHandle<()>) {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", script])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        (
+            pid,
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            }),
+        )
+    }
+
+    /// The modes the supervisor found are back as soon as the dead child's client has ended, before a new child
+    /// starts: a tmux client leaves the terminal without echo, and a child that found that would keep it.
+    #[test]
+    fn the_found_modes_are_back_when_the_dead_childs_client_has_ended() {
+        let pty = Pty::open();
+        let kept = KeptModes::read(pty.slave);
+        assert!(pty.echo(), "found with echo (the positive half)");
+        pty.leave_without_echo();
+        let (client, reaper) = stand_in_client("sleep 0.3");
+        assert!(!pty.echo(), "the client has the terminal without echo");
+        let waited = wait_for_client(client, Duration::from_millis(20), Some(&kept), || None);
+        reaper.join().unwrap();
+        assert_eq!(waited, ClientWait::Ended);
+        assert!(pty.echo(), "the supervisor left the terminal without echo");
     }
 
     /// Three children in a row that end before [`QUICK`] are given up on, no fewer; one that lived longer

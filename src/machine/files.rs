@@ -2549,6 +2549,12 @@ mod tests {
         dead.at = 1_700_000_000_000;
         write_attached(&paths, &dead).unwrap();
         write_app_record(&paths, &record(std::process::id()));
+        // Beside the live app, the record of one that was killed (its supervisor gone too), which reading the
+        // records would remove.
+        let killed_pid = a_dead_pid();
+        let mut killed = record(killed_pid);
+        killed.supervisor = a_dead_pid();
+        write_app_record(&paths, &killed);
         let verbs = |log: &std::path::Path| -> Vec<String> {
             calls(log).iter().map(|call| call[0].clone()).collect()
         };
@@ -2566,6 +2572,10 @@ mod tests {
         assert!(
             read_attached(&paths, "/dev/ttys042").is_some(),
             "judged and removed"
+        );
+        assert!(
+            read_app_record(&paths, killed_pid).is_some(),
+            "a killed app's record was removed with no client there"
         );
 
         // Positive half: with a client, `list-clients` is asked and the dead record goes.

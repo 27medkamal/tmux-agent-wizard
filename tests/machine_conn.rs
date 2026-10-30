@@ -1015,6 +1015,78 @@ fn pinging_until_it_is_let_go(dir: &Path) -> String {
     )
 }
 
+/// Ends the processes a test started, by pid, when the test ends in any way (a red run leaves nothing behind).
+struct KillPids(Vec<u32>);
+
+impl Drop for KillPids {
+    fn drop(&mut self) {
+        for pid in &self.0 {
+            // SAFETY: a pid this test's own run started; signal 9 to it only.
+            unsafe { libc::kill(*pid as i32, libc::SIGKILL) };
+        }
+    }
+}
+
+/// The scene that left stand-in feeds behind: the process that held a feed's standard input and output is gone
+/// with no drop and no signal (a killed test binary), and whatever the feed does with its own `SIGPIPE` (a
+/// detached gate run ignores it, and a child keeps that). The tail has to end by itself then: its `cat` ends on the
+/// end of the input and its pinger on its first failed write. The old tail, a loop of pings in the script's own
+/// process, wrote into the closed pipe for ever.
+#[test]
+fn a_pinging_feed_ends_when_both_its_pipes_are_let_go_with_no_signal() {
+    use std::os::unix::process::CommandExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = scripted(dir.path(), &[], &pinging_until_it_is_let_go(dir.path()));
+    let mut command = std::process::Command::new(&script);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // SAFETY: only `signal` is called between the fork and the exec, which is async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    let mut guard = KillPids(vec![child.id()]);
+    // Positive half: it is up and pinging.
+    let mut reader = BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    while !line.contains("ping") {
+        line.clear();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0, "no ping came");
+    }
+    // The pinger's pid is written just after it starts, which may be after its first ping.
+    assert!(
+        common::wait_for(
+            || pids_of(dir.path(), "pinger.pids").len() == 2,
+            Duration::from_secs(20)
+        ),
+        "the script's pids: {:?}",
+        pids_of(dir.path(), "pinger.pids")
+    );
+    let pids = pids_of(dir.path(), "pinger.pids");
+    guard.0.extend(&pids);
+    // Both ends let go, no signal sent.
+    drop(reader);
+    drop(child.stdin.take());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let script_ended = child.try_wait().unwrap().is_some();
+        if script_ended && !alive(pids[1]) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the feed is still running with both its pipes let go (script ended: {script_ended}, pinger alive: {})",
+            alive(pids[1])
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// The pids written to `name` in `dir`, one a line (none while it is not there yet).
 fn pids_of(dir: &Path, name: &str) -> Vec<u32> {
     std::fs::read_to_string(dir.join(name))

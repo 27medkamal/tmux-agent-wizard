@@ -871,10 +871,8 @@ pub fn current_client_and_app(
         return Ok((name.trim().to_string(), None));
     };
     let (name, said) = ask_client(tmux, None).context("finding the client the popup opens on")?;
-    // With no client there is nothing to look up: the records are not judged and `list-clients` is not asked.
-    if name.is_empty() {
-        return Ok((name, None));
-    }
+    // With no client tmux says no pid, so there is nothing to look up: the attach records are checked against
+    // `list-clients` (and dead ones removed) only for a client that is there.
     let app = said.and_then(|said| app_client_in(known.settled(paths, tmux), said));
     Ok((name, app))
 }

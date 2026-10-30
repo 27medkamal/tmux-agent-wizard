@@ -1602,15 +1602,22 @@ impl ClientOutput {
         };
         // SAFETY: one pollfd of a descriptor this struct owns.
         let ready = unsafe { libc::poll(&mut fds, 1, wait.as_millis() as libc::c_int) };
-        if ready > 0 && fds.revents & libc::POLLIN != 0 {
-            self.put_through(terminal, PUT_THROUGH_LOOK_BYTES, WAIT_LOOK);
+        if ready > 0 {
+            let copied = if fds.revents & libc::POLLIN != 0 {
+                self.put_through(terminal, PUT_THROUGH_LOOK_BYTES, WAIT_LOOK)
+            } else {
+                0
+            };
             if self.terminal_gone {
                 // Only drained: a program that writes without a pause is not let to keep the app spinning.
                 std::thread::sleep(wait);
+            } else if copied == 0 {
+                // Hung up with nothing in it: every writer is gone, so nothing will come, and the client is ending
+                // or ended. The caller looks for it again in a few milliseconds, not a whole look later, so its end
+                // is noticed at once; and not at once again and again, which a poll that answers at once, with
+                // `POLLIN` set on macOS and without it on Linux, would make a spin.
+                std::thread::sleep(wait.min(HANGUP_STEP));
             }
-        } else if ready > 0 {
-            // Hung up with nothing in it: every writer is gone, so nothing will come.
-            std::thread::sleep(wait);
         }
     }
 
@@ -2025,6 +2032,11 @@ fn back_words(note: Option<&str>, failure: Option<&str>) -> Option<String> {
 
 /// How often the wait for an attach lets the machines move on.
 const WAIT_LOOK: Duration = Duration::from_millis(150);
+
+/// How long the wait for a client sleeps between two looks for it once its standard output has hung up with nothing
+/// in it (see [`ClientOutput::put_through_within`]): a few milliseconds, so that the end of a client that closed its
+/// output and ended is noticed at once.
+const HANGUP_STEP: Duration = Duration::from_millis(5);
 
 /// How long the app waits, after its client ended, for the line the key back writes.
 const LEFT_WAIT: Duration = Duration::from_millis(500);
@@ -4361,6 +4373,59 @@ mod tests {
             }
         }
         copied
+    }
+
+    /// A look at a client whose output has hung up with nothing in it comes back after a few milliseconds, not after
+    /// the whole wait it was given and not at once, so the wait looks for the client's end again in steps. The wait given is 5 s, and
+    /// the look must be back within half of it: a bound far from both the few milliseconds and the whole wait.
+    #[test]
+    fn a_look_at_a_client_whose_output_hung_up_is_not_a_whole_look_long() {
+        let (_master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec >&-; sleep 20"]);
+        let mut output = ClientOutput::on(&mut command);
+        let client = Client(command.spawn().unwrap());
+        // The command holds the pipe's write end until it is dropped, as the app's attach drops it.
+        drop(command);
+        // The positive half: the pipe has hung up (the client closed it) while the client runs.
+        let hung_up = wait_until_hung_up(&output);
+        assert!(hung_up, "the pipe never hung up");
+        let wait = Duration::from_secs(5);
+        let began = Instant::now();
+        output.look(slave, wait, Instant::now());
+        let took = began.elapsed();
+        drop(client);
+        assert!(
+            took < wait / 2,
+            "a look at a hung-up client took {took:?} of the {wait:?} it was given"
+        );
+        // Not at once either: where a hung-up pipe polls as readable (macOS) a look that came back at once would
+        // make the wait a spin.
+        assert!(
+            took >= HANGUP_STEP,
+            "a look at a hung-up client came back at once ({took:?}), which spins the wait"
+        );
+    }
+
+    /// Waits (20 s) until the read end of `output`'s pipe polls as hung up.
+    fn wait_until_hung_up(output: &ClientOutput) -> bool {
+        use std::os::fd::AsRawFd;
+        let fd = output.read.as_ref().unwrap().as_raw_fd();
+        let until = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < until {
+            let mut fds = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one pollfd of a descriptor `output` owns, polled without a wait.
+            unsafe { libc::poll(&mut fds, 1, 0) };
+            if fds.revents & libc::POLLHUP != 0 {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
     }
 
     #[test]

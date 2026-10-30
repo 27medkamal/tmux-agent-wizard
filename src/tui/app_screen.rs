@@ -1339,6 +1339,11 @@ struct ClientOutput {
     /// so that the flags of the one the program shares are not touched. Opened at the first write; closed with this.
     own: Option<std::os::fd::OwnedFd>,
     own_tried: bool,
+    /// When the pipe was first seen hung up with nothing in it, while the client still runs: a client ends within a
+    /// few milliseconds of closing its output, so only a hang-up younger than one look is waited for in steps.
+    /// One that has lasted longer is a client that keeps running with no output pipe (a program that was run in
+    /// its place, in the client's process), and is looked at once a look.
+    hung_up_since: Option<Instant>,
 }
 
 /// Whether the app is ending as its first attach returns: it was signalled, its supervisor is gone, or its
@@ -1425,6 +1430,7 @@ impl ClientOutput {
             queued_last: None,
             own: None,
             own_tried: false,
+            hung_up_since: None,
         }
     }
 
@@ -1653,8 +1659,13 @@ impl ClientOutput {
                 // Hung up with nothing in it: every writer is gone, so nothing will come, and the client is ending
                 // or ended. The caller looks for it again in a few milliseconds, not a whole look later, so its end
                 // is noticed at once; and not at once again and again, which a poll that answers at once, with
-                // `POLLIN` set on macOS and without it on Linux, would make a spin.
-                std::thread::sleep(wait.min(HANGUP_STEP));
+                // `POLLIN` set on macOS and without it on Linux, would make a spin. That is for the first look
+                // only: a client still running a look after its hang-up is not ending, and is waited for by whole
+                // looks, as a client with a pipe is.
+                let since = *self.hung_up_since.get_or_insert_with(Instant::now);
+                std::thread::sleep(hung_up_nap(since.elapsed(), wait));
+            } else {
+                self.hung_up_since = None;
             }
         }
     }
@@ -2075,6 +2086,17 @@ const WAIT_LOOK: Duration = Duration::from_millis(150);
 /// in it (see [`ClientOutput::put_through_within`]): a few milliseconds, so that the end of a client that closed its
 /// output and ended is noticed at once.
 const HANGUP_STEP: Duration = Duration::from_millis(5);
+
+/// How long the wait for a client sleeps after a look at its hung-up output that found nothing, when the hang-up is
+/// `age` old and a look is `wait`: [`HANGUP_STEP`] while the hang-up is younger than one look ([`WAIT_LOOK`]), the
+/// whole `wait` after that.
+fn hung_up_nap(age: Duration, wait: Duration) -> Duration {
+    if age < WAIT_LOOK {
+        wait.min(HANGUP_STEP)
+    } else {
+        wait
+    }
+}
 
 /// How long the app waits, after its client ended, for the line the key back writes.
 const LEFT_WAIT: Duration = Duration::from_millis(500);
@@ -4689,6 +4711,54 @@ mod tests {
         assert!(
             took >= HANGUP_STEP,
             "a look at a hung-up client came back at once ({took:?}), which spins the wait"
+        );
+    }
+
+    /// A client that keeps running with its output hung up (a program run in its place) is looked at once a look, not
+    /// every few milliseconds for as long as it lives: looks at it go on in steps only while the hang-up is younger
+    /// than one look, and then a look takes the whole wait again.
+    #[test]
+    fn once_the_hang_up_is_a_look_old_a_look_takes_the_whole_wait_again() {
+        let (_master, slave, _closing) = raw_pty();
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec >&-; sleep 20"]);
+        let mut output = ClientOutput::on(&mut command);
+        let client = Client(command.spawn().unwrap());
+        drop(command);
+        assert!(wait_until_hung_up(&output), "the pipe never hung up");
+        let wait = Duration::from_millis(600);
+        // Looks go on, a few milliseconds each, until the hang-up has lasted a look (the first one began it).
+        let first = Instant::now();
+        let mut steps = 0;
+        while first.elapsed() < WAIT_LOOK + Duration::from_millis(50) {
+            output.look(slave, wait, Instant::now());
+            steps += 1;
+        }
+        assert!(
+            steps >= 2,
+            "the looks of the first look were not in steps ({steps})"
+        );
+        let began = Instant::now();
+        output.look(slave, wait, Instant::now());
+        let took = began.elapsed();
+        drop(client);
+        assert!(
+            took >= wait / 2,
+            "a look at a client hung up for longer than a look took {took:?} of the {wait:?} it was given"
+        );
+    }
+
+    #[test]
+    fn the_nap_after_a_hang_up_is_a_step_while_it_is_young_and_the_whole_wait_after_a_look() {
+        let wait = Duration::from_millis(400);
+        assert_eq!(hung_up_nap(Duration::ZERO, wait), HANGUP_STEP);
+        assert_eq!(hung_up_nap(WAIT_LOOK / 2, wait), HANGUP_STEP);
+        assert_eq!(hung_up_nap(WAIT_LOOK, wait), wait);
+        assert_eq!(hung_up_nap(WAIT_LOOK * 10, wait), wait);
+        // A wait shorter than a step stays as short.
+        assert_eq!(
+            hung_up_nap(Duration::ZERO, Duration::from_millis(1)),
+            Duration::from_millis(1)
         );
     }
 

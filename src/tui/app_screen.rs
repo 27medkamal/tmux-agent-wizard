@@ -161,14 +161,15 @@ pub fn terminal_is_there(fd: libc::c_int) -> bool {
     look.revents & libc::POLLHUP == 0
 }
 
-/// Puts the terminal on standard output away without the loop's help: raw mode off and one `write(2)` of
-/// `away` ([`super::restore_sequence`]). Nothing here waits for a lock of the screen's.
-fn put_the_terminal_away(away: &[u8]) {
+/// Puts the terminal on standard output away without the loop's help: one `write(2)` of `away`
+/// ([`super::restore_sequence`]), and the `found` modes set if raw mode is on ([`super::leave_raw`]). Nothing here
+/// waits for a lock of the screen's.
+fn put_the_terminal_away(away: &[u8], found: Option<&libc::termios>) {
     // SAFETY: `write` of a buffer that is alive, to descriptor 1; a short or failed write is all there is.
     unsafe {
         libc::write(1, away.as_ptr().cast(), away.len());
     }
-    let _ = crossterm::terminal::disable_raw_mode();
+    super::leave_raw(found);
 }
 
 /// A thread that ends this process when the screen's loop cannot be relied on to: crossterm's wait for a
@@ -181,6 +182,9 @@ fn start_watchdog(paths: &Paths) {
     let pid = std::process::id();
     // Made here, so that the thread allocates nothing and takes no lock of the main loop's when it ends.
     let away = super::restore_sequence();
+    // A copy of the modes found before any raw mode, taken here so that the thread reads and locks nothing of the
+    // screen's ([`super::note_found_modes`] reads the terminal now, the first time only).
+    let found = super::note_found_modes();
     let _ = std::thread::Builder::new()
         .name("app-watchdog".into())
         .spawn(move || {
@@ -212,7 +216,7 @@ fn start_watchdog(paths: &Paths) {
                     // file write or in `spawn`) for the whole of `GRACE` is left: its client is left running, and
                     // ends when its terminal is hung up or it is detached.
                     if puts_away(LENT.load(Ordering::SeqCst), terminal_is_there(1)) {
-                        put_the_terminal_away(&away);
+                        put_the_terminal_away(&away, found.as_ref());
                     }
                     // `_exit` skips `Machines`' drop: the connection children are not ended by their pids, they
                     // end on EOF of their piped stdin when this process is gone, and the keeper's lease is not
@@ -264,14 +268,15 @@ fn end_by_seam() -> bool {
     })
 }
 
-/// Raw mode taken at the start of the app, before its first read. Dropping it puts the modes back (raw mode off is a
-/// no-op when the screen did that already), so every way out of `run_app` before the screen is entered gives the
-/// shell a terminal that shows what is typed. [`Screen::enter`] finds raw mode on, and keeps it.
+/// Raw mode taken at the start of the app, before its first read. Dropping it puts the found modes back (a no-op
+/// when the screen did that already, or while the terminal is lent), so every way out of `run_app` before the screen
+/// is entered gives the shell a terminal that shows what is typed. [`Screen::enter`] finds raw mode on, and keeps it.
+/// The modes it takes it from are read first ([`super::note_found_modes`]), once for the run.
 struct EarlyRaw;
 
 impl EarlyRaw {
     fn take() -> EarlyRaw {
-        let _ = crossterm::terminal::enable_raw_mode();
+        let _ = super::enter_raw();
         EarlyRaw
     }
 }
@@ -279,7 +284,7 @@ impl EarlyRaw {
 impl Drop for EarlyRaw {
     fn drop(&mut self) {
         // Not after a lent end: the terminal is the shell's or the client's then (raw mode is off, and this does nothing).
-        let _ = crossterm::terminal::disable_raw_mode();
+        super::leave_raw(super::found_modes().as_ref());
     }
 }
 
@@ -1869,7 +1874,7 @@ fn put_back_modes(fd: libc::c_int, saved: &libc::termios) {
 
 /// Ends the client `pid` that has the terminal ([`end_the_client`]) and, for an ssh that is gone or killed, puts
 /// the terminal away ([`put_the_terminal_away`] with the screen's own restore bytes, one `write(2)`), and for one
-/// it killed puts the cooked modes of [`super::cooked_modes`] back (the ssh set the terminal raw and died before it
+/// it killed puts the cooked modes of [`super::found_modes`] back (the ssh set the terminal raw and died before it
 /// could undo that; crossterm's own raw mode is off already, so [`put_the_terminal_away`]'s does nothing here).
 /// The watchdog writes nothing while the screen is lent, and its grace covers this whole sequence ([`GRACE`]), so
 /// only a main thread that is stuck while an ssh has the terminal is left unhandled: the ssh ends with its terminal,
@@ -1877,10 +1882,10 @@ fn put_back_modes(fd: libc::c_int, saved: &libc::termios) {
 fn end_and_put_away(pid: libc::pid_t, signal: libc::c_int, remote: bool) {
     let end = end_the_client(pid, signal, remote);
     if puts_away_after(remote, end) {
-        put_the_terminal_away(&super::restore_sequence());
+        put_the_terminal_away(&super::restore_sequence(), super::found_modes().as_ref());
     }
     if puts_modes_back_after(remote, end)
-        && let Some(saved) = super::cooked_modes()
+        && let Some(saved) = super::found_modes()
     {
         put_back_modes(0, &saved);
     }
@@ -1948,7 +1953,7 @@ impl ClientGuard {
         } else {
             Vec::new()
         };
-        let cooked = if remote { super::cooked_modes() } else { None };
+        let cooked = if remote { super::found_modes() } else { None };
         // SAFETY: `getpid` takes nothing and cannot fail; `tcgetpgrp` of a descriptor number (-1 for no terminal).
         let (app, foreground) = unsafe { (libc::getpid(), libc::tcgetpgrp(0)) };
         // SAFETY: the child of this fork calls only async-signal-safe functions (`guard_run`) and ends with

@@ -45,9 +45,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::cursor::Show;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
-use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
-};
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -616,9 +614,9 @@ impl Screen {
         // silence the new one's `Drop` and the watchdog.
         LENT.store(false, Ordering::SeqCst);
         install_panic_hook();
-        enable_raw_mode().map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
+        enter_raw().map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
         execute!(stdout(), EnterAlternateScreen, EnableMouseCapture).map_err(|e| {
-            let _ = disable_raw_mode();
+            leave_raw(found_modes().as_ref());
             anyhow::anyhow!("entering the popup's screen: {e}")
         })?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| {
@@ -749,14 +747,27 @@ fn lend_through<L: Lending, T, U>(
     Ok((out, Some(then)))
 }
 
-/// The modes of the terminal on standard input as [`Screen::away`] left them, the cooked ones the program that is
-/// lent the terminal finds. An ssh that is killed leaves the terminal in the raw modes it set (it undoes them only
-/// as it exits), and crossterm forgets the modes it saved once raw mode is off, so the app puts these back.
-static COOKED: std::sync::Mutex<Option<libc::termios>> = std::sync::Mutex::new(None);
+/// The modes the terminal on standard input had before the app first took raw mode (see [`note_found_modes`]), kept
+/// for the whole run. A terminal that cannot be read has none. Set once: [`Screen::away`] and the program that is
+/// lent the terminal change the terminal's modes meanwhile, and these are what every end puts back and what every
+/// raw mode and lent mode is made from, so that nothing the app does can drift them (the modes a tmux client puts
+/// back, with no echo, are never taken for the shell's).
+static FOUND: std::sync::OnceLock<Option<libc::termios>> = std::sync::OnceLock::new();
 
-/// The cooked modes saved by the last [`Screen::away`], if the terminal could be read.
-pub(crate) fn cooked_modes() -> Option<libc::termios> {
-    *COOKED.lock().unwrap_or_else(|e| e.into_inner())
+/// Whether the app's own raw mode is on (see [`enter_raw`]); [`leave_raw`] does something only while it is, as
+/// crossterm's `disable_raw_mode` did once it had taken its copy.
+static RAW: AtomicBool = AtomicBool::new(false);
+
+/// Reads the modes of the terminal on standard input, the first time only, and answers them. The app asks before its
+/// first raw mode (and before its watchdog starts), so what it keeps is what the shell left.
+pub(crate) fn note_found_modes() -> Option<libc::termios> {
+    *FOUND.get_or_init(|| read_modes(0))
+}
+
+/// The modes [`note_found_modes`] kept: none before it was called, or when the terminal could not be read. Never
+/// reads the terminal, so it is safe in a panic hook, where the terminal's modes are the raw ones.
+pub(crate) fn found_modes() -> Option<libc::termios> {
+    FOUND.get().copied().flatten()
 }
 
 /// The modes of the terminal on `fd`, if it can be read.
@@ -768,64 +779,126 @@ fn read_modes(fd: libc::c_int) -> Option<libc::termios> {
     }
 }
 
-/// Sets `modes` on the terminal `fd` at once; a failure is all there is.
+/// Sets `modes` on the terminal `fd` at once, one `tcsetattr`; a failure is all there is.
 pub(crate) fn set_modes(fd: libc::c_int, modes: &libc::termios) {
+    #[cfg(test)]
+    SET_CALLS.with(|calls| calls.set(calls.get() + 1));
     // SAFETY: `tcsetattr` of a descriptor number with modes that are alive.
     unsafe { libc::tcsetattr(fd, libc::TCSANOW, modes) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this test's thread called [`set_modes`], so that a test can say a change of modes is one call.
+    static SET_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The raw modes made from `found`: what crossterm's raw mode set (`cfmakeraw`), the app's own so that going
+/// between raw and lent modes needs no other state in between.
+fn raw_of(found: &libc::termios) -> libc::termios {
+    let mut modes = *found;
+    // SAFETY: `cfmakeraw` changes a `termios` of ours.
+    unsafe { libc::cfmakeraw(&mut modes) };
+    modes
 }
 
 /// The modes a program that is lent the terminal finds: the cooked ones with what is typed not shown. A tmux client
 /// and an ssh put back the modes they found as they end, so the terminal comes back to the app without echo as well,
 /// and a key typed in either gap (going in, coming back) is not written on the plain screen, where it would stay.
-fn lent_modes(cooked: &libc::termios) -> libc::termios {
-    let mut modes = *cooked;
+fn lent_modes(found: &libc::termios) -> libc::termios {
+    let mut modes = *found;
     modes.c_lflag &= !(libc::ECHO | libc::ECHONL);
     modes
 }
 
-/// Reads the modes of the terminal `fd` (the cooked ones, as the screen was put away), keeps them for
-/// [`cooked_modes`] and sets [`lent_modes`] on it.
-fn lend_modes(fd: libc::c_int) -> Option<libc::termios> {
-    let cooked = read_modes(fd);
-    if let Some(cooked) = &cooked {
-        set_modes(fd, &lent_modes(cooked));
-    }
-    cooked
+/// The steps the terminal's modes take as it is lent and taken back, on the terminal `fd` (standard input in the
+/// app, a pty in a test), each one `tcsetattr`: the terminal never passes through the found modes (with echo)
+/// between raw and lent, where a key typed would be shown on the plain screen.
+struct Steps {
+    fd: libc::c_int,
 }
 
-/// Sets the cooked modes `lend_modes` found (with echo) on the terminal `fd`, if there are any.
-fn cook_modes(fd: libc::c_int, saved: Option<&libc::termios>) {
-    if let Some(saved) = saved {
-        set_modes(fd, saved);
+impl Steps {
+    /// Raw mode, made from `found`: from the found, the lent or the raw modes alike.
+    fn raw(&self, found: Option<&libc::termios>) -> std::io::Result<()> {
+        let found = found.ok_or_else(|| std::io::Error::from_raw_os_error(libc::ENOTTY))?;
+        set_modes(self.fd, &raw_of(found));
+        Ok(())
+    }
+
+    /// The lent modes ([`lent_modes`]), straight from raw mode.
+    fn lend(&self, found: Option<&libc::termios>) {
+        if let Some(found) = found {
+            set_modes(self.fd, &lent_modes(found));
+        }
+    }
+
+    /// The found modes, with echo.
+    fn found(&self, found: Option<&libc::termios>) {
+        if let Some(found) = found {
+            set_modes(self.fd, found);
+        }
     }
 }
 
-/// [`hold_for_enter`] on the terminal `fd` after the cooked modes with echo `saved` are set on it: what is typed on
+/// What [`Screen::away`] does to the modes of the terminal `fd`: the lent modes, in one call, from raw mode.
+fn away_modes(fd: libc::c_int, found: Option<&libc::termios>) {
+    Steps { fd }.lend(found);
+}
+
+/// What [`Screen::back`] does to the modes of the terminal `fd`: raw mode, in one call, from the lent modes.
+fn back_modes(fd: libc::c_int, found: Option<&libc::termios>) -> std::io::Result<()> {
+    Steps { fd }.raw(found)
+}
+
+/// The app's own raw mode on standard input, from [`note_found_modes`]: the same modes crossterm's raw mode sets
+/// (`cfmakeraw`), taken here so that [`Screen::away`] can go from raw straight to the lent modes and
+/// [`Screen::back`] from the lent modes straight to raw. Nothing is flushed: what was typed is kept.
+pub(crate) fn enter_raw() -> std::io::Result<()> {
+    let found = note_found_modes();
+    Steps { fd: 0 }.raw(found.as_ref())?;
+    RAW.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Puts the `found` modes on standard input if raw mode is on, and turns it off: the end of [`enter_raw`]. Does
+/// nothing when raw mode is off already (the screen was put away, or is lent). The watchdog passes a copy it took
+/// before its thread started.
+pub(crate) fn leave_raw(found: Option<&libc::termios>) {
+    if RAW.swap(false, Ordering::SeqCst) {
+        Steps { fd: 0 }.found(found);
+    }
+}
+
+/// [`hold_for_enter`] on the terminal `fd` after the found modes with echo `found` are set on it: what is typed on
 /// the way to Enter shows, as a person at a prompt expects.
 fn hold_on(
     fd: libc::c_int,
-    saved: Option<&libc::termios>,
+    found: Option<&libc::termios>,
     out: &mut impl Write,
     line: &str,
     stop: &mut dyn FnMut() -> bool,
 ) {
-    cook_modes(fd, saved);
+    Steps { fd }.found(found);
     hold_for_enter(fd, out, line, stop);
 }
 
 impl Lending for Screen {
     fn away(&mut self) {
-        restore();
-        let saved = lend_modes(0);
-        *COOKED.lock().unwrap_or_else(|e| e.into_inner()) = saved;
+        // The screen's bytes first, then one change of modes, from raw to the lent modes: raw mode shows nothing
+        // typed, and the terminal is never put through modes with echo between the two.
+        put_screen_away();
+        away_modes(0, found_modes().as_ref());
+        RAW.store(false, Ordering::SeqCst);
         LENT.store(true, Ordering::SeqCst);
     }
 
     fn back(&mut self) -> anyhow::Result<()> {
-        // The cooked modes with echo first: raw mode saves the modes it finds, which `restore` puts back at the
-        // end, and the shell must get a terminal that shows what is typed.
-        cook_modes(0, cooked_modes().as_ref());
-        enable_raw_mode().map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
+        // One change of modes, from the lent modes (or whatever the program left) to raw: no modes with echo
+        // between, where a key typed would be shown.
+        back_modes(0, found_modes().as_ref())
+            .map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
+        RAW.store(true, Ordering::SeqCst);
         execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
             .map_err(|e| anyhow::anyhow!("entering the screen again: {e}"))?;
         // The screen is entered again: from here it is this one's to put away.
@@ -852,7 +925,7 @@ impl Lending for Screen {
     fn hold(&mut self, line: &str, stop: &mut dyn FnMut() -> bool) {
         // An ssh that was ended from outside leaves the terminal raw: the cooked modes make Enter a line and
         // show what is typed.
-        hold_on(0, cooked_modes().as_ref(), &mut stdout(), line, stop);
+        hold_on(0, found_modes().as_ref(), &mut stdout(), line, stop);
         // What was typed on the way to Enter is read and gone; the screen is taken back right after.
     }
 }
@@ -864,16 +937,16 @@ impl Drop for Screen {
                 let mut out = stdout();
                 let _ = out.write_all(&bytes);
                 let _ = out.flush();
-                let _ = disable_raw_mode();
+                leave_raw(found_modes().as_ref());
                 let _ = self.terminal.show_cursor();
             }
             // A second leave of the alternate screen would restore the cursor the first one saved, over
             // whatever the program that had the terminal wrote since.
             None => {
-                let _ = disable_raw_mode();
+                leave_raw(found_modes().as_ref());
                 // Lent and not taken back (the app ends while a program has the terminal): a tmux client put
                 // back the modes it found, which show nothing typed, and the shell is to get ones that do.
-                cook_modes(0, cooked_modes().as_ref());
+                Steps { fd: 0 }.found(found_modes().as_ref());
             }
         }
     }
@@ -890,10 +963,15 @@ fn written_on_drop(lent: bool) -> Option<Vec<u8>> {
 /// nothing was entered: every step is independent, and its failure is ignored because
 /// there is nothing useful left to do about it.
 fn restore() {
+    put_screen_away();
+    leave_raw(found_modes().as_ref());
+}
+
+/// Writes the bytes that put the screen away ([`restore_sequence`]), and nothing about the modes.
+fn put_screen_away() {
     let mut out = stdout();
     let _ = out.write_all(&restore_sequence());
     let _ = out.flush();
-    let _ = disable_raw_mode();
 }
 
 /// The bytes that put the screen away: mouse capture off, the alternate screen left, the cursor shown. One
@@ -913,7 +991,7 @@ fn install_panic_hook() {
         std::panic::set_hook(Box::new(move |info| {
             restore();
             if LENT.load(Ordering::SeqCst) {
-                cook_modes(0, cooked_modes().as_ref());
+                Steps { fd: 0 }.found(found_modes().as_ref());
             }
             previous(info);
         }));
@@ -961,35 +1039,118 @@ mod tests {
         }
     }
 
-    /// A program lent the terminal finds the cooked modes with ECHO and ECHONL off (tmux and ssh put back what they
-    /// found, so the terminal returns to the app without echo too), and the cooked modes with echo are what
-    /// [`super::cook_modes`] sets again.
+    fn calls() -> usize {
+        super::SET_CALLS.with(|calls| calls.get())
+    }
+
+    /// The flags of `modes`, for a comparison that says what differs. `PENDIN` is the kernel's own note that input
+    /// is to be retyped after a change of modes, not one the program sets, so it is left out.
+    fn flags(
+        modes: &libc::termios,
+    ) -> (
+        libc::tcflag_t,
+        libc::tcflag_t,
+        libc::tcflag_t,
+        libc::tcflag_t,
+    ) {
+        (
+            modes.c_iflag,
+            modes.c_oflag,
+            modes.c_cflag,
+            modes.c_lflag & !libc::PENDIN,
+        )
+    }
+
+    /// The modes at each step of a lend: raw from the found ones in one call, the lent modes (cooked, no echo) in one
+    /// call from raw, raw again in one call from the lent modes, and the found modes (with echo) at the end. A key
+    /// typed between two of them would be shown, so no step may go through another in between: each step is one
+    /// `tcsetattr`.
     #[test]
-    fn a_program_lent_the_terminal_finds_no_echo_and_the_cooked_modes_bring_it_back() {
+    fn the_terminal_goes_from_raw_to_the_lent_modes_and_back_in_one_call_each() {
         let pty = Pty::open();
-        let cooked = super::read_modes(pty.slave).unwrap();
+        let found = super::read_modes(pty.slave).unwrap();
+        let steps = super::Steps { fd: pty.slave };
         let both = libc::ECHO | libc::ECHONL;
         assert_eq!(
             pty.lflag() & (libc::ICANON | libc::ECHO),
             libc::ICANON | libc::ECHO,
             "a fresh pty is cooked with echo (the positive half)"
         );
-        let saved = super::lend_modes(pty.slave).expect("the modes were not read");
-        assert_eq!(
-            saved.c_lflag, cooked.c_lflag,
-            "the saved modes are the cooked ones"
-        );
+        let before = calls();
+        steps.raw(Some(&found)).unwrap();
+        assert_eq!(calls() - before, 1, "raw mode took more than one call");
+        assert_eq!(pty.lflag() & (libc::ICANON | libc::ECHO), 0, "not raw");
+        let before = calls();
+        super::away_modes(pty.slave, Some(&found));
+        assert_eq!(calls() - before, 1, "lending took more than one call");
         assert_eq!(pty.lflag() & both, 0, "a lent terminal shows what is typed");
         assert_eq!(
             pty.lflag() & libc::ICANON,
             libc::ICANON,
             "and is still line by line"
         );
-        super::cook_modes(pty.slave, Some(&saved));
+        let before = calls();
+        super::back_modes(pty.slave, Some(&found)).unwrap();
+        assert_eq!(
+            calls() - before,
+            1,
+            "raw mode again took more than one call"
+        );
+        assert_eq!(
+            pty.lflag() & (libc::ICANON | libc::ECHO),
+            0,
+            "not raw again"
+        );
+        let before = calls();
+        steps.found(Some(&found));
+        assert_eq!(calls() - before, 1);
+        assert_eq!(
+            flags(&super::read_modes(pty.slave).unwrap()),
+            flags(&found),
+            "the found modes are not back"
+        );
+    }
+
+    /// Raw mode is the same as crossterm's (`cfmakeraw` of what was found), and a terminal that cannot be read has
+    /// none to make it from: an error, as crossterm's was.
+    #[test]
+    fn raw_mode_is_made_from_the_found_modes_and_needs_them() {
+        let pty = Pty::open();
+        let found = super::read_modes(pty.slave).unwrap();
+        let steps = super::Steps { fd: pty.slave };
+        steps.raw(Some(&found)).unwrap();
+        let mut expected = found;
+        // SAFETY: `cfmakeraw` changes a `termios` of ours.
+        unsafe { libc::cfmakeraw(&mut expected) };
+        assert_eq!(
+            flags(&super::read_modes(pty.slave).unwrap()),
+            flags(&expected)
+        );
+        let before = calls();
+        assert!(steps.raw(None).is_err());
+        assert_eq!(calls(), before, "modes were set from nothing");
+    }
+
+    /// The found modes are the ones put back however often the terminal's modes were changed meanwhile, and a lent
+    /// terminal that comes back without echo (the modes a tmux client puts back) does not change them.
+    #[test]
+    fn what_a_lent_program_leaves_does_not_change_the_found_modes_that_are_put_back() {
+        let pty = Pty::open();
+        let found = super::read_modes(pty.slave).unwrap();
+        let steps = super::Steps { fd: pty.slave };
+        steps.raw(Some(&found)).unwrap();
+        steps.lend(Some(&found));
+        // The lent program ends and leaves what it found (no echo): reading the terminal now would find that.
+        assert_eq!(
+            pty.lflag() & libc::ECHO,
+            0,
+            "lent without echo (the positive half)"
+        );
+        steps.found(Some(&found));
         assert_eq!(
             pty.lflag() & libc::ECHO,
             libc::ECHO,
-            "the cooked modes show it again"
+            "the found modes show what is typed"
         );
     }
 
@@ -997,14 +1158,15 @@ mod tests {
     #[test]
     fn the_wait_for_enter_shows_what_is_typed() {
         let pty = Pty::open();
-        let saved = super::lend_modes(pty.slave).unwrap();
+        let found = super::read_modes(pty.slave).unwrap();
+        super::Steps { fd: pty.slave }.lend(Some(&found));
         assert_eq!(
             pty.lflag() & libc::ECHO,
             0,
             "lent without echo (the positive half)"
         );
         let mut out = Vec::new();
-        super::hold_on(pty.slave, Some(&saved), &mut out, "ssh failed", &mut || {
+        super::hold_on(pty.slave, Some(&found), &mut out, "ssh failed", &mut || {
             true
         });
         assert_eq!(

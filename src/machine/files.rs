@@ -843,52 +843,115 @@ pub struct AppClient {
 /// is both is the app's own. `None` when no app runs and nothing is attached, which is asked first and costs
 /// tmux nothing, or when the client is anyone else's.
 pub fn app_client(paths: &Paths, tmux: &crate::tmux::Tmux, client: &str) -> Option<AppClient> {
-    app_client_named(paths, tmux, || Some(client.to_string())).map(|(_, app)| app)
+    app_client_named(paths, tmux, Some(client)).map(|(_, app)| app)
 }
 
 /// [`app_client`] for the client the caller runs from (`#{client_name}`, as a key binding's `run-shell` resolves
 /// it): its name comes back with the answer. Nothing is asked of tmux while no app runs and nothing is attached,
 /// not even the client's name, so a verb that asks this first says to tmux what it always said.
 pub fn current_app_client(paths: &Paths, tmux: &crate::tmux::Tmux) -> Option<(String, AppClient)> {
-    app_client_named(paths, tmux, || {
-        let name = tmux
-            .run(&["display-message", "-p", "#{client_name}"])
-            .ok()?;
-        Some(name.trim().to_string()).filter(|name| !name.is_empty())
-    })
+    app_client_named(paths, tmux, None)
 }
 
-/// The rule of [`app_client`], with the client's name given only once it is known that an app or an attached
-/// record exists.
+/// The client the caller runs from, by name, and the app it belongs to when `ask_app` and one runs or a machine
+/// attach is there (the rule of [`app_client`]), asked of tmux ONCE: with an app or an attach, the name, pid, pane
+/// and terminal come in one `display-message`, and with none (or no `ask_app`) only the name, as always. The name
+/// is empty when no client is attached. `Err` is tmux failing to answer.
+pub fn current_client_and_app(
+    paths: &Paths,
+    tmux: &crate::tmux::Tmux,
+    ask_app: bool,
+) -> anyhow::Result<(String, Option<AppClient>)> {
+    use anyhow::Context;
+    let known = if ask_app {
+        known_apps(paths, tmux)
+    } else {
+        None
+    };
+    let Some(known) = known else {
+        let name = tmux
+            .run(&["display-message", "-p", "#{client_name}"])
+            .context("finding the client the popup opens on")?;
+        return Ok((name.trim().to_string(), None));
+    };
+    let (name, said) = ask_client(tmux, None).context("finding the client the popup opens on")?;
+    let app = said.and_then(|said| app_client_in(&known, said));
+    Ok((name, app))
+}
+
+/// What is known of the apps without asking tmux: the records of the apps that run and the machine attaches whose
+/// client is still there.
+struct KnownApps {
+    records: Vec<AppRecord>,
+    attached: Vec<AttachedRecord>,
+}
+
+/// The apps there are, `None` when no app runs and nothing is attached.
+fn known_apps(paths: &Paths, tmux: &crate::tmux::Tmux) -> Option<KnownApps> {
+    let records = read_app_records(paths);
+    let attached = attached_with_a_client(paths, tmux);
+    (!(records.is_empty() && attached.is_empty())).then_some(KnownApps { records, attached })
+}
+
+/// The format a client is asked in, one call for the four answers the rule needs.
+const CLIENT_ASK: &str = "#{client_name}\t#{client_pid}\t#{pane_id}\t#{client_tty}";
+
+/// The name of `client` (the current client when `None`) and what the rule needs of it, from one `display-message`.
+/// `None` for the second when tmux says no process for the client. A client that is gone, or a call that fails, is an
+/// `Err`.
+fn ask_client(
+    tmux: &crate::tmux::Tmux,
+    client: Option<&str>,
+) -> anyhow::Result<(String, Option<ClientSaid>)> {
+    let mut args = vec!["display-message"];
+    if let Some(client) = client {
+        args.extend_from_slice(&["-c", client]);
+    }
+    args.extend_from_slice(&["-p", CLIENT_ASK]);
+    let said = tmux.run(&args)?;
+    Ok(parse_client_line(&said))
+}
+
+/// The name, and the rest, of what [`CLIENT_ASK`] says: four words split by tabs (a word may be empty).
+fn parse_client_line(said: &str) -> (String, Option<ClientSaid>) {
+    let said = said.trim_end_matches('\n');
+    let Some((name, rest)) = said.split_once('\t') else {
+        return (said.trim().to_string(), None);
+    };
+    (
+        name.trim().to_string(),
+        parse_client_said(&rest.replace('\t', " ")),
+    )
+}
+
+/// The rule of [`app_client`], with the client asked of tmux once and only when an app or an attached record exists.
 fn app_client_named(
     paths: &Paths,
     tmux: &crate::tmux::Tmux,
-    client: impl FnOnce() -> Option<String>,
+    client: Option<&str>,
 ) -> Option<(String, AppClient)> {
-    let records = read_app_records(paths);
-    let attached = attached_with_a_client(paths, tmux);
-    if records.is_empty() && attached.is_empty() {
+    let known = known_apps(paths, tmux)?;
+    let (name, said) = ask_client(tmux, client).ok()?;
+    let client = client.map_or(name, str::to_string);
+    if client.is_empty() {
         return None;
     }
-    let client = client()?;
-    let said = tmux
-        .run(&[
-            "display-message",
-            "-c",
-            &client,
-            "-p",
-            "#{client_pid} #{pane_id} #{client_tty}",
-        ])
-        .ok()?;
-    let said = parse_client_said(&said)?;
-    if !records.is_empty()
+    app_client_in(&known, said?).map(|app| (client, app))
+}
+
+/// The app `said` (a client's pid, pane and terminal) belongs to, by the records of `known`.
+fn app_client_in(known: &KnownApps, said: ClientSaid) -> Option<AppClient> {
+    if !known.records.is_empty()
         && let Some(parent) = parent_pid(said.pid)
-        && let Some(app) = app_client_with(&records, said.pid, parent, said.pane.clone())
+        && let Some(app) = app_client_with(&known.records, said.pid, parent, said.pane.clone())
     {
-        return Some((client, app));
+        return Some(app);
     }
-    let record = attached.iter().find(|record| record.tty == said.tty)?;
-    machine_client_with(record, said.pid, said.pane).map(|app| (client, app))
+    let record = known
+        .attached
+        .iter()
+        .find(|record| record.tty == said.tty)?;
+    machine_client_with(record, said.pid, said.pane)
 }
 
 /// What `#{client_pid} #{pane_id} #{client_tty}` says of a client.
@@ -953,13 +1016,90 @@ fn app_client_with(
         })
 }
 
-/// The parent of the process `pid`, as `ps -o ppid= -p` says (asked as the watcher asks `ps`); `None` when
-/// `ps` cannot say, which is no app.
+/// The parent of the process `pid`, asked of the system: `proc_pidinfo` on macOS (`pbi_ppid`) and `/proc/<pid>/stat`
+/// on Linux. A `ps` is a process started (and, on macOS, a setuid one) every time a popup opens while an app runs.
+/// `None` when there is no such process, or when it cannot be said, which is no app. Where the system cannot be
+/// asked (another system, or a failed call) it is `ps -o ppid= -p`, asked as the watcher asks `ps`.
 fn parent_pid(pid: u32) -> Option<u32> {
-    crate::watch::printed_by("ps", &["-o", "ppid=", "-p", &pid.to_string()])?
-        .trim()
-        .parse()
-        .ok()
+    parent_pid_with(pid, parent_of, |args| crate::watch::printed_by("ps", args))
+}
+
+/// [`parent_pid`] with the system's answer and `ps` as given (the seam the tests stand in at).
+fn parent_pid_with(
+    pid: u32,
+    system: impl FnOnce(u32) -> Parent,
+    ps: impl FnOnce(&[&str]) -> Option<String>,
+) -> Option<u32> {
+    match system(pid) {
+        Parent::Is(parent) => Some(parent),
+        Parent::Gone => None,
+        Parent::Failed => ps(&["-o", "ppid=", "-p", &pid.to_string()])?
+            .trim()
+            .parse()
+            .ok(),
+    }
+}
+
+/// What the system said of the parent of a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Parent {
+    Is(u32),
+    /// There is no such process.
+    Gone,
+    /// The system could not be asked, or did not answer: `ps` is to be.
+    Failed,
+}
+
+#[cfg(target_os = "macos")]
+fn parent_of(pid: u32) -> Parent {
+    let Ok(pid) = libc::c_int::try_from(pid) else {
+        // No pid is that large: nothing runs as it.
+        return Parent::Gone;
+    };
+    // SAFETY: an all-zero `proc_bsdinfo` is a valid value (integers and byte arrays only).
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).unwrap_or(0);
+    // SAFETY: `info` is `size` bytes that can be written to and the call is told so, so the
+    // kernel writes no more than that and returns how many bytes it wrote.
+    let wrote = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            std::ptr::addr_of_mut!(info).cast(),
+            size,
+        )
+    };
+    if wrote == size {
+        return Parent::Is(info.pbi_ppid);
+    }
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        return Parent::Gone;
+    }
+    Parent::Failed
+}
+
+#[cfg(target_os = "linux")]
+fn parent_of(pid: u32) -> Parent {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat_ppid(&stat).map_or(Parent::Failed, Parent::Is),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Parent::Gone,
+        Err(_) => Parent::Failed,
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn parent_of(_pid: u32) -> Parent {
+    Parent::Failed
+}
+
+/// The parent of a `/proc/<pid>/stat` line: the field after the state. The second field is the command in
+/// parentheses, and it can hold spaces and parentheses itself, so the fields are counted from the last `)`:
+/// state, then ppid.
+#[cfg(any(target_os = "linux", test))]
+fn stat_ppid(stat: &str) -> Option<u32> {
+    let after = &stat[stat.rfind(')')? + 1..];
+    after.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// The JSON object in `path`, or `None` for a file that is absent, empty, not JSON or not an object.
@@ -2295,6 +2435,85 @@ mod tests {
         assert_eq!(said("0 %7"), None);
         assert_eq!(said(" \n"), None);
         assert_eq!(said("x %7"), None);
+    }
+
+    /// The client is asked of tmux once, name and the rest together, for the key rule's both doors.
+    #[test]
+    fn a_client_is_asked_of_tmux_once() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                client_pid: 4242,
+                ..Stub::default()
+            },
+        );
+        let mut mine = record(std::process::id());
+        mine.client_pid = 4242;
+        write_app_record(&paths, &mine);
+        // The parent of 4242 is nobody's here, so the client is no app's; what is pinned is the call count.
+        assert_eq!(current_app_client(&paths, &tmux), None);
+        assert_eq!(calls(&log).len(), 1, "{:?}", calls(&log));
+        assert_eq!(app_client(&paths, &tmux, "/dev/ttys001"), None);
+        assert_eq!(calls(&log).len(), 2, "{:?}", calls(&log));
+        let (name, said) = parse_client_line("/dev/ttys001\t4242\t%5\t/dev/ttys004\n");
+        assert_eq!(name, "/dev/ttys001");
+        assert_eq!(
+            said.map(|said| (said.pid, said.pane, said.tty)),
+            Some((4242, Some("%5".to_string()), "/dev/ttys004".to_string()))
+        );
+        let (name, said) = parse_client_line("/dev/ttys001\t0\t\t\n");
+        assert_eq!((name.as_str(), said.is_none()), ("/dev/ttys001", true));
+        assert_eq!(parse_client_line("").0, "");
+    }
+
+    /// The parent of a process is asked of the system: this process's own, a child's (this process), and none for
+    /// a process that is gone.
+    #[test]
+    fn the_parent_of_a_process_comes_from_the_system() {
+        let me = std::process::id();
+        // SAFETY: `getppid` takes nothing and cannot fail.
+        let mine = unsafe { libc::getppid() } as u32;
+        assert_eq!(parent_pid(me), Some(mine));
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        assert_eq!(parent_pid(child.id()), Some(me));
+        let pid = child.id();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(parent_pid(pid), None, "a pid that is gone");
+        assert_eq!(parent_pid(u32::MAX - 1), None);
+    }
+
+    /// `ps` is a fallback for a system that cannot be asked, and is not run otherwise.
+    #[test]
+    fn ps_is_asked_only_when_the_system_cannot_say() {
+        let no_ps = |_: &[&str]| -> Option<String> { panic!("ps was run") };
+        assert_eq!(parent_pid_with(7, |_| Parent::Is(3), no_ps), Some(3));
+        assert_eq!(parent_pid_with(7, |_| Parent::Gone, no_ps), None);
+        let ps = |args: &[&str]| {
+            assert_eq!(args, ["-o", "ppid=", "-p", "7"]);
+            Some("  412\n".to_string())
+        };
+        assert_eq!(parent_pid_with(7, |_| Parent::Failed, ps), Some(412));
+        assert_eq!(parent_pid_with(7, |_| Parent::Failed, |_| None), None);
+        assert_eq!(
+            parent_pid_with(7, |_| Parent::Failed, |_| Some("junk".to_string())),
+            None
+        );
+    }
+
+    /// The parent in a `/proc/<pid>/stat` line, counted from the last parenthesis.
+    #[test]
+    fn the_parent_in_a_proc_stat_line_follows_a_command_with_parentheses() {
+        assert_eq!(stat_ppid("812 (bash) S 811 812 812 34816 812"), Some(811));
+        assert_eq!(stat_ppid("12 (a b) (c) R 1 12 12 0 -1"), Some(1));
+        assert_eq!(stat_ppid("12 (short)"), None);
+        assert_eq!(stat_ppid("no command"), None);
     }
 
     #[test]

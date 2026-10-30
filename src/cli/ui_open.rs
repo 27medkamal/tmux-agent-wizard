@@ -300,7 +300,7 @@ pub fn doorway_command(
     Some(command)
 }
 
-/// `taw ui open`: works out the client the popup is for ([`current_client`]), reads its size
+/// `taw ui open`: works out the client the popup is for ([`files::current_client_and_app`]), reads its size
 /// and the live `status`/`status-position` and `@agent-wizard-*` options, computes
 /// [`geometry`], and runs `display-popup` on that client for [`popup_command`] — the
 /// ratatui popup, launched inside the popup this just opened, and told which client it is
@@ -323,12 +323,16 @@ pub fn doorway_command(
 pub(crate) fn open(ctx: &Ctx, from: Option<&str>, new_session: bool) -> anyhow::Result<Value> {
     // The client the popup is for, worked out once and named to everything after: the size
     // is its own, the popup is shown on it, and the popup is told which it is.
-    let client = current_client(ctx)?;
+    let (client, app) = files::current_client_and_app(&ctx.paths, &ctx.tmux, !new_session)?;
+    if client.is_empty() {
+        return Err(CliError::tmux("no attached client to open the popup on"));
+    }
     // A client the app started is the app's: the key sends it back to the app's list and opens
     // no popup. Asked only while an app runs (nothing is asked of tmux with none), so with no
-    // app this verb says to tmux what it always said. A request for a new session is not a way
-    // back: it opens the popup on the picker, as it does anywhere.
-    if !new_session && let Some(app) = files::app_client(&ctx.paths, &ctx.tmux, &client) {
+    // app this verb says to tmux what it always said, and with one the client's name, pid, pane and
+    // terminal are one call. A request for a new session is not a way back: it opens the popup on the
+    // picker, as it does anywhere.
+    if let Some(app) = app {
         files::append_event(
             &ctx.paths,
             &wire::Down::Left(wire::Left {
@@ -455,22 +459,6 @@ pub(crate) fn open(ctx: &Ctx, from: Option<&str>, new_session: bool) -> anyhow::
     }
 
     Ok(json!({ "x": geo.x, "y": geo.y, "w": geo.w, "h": geo.h }))
-}
-
-/// The client the popup opens on: the one tmux takes as the current client, by name. When a
-/// key binding ran the launcher that is the client whose key it was, and when it was typed
-/// in a pane it is the client most recently used at that pane's session. Empty with no
-/// client attached, and then there is nothing to open a popup on.
-fn current_client(ctx: &Ctx) -> anyhow::Result<String> {
-    let name = ctx
-        .tmux
-        .run(&["display-message", "-p", "#{client_name}"])
-        .context("finding the client the popup opens on")?;
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(CliError::tmux("no attached client to open the popup on"));
-    }
-    Ok(name.to_string())
 }
 
 /// How a `display-popup -E` that did not come back with 0 ended.
@@ -1380,6 +1368,57 @@ mod tests {
         assert_eq!(said.lines().count(), 1, "{said}");
     }
 
+    /// prefix + A in a client the app started asks tmux twice: the client's name, pid, pane and terminal in one
+    /// call, and the detach. Before it was the name, then the pid and pane and terminal, a `ps`, then the detach.
+    /// A popup open while an app runs, in a client that is not the app's, asks the one call too, before the popup.
+    #[test]
+    fn going_back_to_the_app_asks_tmux_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = Child::start();
+        let (tmux, log) = stub_with_client(dir.path(), client.pid());
+        let ctx = stub_ctx(tmux);
+        let mut record = app_record(std::process::id(), "mac-77");
+        record.client_pid = client.pid();
+        files::write_app_record(&ctx.paths, &record);
+
+        assert_eq!(open(&ctx, None, false).unwrap(), json!({ "to_app": true }));
+        let said = calls(&log);
+        let verbs: Vec<&str> = said.iter().map(|call| call[0].as_str()).collect();
+        assert_eq!(verbs, ["display-message", "detach-client"], "{said:?}");
+        assert!(
+            said[0].last().is_some_and(|format| [
+                "#{client_name}",
+                "#{client_pid}",
+                "#{pane_id}",
+                "#{client_tty}"
+            ]
+            .iter()
+            .all(|word| format.contains(word))),
+            "the one call asks the name, pid, pane and terminal: {said:?}"
+        );
+
+        // A client that is nobody's: the same one call, then what the popup always asked.
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_with_client(dir.path(), client.pid());
+        let ctx = stub_ctx(tmux);
+        let mut other = app_record(std::process::id(), "mac-77");
+        other.client_pid = client.pid() + 1;
+        files::write_app_record(&ctx.paths, &other);
+        open(&ctx, None, false).unwrap();
+        let said = calls(&log);
+        assert_eq!(
+            said.iter()
+                .filter(|call| call.iter().any(|w| w.contains("#{client_pid}")))
+                .count(),
+            1,
+            "{said:?}"
+        );
+        assert!(
+            said.iter().any(|call| call[0] == "display-popup"),
+            "{said:?}"
+        );
+    }
+
     /// A new-session request typed in a client the app started opens the popup on the picker: it is not a way
     /// back to the list, and it must not lose its intent. Without it the key goes back (the positive half).
     #[test]
@@ -1521,7 +1560,7 @@ mod tests {
         std::fs::write(
             &tmux.bin,
             format!(
-                "#!/bin/sh\ncase \"$*\" in\n  *'#{{client_tty}}'*) printf '%s %s\\n' \"$('{inner}' \"$@\")\" '{tty}'; exit 0 ;;\n  *list-clients*) '{inner}' \"$@\" >/dev/null; printf '{listed}'; exit 0 ;;\nesac\nexec '{inner}' \"$@\"\n",
+                "#!/bin/sh\ncase \"$*\" in\n  *'#{{client_tty}}'*) '{inner}' \"$@\" | awk -F'\\t' -v OFS='\\t' '{{ $4 = \"{tty}\"; print }}'; exit 0 ;;\n  *list-clients*) '{inner}' \"$@\" >/dev/null; printf '{listed}'; exit 0 ;;\nesac\nexec '{inner}' \"$@\"\n",
                 inner = inner.display(),
                 listed = listed.replace('\n', "\\n").replace('$', "\\$"),
             ),

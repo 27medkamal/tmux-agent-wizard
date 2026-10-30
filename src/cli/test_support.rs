@@ -117,6 +117,10 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
         ":"
     };
     let attached = u8::from(stub.watched);
+    let tty = stub.client_tty.as_ref().map_or_else(
+        || "/dev/ttys001".to_string(),
+        |tty| tty.display().to_string(),
+    );
     let (sessions, windows) = if stub.running {
         (
             r"printf '$3\tmain\t/tmp\t1\t1\t1700000000\t\n'",
@@ -189,6 +193,7 @@ case "$1" in
     for last; do :; done
     case "$last" in
       *client_width*) echo '{dims}' ;;
+      *client_name*client_pid*) printf '%s\t{client_pid}\t%%5\t{tty}\n' "$({name})" ;;
       *client_pid*) echo '{client_pid} %5' ;;
       '#{{client_name}}') {name} ;;
       '#{{client_last_session}}') echo main ;;

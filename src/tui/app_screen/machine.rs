@@ -313,6 +313,7 @@ impl Feed<'_> {
         }
         self.came_back(
             app,
+            screen,
             note,
             failure.as_deref(),
             come_back_to(name, line.map(|left| left.pane), pane),

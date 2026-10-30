@@ -1073,7 +1073,13 @@ impl Feed<'_> {
             .map(|left| left.pane)
             .filter(|pane| !pane.is_empty())
             .or(landing.pane);
-        self.came_back(app, landing.note.as_deref(), failure.as_deref(), pane);
+        self.came_back(
+            app,
+            screen,
+            landing.note.as_deref(),
+            failure.as_deref(),
+            pane,
+        );
         Ok(Step::Done)
     }
 
@@ -1166,10 +1172,12 @@ impl Feed<'_> {
 
     /// What the app does when it is back from an attach, of this Mac's or a machine's: says the note and why
     /// the attach ended badly, shows the list read again, lets every machine that waits try now, and puts the
-    /// cursor on `pane` (a filter that was typed is closed either way).
+    /// cursor on `pane` (a filter that was typed is closed either way). The list is drawn here, the moment the read
+    /// is in: the loop's tick, which a long attach has made due, would read a second time before its draw.
     fn came_back(
         &mut self,
         app: &mut App,
+        screen: &mut impl Lending,
         note: Option<&str>,
         failure: Option<&str>,
         pane: Option<String>,
@@ -1180,6 +1188,7 @@ impl Feed<'_> {
         self.show(self.tmux, app);
         self.hub.wake();
         app.enter_app_mode(pane, None);
+        screen.list(app);
     }
 
     /// Runs `command` on the terminal and waits, with the record saying which client it is. The wait keeps
@@ -3065,12 +3074,15 @@ mod tests {
     /// stand-in tmux had logged at that moment, and the words of each loading frame.
     struct Seen {
         events: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        /// The theme of each loading frame, in order.
+        themes: std::rc::Rc<std::cell::RefCell<Vec<theme::Theme>>>,
         tmux_log: std::path::PathBuf,
     }
     impl Seen {
         fn new(tmux_log: &std::path::Path) -> Seen {
             Seen {
                 events: Default::default(),
+                themes: Default::default(),
                 tmux_log: tmux_log.to_path_buf(),
             }
         }
@@ -3096,8 +3108,12 @@ mod tests {
         fn drain(&mut self) {
             self.note("drain");
         }
-        fn loading(&mut self, _theme: &theme::Theme, words: &str) {
+        fn loading(&mut self, theme: &theme::Theme, words: &str) {
+            self.themes.borrow_mut().push(*theme);
             self.note(&format!("loading ({words})"));
+        }
+        fn list(&mut self, _app: &mut App) {
+            self.note("list");
         }
     }
 
@@ -3246,6 +3262,66 @@ mod tests {
             LEFT_SLEEPS.with(|n| n.get()),
             0,
             "this Mac's come-back waited for a line that was not there"
+        );
+    }
+
+    /// What a come-back does, with the events of [`Seen`]: the landing for `$3`, one `go_in` of it.
+    fn a_come_back_seen() -> (Vec<String>, usize, usize) {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        // What one read of this Mac costs.
+        let mut reference = feed_over(&tmux, &cfg, &paths);
+        reference.read_local();
+        let one_read = calls(&log)
+            .iter()
+            .filter(|call| call[0] == "list-sessions")
+            .count();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+        feed.go_in(
+            &mut app,
+            &mut screen,
+            actions::Landing {
+                target: "$3".into(),
+                pane: Some("%1".into()),
+                note: None,
+            },
+        )
+        .unwrap();
+        let total_reads = calls(&log)
+            .iter()
+            .filter(|call| call[0] == "list-sessions")
+            .count();
+        (screen.events(), one_read, total_reads)
+    }
+
+    /// Coming back, the list is drawn the moment the come-back's read is in: one read between the frame that says
+    /// `loading` and the list, and nothing of tmux asked after the list (the loop's tick must not read first).
+    #[test]
+    fn coming_back_draws_the_list_the_moment_its_read_is_in() {
+        let (events, one_read, total_reads) = a_come_back_seen();
+        let loading = events
+            .iter()
+            .rposition(|e| e.starts_with("loading (loading) "))
+            .unwrap_or_else(|| panic!("no loading frame in {events:?}"));
+        let list = events
+            .iter()
+            .position(|e| e.starts_with("list"))
+            .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+        assert!(loading < list, "{events:?}");
+        assert_eq!(
+            counts_of(&events[list]).1 - counts_of(&events[loading]).1,
+            one_read,
+            "one read between the frame and the list: {events:?}"
+        );
+        assert_eq!(
+            counts_of(&events[list]).1,
+            total_reads,
+            "no read of tmux after the list: {events:?}"
         );
     }
 

@@ -638,6 +638,9 @@ trait Lending {
     /// The loading frame ([`view::draw_loading`]) is drawn with `words`, for the time the app waits for tmux with
     /// nothing true to show (going in, coming back, starting). A screen that draws nowhere does nothing.
     fn loading(&mut self, _theme: &theme::Theme, _words: &str) {}
+    /// The list is drawn from `app` as it is: the moment the screen is back and what it shows is read, so that
+    /// nothing of the app's loop (a tick that reads again) comes between. A screen that draws nowhere does nothing.
+    fn list(&mut self, _app: &mut App) {}
     /// `line` is printed on the plain terminal and the screen waits for Enter, until the terminal hangs up or
     /// `stop` says so (it is asked every [`HOLD_LOOK`] and does the waiting loop's own duties). A screen that
     /// draws nowhere holds nothing.
@@ -920,6 +923,10 @@ impl Lending for Screen {
         let _ = self
             .terminal
             .draw(|frame| view::draw_loading(frame, theme, words));
+    }
+
+    fn list(&mut self, app: &mut App) {
+        let _ = self.terminal.draw(|frame| view::draw(frame, app));
     }
 
     fn hold(&mut self, line: &str, stop: &mut dyn FnMut() -> bool) {

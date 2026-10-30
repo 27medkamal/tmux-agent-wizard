@@ -494,7 +494,8 @@ impl Feed<'_> {
         // of that id, has none: said as a gone target is, with nothing attached. With no state yet, or the id
         // in it, the attach goes on, and the far side's refusal (its own words) is for a state that lags.
         if self.state_lacks(name, raw) {
-            return Ok(self.refused_from_read(app, words::gone(&format!("{name}:{raw}"))));
+            // After a wait of up to `wait`: the rows are read again, not the ones read before it.
+            return Ok(self.refused(app, words::gone(&format!("{name}:{raw}"))));
         }
         self.go_by_route(
             app,
@@ -2517,6 +2518,65 @@ mod tests {
             );
         }
         assert_eq!(ssh_calls(&log).len(), 0, "nothing refused was run");
+    }
+
+    /// The refusal of `taw app --go` for an id the machine's state lacks comes after the wait for the machine, so it
+    /// draws this Mac from a fresh read, not from the one made before the wait: one read before, one after. (The
+    /// refusals made at once keep the read that opened the app.)
+    #[test]
+    fn going_first_to_an_id_the_state_lacks_after_a_wait_reads_the_list_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let cfg = Config::default();
+        let paths = paths_in(dir.path());
+        let (ssh, ssh_log) = stand_in_ssh(dir.path(), &paths, "", 0);
+        let (mut feed, _keeper) = studio_feed(&tmux, &cfg, &paths, &ssh, false, true);
+        let mut app = app_over(&cfg);
+        // The read that opening the app made, before the wait.
+        feed.read_local();
+        assert_eq!(list_reads(&log), 1, "the read before the wait");
+        let writer = {
+            let paths = paths.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(400));
+                let now = files::now_ms();
+                files::write_machine_file(
+                    &paths,
+                    &MachineFile {
+                        name: "studio".into(),
+                        state: Some(studio_state()),
+                        received_at: Some(now),
+                        last_seen: Some(now),
+                        live: true,
+                        words: "connected: taw 0.1.0".into(),
+                        ..MachineFile::default()
+                    },
+                );
+            })
+        };
+        let started = Instant::now();
+        let went = feed
+            .go_first(
+                &mut app,
+                &mut Unlent,
+                &target("studio", "%99"),
+                Duration::from_secs(15),
+            )
+            .unwrap();
+        writer.join().unwrap();
+        assert!(
+            started.elapsed() >= Duration::from_millis(300),
+            "the machine was waited for: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(went, Went::Refused);
+        assert_eq!(toast_of(&app).as_deref(), Some("studio:%99 is gone"));
+        assert_eq!(
+            list_reads(&log),
+            2,
+            "one read after the wait, the refusal's"
+        );
+        assert_eq!(ssh_calls(&ssh_log).len(), 0, "nothing gone was attached");
     }
 
     fn recording(log: &Path) -> (Recording, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {

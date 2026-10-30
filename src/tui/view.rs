@@ -128,6 +128,33 @@ pub(crate) const COUNTS: [AgentState; 5] = [
     AgentState::Unknown,
 ];
 
+/// What the app's top line says while it waits for tmux with nothing true to show: going into a session, coming
+/// back to the list, and starting. [`loading_session`] adds the session's name when it is known.
+pub const LOADING: &str = "loading";
+
+/// [`LOADING`] and the name of the session gone into, as its row shows it.
+pub fn loading_session(name: &str) -> String {
+    format!("{LOADING} {name}")
+}
+
+/// The loading frame: the app's top line, in a toast's place and style, says `words`, and nothing else is drawn
+/// (no rows, no counts, no preview, no hints), so that nothing of an earlier read can show while the app waits.
+pub fn draw_loading(f: &mut Frame, theme: &Theme, words: &str) {
+    let area = f.area();
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme.sidebar_bg).fg(theme.fg)),
+        area,
+    );
+    let line = Line::from(Span::styled(
+        format!(" {words}"),
+        Style::default().fg(theme.yellow),
+    ));
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(theme.sidebar_bg)),
+        Rect::new(area.x, area.y, area.width, area.height.min(1)),
+    );
+}
+
 /// Draws the whole popup.
 pub fn draw(f: &mut Frame, app: &mut App) {
     let area = f.area();

@@ -637,9 +637,9 @@ trait Lending {
     fn back(&mut self) -> anyhow::Result<()>;
     /// Whatever was typed meanwhile and left unread is dropped.
     fn drain(&mut self);
-    /// One frame of `app` is drawn, for a wait that holds the screen and says what it waits for. Only while the
-    /// screen is the app's own; a screen that draws nowhere does nothing.
-    fn draw(&mut self, _app: &mut app::App) {}
+    /// The loading frame ([`view::draw_loading`]) is drawn with `words`, for the time the app waits for tmux with
+    /// nothing true to show (going in, coming back, starting). A screen that draws nowhere does nothing.
+    fn loading(&mut self, _theme: &theme::Theme, _words: &str) {}
     /// `line` is printed on the plain terminal and the screen waits for Enter, until the terminal hangs up or
     /// `stop` says so (it is asked every [`HOLD_LOOK`] and does the waiting loop's own duties). A screen that
     /// draws nowhere holds nothing.
@@ -707,7 +707,7 @@ fn lend_through_holding<L: Lending, C, T, U>(
     held: impl FnOnce(&T) -> Option<String>,
     mut stop: impl FnMut(&mut C) -> bool,
     ended: impl Fn() -> bool,
-    after: impl FnOnce() -> U,
+    after: impl FnOnce(&mut L) -> U,
 ) -> anyhow::Result<(T, Option<U>)> {
     on.away();
     let out = run(with);
@@ -721,7 +721,7 @@ fn lend_through_holding<L: Lending, C, T, U>(
         }
     }
     on.back()?;
-    let then = after();
+    let then = after(on);
     on.drain();
     Ok((out, Some(then)))
 }
@@ -736,7 +736,7 @@ fn lend_through<L: Lending, T, U>(
     on: &mut L,
     run: impl FnOnce() -> T,
     ended: impl FnOnce() -> bool,
-    after: impl FnOnce() -> U,
+    after: impl FnOnce(&mut L) -> U,
 ) -> anyhow::Result<(T, Option<U>)> {
     on.away();
     let out = run();
@@ -744,7 +744,7 @@ fn lend_through<L: Lending, T, U>(
         return Ok((out, None));
     }
     on.back()?;
-    let then = after();
+    let then = after(on);
     on.drain();
     Ok((out, Some(then)))
 }
@@ -843,8 +843,10 @@ impl Lending for Screen {
         }
     }
 
-    fn draw(&mut self, app: &mut app::App) {
-        let _ = self.terminal.draw(|frame| view::draw(frame, app));
+    fn loading(&mut self, theme: &theme::Theme, words: &str) {
+        let _ = self
+            .terminal
+            .draw(|frame| view::draw_loading(frame, theme, words));
     }
 
     fn hold(&mut self, line: &str, stop: &mut dyn FnMut() -> bool) {
@@ -1185,7 +1187,7 @@ mod tests {
             |_| Some("words".to_string()),
             |_| false,
             || false,
-            || {
+            |_| {
                 log.borrow_mut().push("left_line");
                 2
             },
@@ -1218,7 +1220,7 @@ mod tests {
             |_| None,
             |_| false,
             || false,
-            || (),
+            |_| (),
         )
         .unwrap();
         assert_eq!(
@@ -1240,7 +1242,7 @@ mod tests {
             |_| Some("words".to_string()),
             |_| false,
             || true,
-            || (),
+            |_| (),
         )
         .unwrap();
         assert_eq!(back, None);
@@ -1260,7 +1262,7 @@ mod tests {
                 1
             },
             || false,
-            || {
+            |_| {
                 log.borrow_mut().push("left_line");
                 2
             },
@@ -1286,7 +1288,7 @@ mod tests {
                 1
             },
             || true,
-            || {
+            |_| {
                 log.borrow_mut().push("left_line");
                 2
             },

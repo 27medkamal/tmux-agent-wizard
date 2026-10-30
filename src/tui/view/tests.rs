@@ -6958,3 +6958,28 @@ fn a_custom_token_is_in_the_text_colour_on_the_open_windows_row() {
         );
     }
 }
+
+/// The loading frame says its words on the top line and draws nothing else: no rows, no counts, no hints, no
+/// preview, at a wide and at a narrow width. The words are the constants the screens use.
+#[test]
+fn the_loading_frame_shows_its_words_and_nothing_else() {
+    let theme =
+        crate::tui::theme::resolve(&Config::default().theme.name, &Default::default()).theme;
+    for (width, height) in [(100u16, 30u16), (24, 6)] {
+        for words in [super::LOADING.to_string(), super::loading_session("api")] {
+            let mut terminal =
+                Terminal::new(TestBackend::new(width, height)).expect("a test terminal");
+            terminal
+                .draw(|f| super::draw_loading(f, &theme, &words))
+                .expect("drawing must not fail");
+            let lines = lines_of(terminal.backend().buffer());
+            assert_eq!(lines[0].trim(), words, "{width}x{height}: {lines:?}");
+            assert!(
+                lines[1..].iter().all(|line| line.is_empty()),
+                "{width}x{height}: nothing below the top line: {lines:?}"
+            );
+        }
+    }
+    assert_eq!(super::LOADING, "loading");
+    assert_eq!(super::loading_session("api"), "loading api");
+}

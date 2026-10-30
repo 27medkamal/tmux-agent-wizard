@@ -137,9 +137,9 @@ impl Feed<'_> {
                     .machine_to_enter(&machine)
                     .map_err(Stop::Said)
                     .and_then(|(_, found)| {
-                        // The list is held for the wait (a few seconds on a cold ssh): one frame says why first.
-                        app.toast(words::opening_worktree(&machine));
-                        screen.draw(app);
+                        // The wait is a few seconds on a cold ssh: the screen says `loading` first, and nothing of
+                        // the list stays on it.
+                        screen.loading(&app.theme, crate::tui::view::LOADING);
                         self.open_worktree_on(&found, &workspace, OPEN_BOUND)
                     });
                 // The wait read nothing, so what was typed or scrolled meanwhile is still queued: dropped before
@@ -251,6 +251,11 @@ impl Feed<'_> {
                 Step::Done,
             ));
         }
+        // The screen says `loading <session>` now: nothing of the list stays on it while the attach is made.
+        screen.loading(
+            &app.theme,
+            &super::going_words(&app.snap, &namespaced(name, target)),
+        );
         let holder = self.record.holder().to_string();
         // `new` is no id: it asks the far taw to start a session, for a machine that has none.
         let far: Vec<&str> = if target == words::NEW_ID {
@@ -260,6 +265,7 @@ impl Feed<'_> {
         };
         let command = ssh::command(&self.ssh, self.paths, &machine, Mode::Attach, &far);
         let supervisor = self.record.supervisor();
+        let theme = app.theme;
         // The terminal is the ssh's while it runs, and the far tmux draws on it. The wait for the machine's
         // line is below, after the screen is back.
         // A failed attach is not drawn over: its own words stay on the plain terminal, with one line under them,
@@ -275,7 +281,8 @@ impl Feed<'_> {
                 super::must_end(feed)
             },
             || ending(supervisor)(),
-            || (),
+            // The screen is back and says `loading` while the machine's line is waited for and the list is read.
+            |screen| screen.loading(&theme, crate::tui::view::LOADING),
         )?;
         if back.is_none() || super::signalled() || self.record.orphaned() {
             // The app was asked to end: nothing more is drawn, and the loop's first look ends it.
@@ -325,7 +332,7 @@ impl Feed<'_> {
             if Instant::now() >= until {
                 return None;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            super::left_step();
             self.hub.poll(Instant::now());
             self.take_announced();
         }
@@ -1328,9 +1335,8 @@ mod tests {
         fn drain(&mut self) {
             self.note("drain");
         }
-        fn draw(&mut self, app: &mut App) {
-            let said = toast_of(app).unwrap_or_default();
-            self.note(&format!("draw ({said})"));
+        fn loading(&mut self, _theme: &crate::tui::theme::Theme, words: &str) {
+            self.note(&format!("loading ({words})"));
         }
     }
 
@@ -1374,16 +1380,58 @@ mod tests {
             // and the drain came right after it, before the attach started.
             assert_eq!(
                 seen[0],
-                format!("draw ({}) 0", words::opening_worktree("studio"))
+                format!("loading ({}) 0", crate::tui::view::LOADING)
             );
             assert_eq!(seen[1], "drain 1", "{seen:?}");
             if attached {
-                assert_eq!(seen[2], "away 1", "{seen:?}");
+                // The attach says `loading` again before it lends the screen.
+                assert_eq!(seen[2], "loading (loading) 1", "{seen:?}");
+                assert_eq!(seen[3], "away 1", "{seen:?}");
                 assert!(seen.iter().any(|what| what.starts_with("back")), "{seen:?}");
             } else {
                 assert_eq!(seen.len(), 2, "a refusal lends nothing: {seen:?}");
             }
         }
+    }
+
+    /// Going into a machine says `loading` before the first ssh call, and coming back says it as soon as the screen
+    /// is taken back, before the wait for the machine's line, which a machine's client still makes (counted).
+    #[test]
+    fn a_machine_is_gone_into_and_come_back_from_under_the_loading_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(dir.path(), &Stub::default());
+        let cfg = Config::default();
+        let paths = paths_in(dir.path());
+        let (ssh, log) = stand_in_ssh(dir.path(), &paths, OPENED, 0);
+        let (mut feed, _keeper) = studio_feed(&tmux, &cfg, &paths, &ssh, true, true);
+        let mut app = app_over(&cfg);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut screen = Recording {
+            log: seen.clone(),
+            ssh_log: log,
+        };
+        crate::tui::app_screen::LEFT_SLEEPS.with(|n| n.set(0));
+
+        feed.go_by_route(
+            &mut app,
+            &mut screen,
+            Route::Attach {
+                machine: "studio".into(),
+                target: "$9".into(),
+                pane: None,
+            },
+        )
+        .unwrap();
+
+        let seen = seen.borrow().clone();
+        assert_eq!(seen[0], "loading (loading) 0", "{seen:?}");
+        assert_eq!(seen[1], "away 0", "{seen:?}");
+        let back = seen.iter().position(|w| w.starts_with("back")).unwrap();
+        assert_eq!(seen[back + 1], "loading (loading) 1", "{seen:?}");
+        assert!(
+            crate::tui::app_screen::LEFT_SLEEPS.with(|n| n.get()) > 0,
+            "a machine's client keeps its wait for the line"
+        );
     }
 
     /// An app that must end (its supervisor is gone) starts no ssh, draws nothing and lends nothing, on the way
@@ -1582,12 +1630,8 @@ mod tests {
             assert_eq!(drained, !ends, "ends {ends}: {seen:?}");
             if ends {
                 assert!(
-                    seen.iter().all(|what| what.starts_with("draw")),
-                    "ends: nothing lent, only the frame that said why it waits: {seen:?}"
-                );
-                assert_eq!(
-                    toast_of(&app).as_deref(),
-                    Some(words::opening_worktree("studio").as_str())
+                    seen.iter().all(|what| what.starts_with("loading")),
+                    "ends: nothing lent, only the frame that said it waits: {seen:?}"
                 );
             } else {
                 assert!(

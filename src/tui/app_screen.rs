@@ -24,7 +24,7 @@ use crossterm::event::{self, Event, KeyEventKind};
 use super::app::{App, AppEnd, walk};
 use super::{
     GIT_TTL, LENT, Lending, Screen, TICK, actions, capture_preview, data, follow_preview,
-    lend_through, machines, overlays, theme, view, zoxide_dirs,
+    lend_through, machines, overlays, theme, tree, view, zoxide_dirs,
 };
 use crate::config::Config;
 use crate::machine::config::{ConfigWatch, load_machines, stamp_of};
@@ -434,10 +434,10 @@ pub fn run_app(
     Ok(end)
 }
 
-/// Reads this Mac once, builds the app on it and enters the screen with `enter`, then shows the first frame's
-/// data from that read ([`Feed::refresh`]), not from a second one. The screen is entered before the data
-/// is shown, as it always was; `enter` is a parameter so that a test needs no terminal.
-fn open_app<'c, S>(
+/// Enters the screen with `enter` and draws the loading frame, reads this Mac once, builds the app on it and shows
+/// the first frame's data from that read ([`Feed::refresh`]), not from a second one. `enter` is a parameter so that
+/// a test needs no terminal.
+fn open_app<'c, S: Lending>(
     feed: &mut Feed<'_>,
     cfg: &'c Config,
     theme: super::theme::Theme,
@@ -445,6 +445,10 @@ fn open_app<'c, S>(
     came_from: Option<String>,
     enter: impl FnOnce() -> anyhow::Result<S>,
 ) -> anyhow::Result<(App<'c>, S)> {
+    // The screen first, saying `loading`: nothing is known yet, and the first read takes as long as tmux takes.
+    // An error before this gives the shell its terminal back (the early raw mode); none comes after it.
+    let mut screen = enter()?;
+    screen.loading(&theme, view::LOADING);
     feed.read_local();
     let last = feed
         .tmux
@@ -456,7 +460,6 @@ fn open_app<'c, S>(
     app.set_worktrees(worktrees);
     app.set_zoxide(zoxide_dirs(cfg));
     app.enter_app_mode(came_from, last.as_deref());
-    let screen = enter()?;
     // The first frame is drawn from the read already made, not from a second one.
     feed.refresh(feed.tmux, &mut app);
     Ok((app, screen))
@@ -891,6 +894,8 @@ impl Feed<'_> {
                 self.go_by_route(app, screen, route)?;
                 return Ok(());
             }
+            // The landing may make a session or a worktree first: the screen says so before it starts.
+            screen.loading(&app.theme, &landing_words(&app.snap, action));
             match actions::land(self.tmux, self.cfg, self.paths, taw_bin, action) {
                 // What the landing made (a session, a worktree) is in the list when it is back: going in
                 // shows it, so it is not read a second time here.
@@ -946,6 +951,9 @@ impl Feed<'_> {
         screen: &mut impl Lending,
         landing: actions::Landing,
     ) -> anyhow::Result<Step> {
+        // The screen says `loading <session>` before anything is asked of tmux: nothing of the list stays on it
+        // while the app makes its calls and hands the terminal over.
+        screen.loading(&app.theme, &going_words(&app.snap, &landing.target));
         // A session that went while the list was on the screen is told here, in words, before the screen
         // is given away; `tmux attach` would say only that it exited 1 (its reason goes to the log).
         if self
@@ -984,6 +992,7 @@ impl Feed<'_> {
         // so it is there already, and a client that ended another way has none, and a short wait is how
         // that is told. An app that was asked to end does not wait.
         let supervisor = self.record.supervisor();
+        let theme = app.theme;
         let (ended, back_in) = lend_through(
             screen,
             || {
@@ -1016,7 +1025,13 @@ impl Feed<'_> {
             },
             // The client was ended for a signal or a gone supervisor (`wait_for`): the screen is not taken back.
             ending(supervisor),
-            || left_line(&mut tail, &holder, LEFT_WAIT),
+            // The screen is back and says `loading` until the list is read. This Mac's key back writes its line
+            // before it detaches the client, so the line is in the file already when the client has ended: it is
+            // looked for once, and a client that ended another way (a plain detach) has none and costs no wait.
+            |screen| {
+                screen.loading(&theme, view::LOADING);
+                left_line(&mut tail, &holder, Duration::ZERO)
+            },
         )?;
         let back_in = back_in.flatten();
         if signalled() || self.record.orphaned() {
@@ -2064,6 +2079,54 @@ const HANGUP_STEP: Duration = Duration::from_millis(5);
 /// How long the app waits, after its client ended, for the line the key back writes.
 const LEFT_WAIT: Duration = Duration::from_millis(500);
 
+/// The words of the loading frame for a go to `id`: a session id (`$3`, `studio:$3`), a pane id (`%7`) or `=name`.
+/// The name is the one the session's row shows ([`tree::session_name`]); a session the list does not have (one that
+/// is being made) is called by its name when the id is one, else the words are `loading` alone.
+fn going_words(snap: &Snapshot, id: &str) -> String {
+    if let Some(name) = id.strip_prefix('=') {
+        let shown = snap
+            .spaces
+            .iter()
+            .find(|space| space.machine.is_none() && space.session_name == name)
+            .map(|space| tree::session_name(snap, &space.session_id))
+            .unwrap_or_else(|| name.to_string());
+        return view::loading_session(&shown);
+    }
+    let session = snap
+        .panes
+        .iter()
+        .find(|pane| pane.pane_id == id)
+        .map_or(id, |pane| pane.session_id.as_str());
+    match tree::session_name(snap, session) {
+        name if !name.is_empty() => view::loading_session(&name),
+        _ => view::LOADING.to_string(),
+    }
+}
+
+/// [`going_words`] for the landing `action`, before it is made: the session of a jump or a switch, the session
+/// of a pane; a project or a worktree that may not be a session yet, and the next stop, say `loading` alone.
+fn landing_words(snap: &Snapshot, action: &actions::Action) -> String {
+    match action {
+        actions::Action::Jump { session, .. } | actions::Action::SwitchWorkspace { session } => {
+            going_words(snap, session)
+        }
+        _ => view::LOADING.to_string(),
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a wait for a `left` line slept, on this thread: the tests count waits, never time them.
+    static LEFT_SLEEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Sleeps one step of a wait for a `left` line, and counts it for the tests.
+fn left_step() {
+    #[cfg(test)]
+    LEFT_SLEEPS.with(|n| n.set(n.get() + 1));
+    std::thread::sleep(Duration::from_millis(20));
+}
+
 /// The first `left` line addressed to `holder` that is in the events file by `wait` from now, or `None` when
 /// none came. Looks at once, so a line that is already there costs nothing.
 fn left_line(tail: &mut files::EventTail, holder: &str, wait: Duration) -> Option<Left> {
@@ -2079,7 +2142,7 @@ fn left_line(tail: &mut files::EventTail, holder: &str, wait: Duration) -> Optio
         if Instant::now() >= until {
             return None;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        left_step();
     }
 }
 
@@ -2960,7 +3023,7 @@ mod tests {
         let entered = std::cell::Cell::new(false);
         open_app(&mut feed, &cfg, theme(), String::new(), None, || {
             entered.set(true);
-            Ok(())
+            Ok(Unlent)
         })
         .unwrap();
         assert!(entered.get(), "the screen was entered");
@@ -2971,58 +3034,82 @@ mod tests {
         assert_eq!(reads() - before, one_read + 1, "the calls were {verbs:?}");
     }
 
-    /// A screen that, once it is taken back, has the key back's line written `LATE` later, as `taw ui` writes
-    /// it when the client is sent back, and notes when it was taken back and when whatever follows ended.
-    struct LineComesAfterBack {
-        paths: Paths,
-        holder: String,
-        writer: Option<std::thread::JoinHandle<()>>,
-        back_at: Option<Instant>,
-        after_at: Option<Instant>,
+    /// A screen that notes what it is done, in order, with the number of calls and of reads (`list-sessions`) the
+    /// stand-in tmux had logged at that moment, and the words of each loading frame.
+    struct Seen {
+        events: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+        tmux_log: std::path::PathBuf,
     }
-    impl LineComesAfterBack {
-        const LATE: Duration = Duration::from_millis(150);
+    impl Seen {
+        fn new(tmux_log: &std::path::Path) -> Seen {
+            Seen {
+                events: Default::default(),
+                tmux_log: tmux_log.to_path_buf(),
+            }
+        }
+        fn note(&self, what: &str) {
+            let calls = crate::cli::test_support::calls(&self.tmux_log);
+            let reads = calls.iter().filter(|c| c[0] == "list-sessions").count();
+            self.events
+                .borrow_mut()
+                .push(format!("{what} calls={} reads={reads}", calls.len()));
+        }
+        fn events(&self) -> Vec<String> {
+            self.events.borrow().clone()
+        }
     }
-    impl Lending for LineComesAfterBack {
-        fn away(&mut self) {}
+    impl Lending for Seen {
+        fn away(&mut self) {
+            self.note("away");
+        }
         fn back(&mut self) -> anyhow::Result<()> {
-            self.back_at = Some(Instant::now());
-            let (paths, holder) = (self.paths.clone(), self.holder.clone());
-            self.writer = Some(std::thread::spawn(move || {
-                std::thread::sleep(Self::LATE);
-                files::append_event(&paths, &left(&holder, "%77"));
-            }));
+            self.note("back");
             Ok(())
         }
         fn drain(&mut self) {
-            self.after_at = Some(Instant::now());
-            if let Some(writer) = self.writer.take() {
-                writer.join().unwrap();
-            }
+            self.note("drain");
+        }
+        fn loading(&mut self, _theme: &theme::Theme, words: &str) {
+            self.note(&format!("loading ({words})"));
         }
     }
 
-    /// The wait for the key back's line comes after the screen is back: what follows the lent program
-    /// (the left line's wait) ends no sooner than the line, which is written only once the screen is taken
-    /// back. A wait that ran before the screen came back would be over by then and the screen would be
-    /// back at once (cooked terminal: keys echoed, Ctrl-C passed on).
+    /// The numbers in a note of [`Seen`]: calls, reads.
+    fn counts_of(event: &str) -> (usize, usize) {
+        let number = |key: &str| {
+            event
+                .split(&format!("{key}="))
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| panic!("no {key} in {event}"))
+        };
+        (number("calls"), number("reads"))
+    }
+
+    fn app_with_session<'c>(cfg: &'c Config, id: &str, name: &str) -> App<'c> {
+        let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
+        let mut snap = Snapshot::default();
+        snap.spaces.push(data::SpaceRow {
+            session_id: id.into(),
+            session_name: name.into(),
+            ..Default::default()
+        });
+        App::new(cfg, theme, String::new(), snap)
+    }
+
+    /// Going in says `loading <session>` before the first call to tmux (the has-session), the session named as its
+    /// row shows it.
     #[test]
-    fn going_in_waits_for_the_left_line_after_the_screen_is_back() {
+    fn going_in_draws_the_loading_frame_before_the_first_tmux_call() {
         use crate::cli::test_support::{Stub, stub_tmux};
         let dir = tempfile::tempdir().unwrap();
-        let (tmux, _) = stub_tmux(dir.path(), &Stub::default());
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
         let paths = paths_in(dir.path());
         let cfg = Config::default();
-        let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
-        let mut app = App::new(&cfg, theme, String::new(), Snapshot::default());
+        let mut app = app_with_session(&cfg, "$3", "api");
         let mut feed = feed_over(&tmux, &cfg, &paths);
-        let mut screen = LineComesAfterBack {
-            paths: paths.clone(),
-            holder: feed.record.holder().to_string(),
-            writer: None,
-            back_at: None,
-            after_at: None,
-        };
+        let mut screen = Seen::new(&log);
 
         feed.go_in(
             &mut app,
@@ -3035,12 +3122,187 @@ mod tests {
         )
         .unwrap();
 
-        let back = screen.back_at.expect("the screen was taken back");
-        let after = screen.after_at.expect("what follows ran");
+        let events = screen.events();
+        assert_eq!(
+            events[0], "loading (loading api) calls=0 reads=0",
+            "{events:?}"
+        );
+        assert!(events[1].starts_with("away"), "{events:?}");
+    }
+
+    /// A refusal (the session is gone) after the loading frame leaves the list's toast, as before: nothing is lent.
+    #[test]
+    fn a_session_that_is_gone_says_so_after_the_loading_frame_and_lends_nothing() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                session_gone: true,
+                ..Stub::default()
+            },
+        );
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+
+        feed.go_in(
+            &mut app,
+            &mut screen,
+            actions::Landing {
+                target: "$3".into(),
+                pane: None,
+                note: None,
+            },
+        )
+        .unwrap();
+
+        let events = screen.events();
+        assert_eq!(events.len(), 1, "only the frame, nothing lent: {events:?}");
         assert!(
-            after.duration_since(back) >= LineComesAfterBack::LATE,
-            "the wait ended {:?} after the screen came back, before the line was written",
-            after.duration_since(back)
+            app.toast
+                .as_ref()
+                .is_some_and(|(t, _)| t == "that session is gone")
+        );
+    }
+
+    /// Coming back draws the loading frame as soon as the screen is taken back, before tmux is read, and the list's
+    /// read comes after it. No wait for the `left` line is made when none is there (counted, never timed).
+    #[test]
+    fn coming_back_draws_the_loading_frame_before_the_read_and_waits_for_no_line() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+        LEFT_SLEEPS.with(|n| n.set(0));
+
+        feed.go_in(
+            &mut app,
+            &mut screen,
+            actions::Landing {
+                target: "$3".into(),
+                pane: Some("%1".into()),
+                note: None,
+            },
+        )
+        .unwrap();
+
+        let events = screen.events();
+        let at = |prefix: &str| {
+            events
+                .iter()
+                .position(|e| e.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no {prefix} in {events:?}"))
+        };
+        let (back, loading, drain) = (at("back"), at("loading (loading) "), at("drain"));
+        assert!(back < loading && loading < drain, "{events:?}");
+        assert_eq!(
+            counts_of(&events[loading]),
+            counts_of(&events[back]),
+            "nothing was asked of tmux between the screen coming back and the frame: {events:?}"
+        );
+        let reads_after = crate::cli::test_support::calls(&log)
+            .iter()
+            .filter(|c| c[0] == "list-sessions")
+            .count();
+        assert!(
+            reads_after > counts_of(&events[drain]).1,
+            "the list is read after the frame (and after the drain): {events:?}"
+        );
+        assert_eq!(
+            LEFT_SLEEPS.with(|n| n.get()),
+            0,
+            "this Mac's come-back waited for a line that was not there"
+        );
+    }
+
+    /// The line this Mac's key back wrote is found by the one look, and its pane is where the cursor goes.
+    #[test]
+    fn the_line_already_in_the_file_is_found_without_a_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        let mut tail = files::EventTail::at_end(&paths);
+        files::append_event(&paths, &left("h1", "%77"));
+        LEFT_SLEEPS.with(|n| n.set(0));
+        let found = left_line(&mut tail, "h1", Duration::ZERO);
+        assert_eq!(found.map(|l| l.pane), Some("%77".to_string()));
+        assert_eq!(LEFT_SLEEPS.with(|n| n.get()), 0);
+        // The positive half of the counter: a wait that has time to spend sleeps.
+        assert!(left_line(&mut tail, "h1", Duration::from_millis(60)).is_none());
+        assert!(LEFT_SLEEPS.with(|n| n.get()) >= 1, "a real wait sleeps");
+    }
+
+    /// App start enters the screen and draws `loading` before the first read of tmux.
+    #[test]
+    fn the_app_starts_with_the_loading_frame_before_its_first_read() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let screen = Seen::new(&log);
+        let events = screen.events.clone();
+        let notes = events.clone();
+        let (_app, _screen) = open_app(
+            &mut feed,
+            &cfg,
+            theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+            String::new(),
+            None,
+            move || {
+                notes.borrow_mut().push("entered".to_string());
+                Ok(screen)
+            },
+        )
+        .unwrap();
+        let events = events.borrow().clone();
+        assert_eq!(events[0], "entered", "{events:?}");
+        assert_eq!(events[1], "loading (loading) calls=0 reads=0", "{events:?}");
+        assert!(
+            !crate::cli::test_support::calls(&log).is_empty(),
+            "the first read came after"
+        );
+    }
+
+    #[test]
+    fn the_words_of_a_go_name_the_session_as_its_row_does() {
+        let cfg = Config::default();
+        let mut snap = Snapshot::default();
+        snap.spaces.push(data::SpaceRow {
+            session_id: "$3".into(),
+            session_name: "api".into(),
+            ..Default::default()
+        });
+        snap.panes.push(data::PaneRow {
+            pane_id: "%7".into(),
+            session_id: "$3".into(),
+            ..Default::default()
+        });
+        let _ = &cfg;
+        assert_eq!(going_words(&snap, "$3"), "loading api");
+        assert_eq!(going_words(&snap, "%7"), "loading api");
+        assert_eq!(going_words(&snap, "=api"), "loading api");
+        assert_eq!(going_words(&snap, "=new-one"), "loading new-one");
+        assert_eq!(going_words(&snap, "$9"), view::LOADING);
+        assert_eq!(
+            landing_words(
+                &snap,
+                &actions::Action::SwitchWorkspace {
+                    session: "$3".into()
+                }
+            ),
+            "loading api"
+        );
+        assert_eq!(
+            landing_words(&snap, &actions::Action::NextUp { own: None }),
+            view::LOADING
         );
     }
 

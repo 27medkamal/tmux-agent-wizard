@@ -1925,7 +1925,9 @@ const GUARD_WAIT_LOOKS: u32 = 8;
 /// the shell that has it back. The guard looks every [`GUARD_LOOK_MS`] whether the app and its supervisor are both
 /// gone: an app that is gone while its supervisor lives leaves the client where it is, on purpose (the supervisor
 /// waits for it and starts the list again once it ends). Then it hangs the client up, kills it if it is still there
-/// after [`GUARD_WAIT_LOOKS`] looks, and for an ssh puts the terminal away as the app's own end does. It ends by
+/// after [`GUARD_WAIT_LOOKS`] looks, for an ssh puts the terminal away as the app's own end does, and puts the modes
+/// the terminal had when the app started back once the client is gone (a tmux client puts back the lent ones, with no
+/// echo, as it ends; an ssh that was killed leaves raw ones). It ends by
 /// itself when the client is gone, and the app ends it (and reaps it) when the attach is over. It touches the one
 /// pid it was given, never a name.
 struct ClientGuard {
@@ -1953,7 +1955,8 @@ impl ClientGuard {
         } else {
             Vec::new()
         };
-        let cooked = if remote { super::found_modes() } else { None };
+        // For a tmux client of this Mac too: it puts back the lent modes, with no echo, as it ends.
+        let cooked = super::found_modes();
         // SAFETY: `getpid` takes nothing and cannot fail; `tcgetpgrp` of a descriptor number (-1 for no terminal).
         let (app, foreground) = unsafe { (libc::getpid(), libc::tcgetpgrp(0)) };
         // SAFETY: the child of this fork calls only async-signal-safe functions (`guard_run`) and ends with
@@ -1987,9 +1990,9 @@ impl Drop for ClientGuard {
 
 /// The body of the guard of `client` for the app `app` under `supervisor`: only async-signal-safe calls, no allocation. `away` is what
 /// puts the screen away (empty for a client of this Mac's own tmux, which does it itself) and `cooked` the modes the
-/// terminal had before the client took it, put back after a client that had to be killed, and only while the
-/// terminal's foreground process group is still `foreground`, the one it had at the attach: a shell that has taken the
-/// terminal back has set its own modes (a line editor's), which are not put into cooked mode under it.
+/// terminal had when the app started, put back once the client is gone (it ended on the hang-up, or was killed), and
+/// only while the terminal's foreground process group is still `foreground`, the one it had at the attach: a shell
+/// that has taken the terminal back has set its own modes (a line editor's), which are not put into cooked mode under it.
 fn guard_run(
     app: libc::pid_t,
     supervisor: libc::pid_t,
@@ -2019,7 +2022,6 @@ fn guard_run(
         }
         libc::kill(client, libc::SIGHUP);
         libc::kill(client, libc::SIGCONT);
-        let mut killed = false;
         for look in 0..=GUARD_WAIT_LOOKS {
             guard_nap(GUARD_LOOK_MS);
             if libc::kill(client, 0) != 0 {
@@ -2027,15 +2029,13 @@ fn guard_run(
             }
             if look == GUARD_WAIT_LOOKS {
                 libc::kill(client, libc::SIGKILL);
-                killed = true;
                 guard_nap(GUARD_LOOK_MS);
             }
         }
         if !away.is_empty() && libc::isatty(1) == 1 {
             libc::write(1, away.as_ptr().cast(), away.len());
         }
-        if killed
-            && let Some(saved) = cooked
+        if let Some(saved) = cooked
             && foreground > 0
             && libc::tcgetpgrp(0) == foreground
         {
@@ -3944,6 +3944,81 @@ mod tests {
                 "{end:?}: only a killed ssh left the modes it set"
             );
             assert!(!puts_modes_back_after(false, end), "{end:?}: local");
+        }
+    }
+
+    /// The guard of a client that ends on its hang-up (a tmux client of this Mac: it puts back the lent modes, which
+    /// show nothing typed, as it ends) puts the modes the app found back once the client is gone, while the terminal
+    /// is still in the group it had at the attach; and it leaves them alone when another group has the terminal
+    /// then (a shell that took it back owns its modes). Run in forked children that have the pty as their
+    /// controlling terminal, as the guard has the terminal of its app.
+    #[test]
+    fn the_guard_puts_the_found_modes_back_once_the_client_is_gone_while_the_group_still_has_the_terminal()
+     {
+        for (other_group_has_it, echo_back) in [(false, true), (true, false)] {
+            let (mut master, mut slave) = (-1, -1);
+            // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+            assert_eq!(
+                unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                        std::ptr::null_mut(),
+                    )
+                },
+                0,
+                "no pseudo terminal"
+            );
+            let found = crate::tui::read_modes(slave).expect("no modes to read");
+            // Read through the master: the slave is revoked when the guard, which made it its controlling
+            // terminal, ends as the leader of its session.
+            let echo = || crate::tui::read_modes(master).unwrap().c_lflag & libc::ECHO != 0;
+            assert!(echo(), "found with echo (the positive half)");
+            // What the client's end leaves: the lent modes.
+            crate::tui::set_modes(slave, &crate::tui::lent_modes(&found));
+            assert!(!echo(), "lent without echo (the positive half)");
+            let mut client = Command::new("/bin/sh")
+                .args(["-c", "exec sleep 30"])
+                .spawn()
+                .unwrap();
+            let client_pid = client.id() as libc::pid_t;
+            // SAFETY: the forked child calls only async-signal-safe functions (`setsid`, `ioctl`, `dup2`,
+            // `tcgetpgrp`, `setpgid` and what `guard_run` calls) and ends with `_exit`.
+            let guard = unsafe { libc::fork() };
+            assert!(guard >= 0, "fork failed");
+            if guard == 0 {
+                // SAFETY: as above.
+                unsafe {
+                    libc::setsid();
+                    libc::ioctl(slave, libc::TIOCSCTTY as _, 0);
+                    libc::dup2(slave, 0);
+                    let foreground = libc::tcgetpgrp(0);
+                    // A group that is not the terminal's foreground is another group's attach: the check fails.
+                    let at_attach = if other_group_has_it {
+                        foreground + 1
+                    } else {
+                        foreground
+                    };
+                    guard_run(0, 0, client_pid, &[], Some(&found), at_attach);
+                }
+            }
+            let ended = client.wait().unwrap();
+            let mut status = 0;
+            // SAFETY: `waitpid` of the guard this test forked.
+            unsafe { libc::waitpid(guard, &mut status, 0) };
+            let back = echo();
+            // SAFETY: closing the descriptors this test made, once.
+            unsafe {
+                libc::close(master);
+                libc::close(slave);
+            }
+            assert!(!ended.success(), "the client was not hung up: {ended:?}");
+            assert_eq!(
+                back, echo_back,
+                "other group has the terminal: {other_group_has_it}"
+            );
         }
     }
 

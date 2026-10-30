@@ -176,6 +176,60 @@ pub(super) fn supervise(
     back: Option<&str>,
     back_last: Option<&str>,
 ) -> i32 {
+    // The terminal's modes as found go back when this ends, however: a child that died while a tmux client
+    // had the terminal (the client put back modes that show nothing typed) must not leave the shell that.
+    let kept = KeptModes::read(libc::STDIN_FILENO);
+    *KEPT.lock().unwrap_or_else(|e| e.into_inner()) = Some(kept);
+    let code = supervise_children(ctx, go, back, back_last);
+    kept.put_back();
+    code
+}
+
+/// The terminal's modes as the supervisor found them, and the descriptor they are for.
+#[derive(Clone, Copy)]
+struct KeptModes {
+    fd: libc::c_int,
+    modes: Option<libc::termios>,
+}
+
+/// What the supervisor found, for [`back_to_tmux`], which replaces this process and so never returns to `supervise`.
+static KEPT: std::sync::Mutex<Option<KeptModes>> = std::sync::Mutex::new(None);
+
+impl KeptModes {
+    /// Reads the modes of the terminal `fd`; none when it is no terminal.
+    fn read(fd: libc::c_int) -> KeptModes {
+        // SAFETY: `tcgetattr` fills a `termios` of ours; a failure leaves it unused.
+        let modes = unsafe {
+            let mut modes: libc::termios = std::mem::zeroed();
+            (libc::tcgetattr(fd, &mut modes) == 0).then_some(modes)
+        };
+        KeptModes { fd, modes }
+    }
+
+    /// Sets them again, unless another process group has the terminal (a write to its modes would stop this
+    /// process) or there were none.
+    fn put_back(&self) {
+        let Some(modes) = &self.modes else {
+            return;
+        };
+        // SAFETY: `tcgetpgrp` and `getpgrp` take nothing; `tcsetattr` of a descriptor number with modes that are
+        // alive, whose failure (a terminal that is gone) is all there is.
+        unsafe {
+            let foreground = libc::tcgetpgrp(self.fd);
+            if foreground > 0 && foreground != libc::getpgrp() {
+                return;
+            }
+            libc::tcsetattr(self.fd, libc::TCSANOW, modes);
+        }
+    }
+}
+
+fn supervise_children(
+    ctx: &Ctx,
+    go: Option<&str>,
+    back: Option<&str>,
+    back_last: Option<&str>,
+) -> i32 {
     reset_sigchld();
     // SAFETY: `signal` with a handler that only stores to an atomic, or with `SIG_IGN`.
     unsafe {
@@ -256,6 +310,10 @@ fn back_to_tmux(ctx: &Ctx, back: Option<&str>, last: Option<&str>, code: i32) ->
     let Some(session) = back else {
         return code;
     };
+    // The client that replaces this process finds the terminal as the supervisor did.
+    if let Some(kept) = *KEPT.lock().unwrap_or_else(|e| e.into_inner()) {
+        kept.put_back();
+    }
     // `isatty` alone says yes on macOS for a terminal whose master closed: a client started there would attach
     // for a moment before it read the hang-up. The screen's watchdog asks the same question.
     if !crate::tui::terminal_is_there(libc::STDIN_FILENO) {
@@ -428,6 +486,54 @@ pub(super) fn report(err: &anyhow::Error) -> i32 {
 mod tests {
     use super::*;
     use crate::cli::test_support::{Stub, stub_ctx, stub_tmux};
+
+    /// The supervisor puts back the modes it found on a terminal a child left without echo (a tmux client put
+    /// back the modes it found, and the child died before it could take them again).
+    #[test]
+    fn the_modes_the_supervisor_found_come_back_after_a_child_left_the_terminal_without_echo() {
+        let (mut master, mut slave) = (-1, -1);
+        // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+        let opened = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(opened, 0, "no pseudo terminal");
+        let lflag = || {
+            // SAFETY: `tcgetattr` on the slave just made and a `termios` of ours.
+            unsafe {
+                let mut modes: libc::termios = std::mem::zeroed();
+                assert_eq!(libc::tcgetattr(slave, &mut modes), 0, "no modes to read");
+                modes.c_lflag
+            }
+        };
+        let kept = KeptModes::read(slave);
+        assert_eq!(
+            lflag() & libc::ECHO,
+            libc::ECHO,
+            "found with echo (the positive half)"
+        );
+        // SAFETY: as above, and `tcsetattr` of the slave with modes of ours.
+        unsafe {
+            let mut modes: libc::termios = std::mem::zeroed();
+            libc::tcgetattr(slave, &mut modes);
+            modes.c_lflag &= !(libc::ECHO | libc::ECHONL);
+            libc::tcsetattr(slave, libc::TCSANOW, &modes);
+        }
+        assert_eq!(lflag() & libc::ECHO, 0, "the child left it without echo");
+        kept.put_back();
+        let back = lflag() & libc::ECHO;
+        // SAFETY: closing the descriptors this test made, once.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+        assert_eq!(back, libc::ECHO, "the supervisor put the found modes back");
+    }
 
     /// Three children in a row that end before [`QUICK`] are given up on, no fewer; one that lived longer
     /// between them starts the count again.

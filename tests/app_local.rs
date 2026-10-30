@@ -3754,3 +3754,180 @@ fn the_session_the_app_came_from_is_kept_by_its_id_through_a_rename() {
         "the client's last session is the one it came from, which has another name now"
     );
 }
+
+/// A tmux that stands in for the client the app lends the terminal to, and logs the terminal's modes at every call
+/// it sees: `<dir>/log` gets one line per call (`<first word> <mode words>`, the words `stty` says for `icanon` and
+/// `echo` and their negations, read from the controlling terminal). An `attach-session` is the stand-in client: it
+/// writes `<dir>/up`, reads one line from the terminal (what a person types while it has it), writes it to
+/// `<dir>/typed` and waits for `<dir>/go` before it ends, so a test can look at the plain screen while it has the
+/// terminal. Every other call is run by the real tmux.
+fn lending_tmux(dir: &Path) -> std::path::PathBuf {
+    let stand_in = dir.join("tmux-lends");
+    let script = format!(
+        "#!/bin/sh\n\
+         d='{dir}'\n\
+         modes() {{ stty -a </dev/tty 2>/dev/null | tr ' ;' '\\n\\n' | grep -x -e echo -e -echo -e icanon -e -icanon | tr '\\n' ' '; }}\n\
+         case \" $* \" in\n\
+         *\" attach-session \"*)\n\
+           echo \"attach $(modes)\" >>\"$d/log\"\n\
+           echo up >\"$d/up\"\n\
+           IFS= read -r line </dev/tty\n\
+           echo \"$line\" >\"$d/typed\"\n\
+           while [ ! -e \"$d/go\" ]; do sleep 0.05; done\n\
+           exit 0;;\n\
+         esac\n\
+         echo \"$1 $(modes)\" >>\"$d/log\"\n\
+         exec '{real}' \"$@\"\n",
+        dir = dir.display(),
+        real = Tmux::with_socket_name("unused").bin.display(),
+    );
+    std::fs::write(&stand_in, script).expect("the stand-in tmux is written");
+    common::make_executable(&stand_in);
+    stand_in
+}
+
+/// The words of a mode line of [`lending_tmux`]'s log for the call whose first word is `call`, the first of them.
+fn modes_at(dir: &Path, call: &str) -> Option<Vec<String>> {
+    let log = std::fs::read_to_string(dir.join("log")).ok()?;
+    log.lines()
+        .find_map(|line| line.strip_prefix(&format!("{call} ")))
+        .map(|words| words.split_whitespace().map(str::to_string).collect())
+}
+
+/// Going into a session and coming back shows no typed key: the client finds the terminal line by line with echo off,
+/// a line typed while it has the terminal reaches it and shows nowhere on the plain screen, and after the app ends
+/// the shell gets a terminal that shows what is typed.
+#[test]
+fn a_key_typed_while_the_terminal_is_lent_is_read_by_the_client_and_shown_nowhere() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let dir = mac.work_dir().join("lends");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tmux = lending_tmux(&dir);
+    let modes = dir.join("modes");
+    type_app_env(
+        &term,
+        &mac,
+        &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
+        &format!("app --child; stty -a >'{}'", modes.display()),
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    let _ = the_app(&mac);
+    press(&term, &["Enter"]);
+    assert!(
+        wait_for(|| dir.join("up").exists(), Duration::from_secs(20)),
+        "the stand-in client never got the terminal:\n{}",
+        terminal_screen(&term)
+    );
+    let found = modes_at(&dir, "attach").expect("the client logged no modes");
+    assert!(
+        found.iter().any(|word| word == "icanon") && found.iter().any(|word| word == "-echo"),
+        "the client found {found:?}, not the cooked modes with echo off"
+    );
+    assert!(
+        !found.iter().any(|word| word == "echo"),
+        "the client found echo on: {found:?}"
+    );
+    press(&term, &["-l", "ZQZQ"]);
+    press(&term, &["Enter"]);
+    // The positive half: the client read what was typed.
+    assert!(
+        wait_for(
+            || std::fs::read_to_string(dir.join("typed")).is_ok_and(|typed| typed == "ZQZQ\n"),
+            Duration::from_secs(20)
+        ),
+        "the client never read the typed line:\n{}",
+        terminal_screen(&term)
+    );
+    let screen = terminal_screen(&term);
+    assert!(
+        !screen.contains("ZQZQ"),
+        "a key typed while the terminal is lent was shown:\n{screen}"
+    );
+    std::fs::write(dir.join("go"), "").unwrap();
+    expect_terminal(&term, "the list again", |screen| {
+        screen.contains("2 sessions")
+    });
+    press(&term, &["C-c"]);
+    assert!(
+        wait_for(
+            || std::fs::read_to_string(&modes)
+                .is_ok_and(|text| text.contains("lflags") || text.contains("echo")),
+            Duration::from_secs(20)
+        ),
+        "the shell never ran stty:\n{}",
+        terminal_screen(&term)
+    );
+    let words = std::fs::read_to_string(&modes).unwrap();
+    let words: Vec<&str> = words.split([' ', ';', '\n']).collect();
+    assert!(
+        words.contains(&"echo") && !words.contains(&"-echo"),
+        "the shell got a terminal that shows nothing typed: {words:?}"
+    );
+}
+
+/// A child killed while a client has the terminal leaves it without echo, and the supervisor, which ends on a signal
+/// after a new child started, puts back the modes it found: the shell gets a terminal that shows what is typed.
+#[test]
+fn the_supervisor_gives_the_shell_back_a_terminal_that_shows_what_is_typed() {
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let dir = mac.work_dir().join("lends");
+    std::fs::create_dir_all(&dir).unwrap();
+    let tmux = lending_tmux(&dir);
+    let modes = dir.join("modes");
+    type_app_env(
+        &term,
+        &mac,
+        &[("TAW_TMUX_BIN", tmux.to_str().unwrap())],
+        &format!("app; stty -a >'{}'", modes.display()),
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    expect_terminal(&term, "the list", |screen| screen.contains("2 sessions"));
+    let (child, supervisor) = the_app(&mac);
+    press(&term, &["Enter"]);
+    assert!(
+        wait_for(|| dir.join("up").exists(), Duration::from_secs(20)),
+        "the stand-in client never got the terminal:\n{}",
+        terminal_screen(&term)
+    );
+    // The child dies with the client attached; the client is let end, and a new child starts on the terminal.
+    signal(child, libc::SIGKILL);
+    // The stand-in client reads a line before it ends.
+    press(&term, &["Enter"]);
+    std::fs::write(dir.join("go"), "").unwrap();
+    assert!(
+        wait_for(
+            || pids(&mac).iter().any(|pid| *pid != child),
+            Duration::from_secs(20)
+        ),
+        "no new child started:\n{}",
+        terminal_screen(&term)
+    );
+    expect_terminal(&term, "the new child's list", |screen| {
+        screen.contains("2 sessions")
+    });
+    let _ = the_app(&mac);
+    signal(supervisor, libc::SIGTERM);
+    assert!(
+        wait_for(
+            || std::fs::read_to_string(&modes).is_ok(),
+            Duration::from_secs(20)
+        ),
+        "the shell never ran stty:\n{}",
+        terminal_screen(&term)
+    );
+    let words = std::fs::read_to_string(&modes).unwrap();
+    let words: Vec<&str> = words.split([' ', ';', '\n']).collect();
+    assert!(
+        words.contains(&"echo") && !words.contains(&"-echo"),
+        "the shell got a terminal that shows nothing typed: {words:?}"
+    );
+}

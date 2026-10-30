@@ -759,19 +759,72 @@ pub(crate) fn cooked_modes() -> Option<libc::termios> {
     *COOKED.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// The modes of the terminal on `fd`, if it can be read.
+fn read_modes(fd: libc::c_int) -> Option<libc::termios> {
+    // SAFETY: `tcgetattr` fills a `termios` of ours; a failure (no terminal) leaves it unused.
+    unsafe {
+        let mut modes: libc::termios = std::mem::zeroed();
+        (libc::tcgetattr(fd, &mut modes) == 0).then_some(modes)
+    }
+}
+
+/// Sets `modes` on the terminal `fd` at once; a failure is all there is.
+pub(crate) fn set_modes(fd: libc::c_int, modes: &libc::termios) {
+    // SAFETY: `tcsetattr` of a descriptor number with modes that are alive.
+    unsafe { libc::tcsetattr(fd, libc::TCSANOW, modes) };
+}
+
+/// The modes a program that is lent the terminal finds: the cooked ones with what is typed not shown. A tmux client
+/// and an ssh put back the modes they found as they end, so the terminal comes back to the app without echo as well,
+/// and a key typed in either gap (going in, coming back) is not written on the plain screen, where it would stay.
+fn lent_modes(cooked: &libc::termios) -> libc::termios {
+    let mut modes = *cooked;
+    modes.c_lflag &= !(libc::ECHO | libc::ECHONL);
+    modes
+}
+
+/// Reads the modes of the terminal `fd` (the cooked ones, as the screen was put away), keeps them for
+/// [`cooked_modes`] and sets [`lent_modes`] on it.
+fn lend_modes(fd: libc::c_int) -> Option<libc::termios> {
+    let cooked = read_modes(fd);
+    if let Some(cooked) = &cooked {
+        set_modes(fd, &lent_modes(cooked));
+    }
+    cooked
+}
+
+/// Sets the cooked modes `lend_modes` found (with echo) on the terminal `fd`, if there are any.
+fn cook_modes(fd: libc::c_int, saved: Option<&libc::termios>) {
+    if let Some(saved) = saved {
+        set_modes(fd, saved);
+    }
+}
+
+/// [`hold_for_enter`] on the terminal `fd` after the cooked modes with echo `saved` are set on it: what is typed on
+/// the way to Enter shows, as a person at a prompt expects.
+fn hold_on(
+    fd: libc::c_int,
+    saved: Option<&libc::termios>,
+    out: &mut impl Write,
+    line: &str,
+    stop: &mut dyn FnMut() -> bool,
+) {
+    cook_modes(fd, saved);
+    hold_for_enter(fd, out, line, stop);
+}
+
 impl Lending for Screen {
     fn away(&mut self) {
         restore();
-        // SAFETY: `tcgetattr` fills a `termios` of ours; a failure (no terminal) leaves it unused.
-        let saved = unsafe {
-            let mut modes: libc::termios = std::mem::zeroed();
-            (libc::tcgetattr(0, &mut modes) == 0).then_some(modes)
-        };
+        let saved = lend_modes(0);
         *COOKED.lock().unwrap_or_else(|e| e.into_inner()) = saved;
         LENT.store(true, Ordering::SeqCst);
     }
 
     fn back(&mut self) -> anyhow::Result<()> {
+        // The cooked modes with echo first: raw mode saves the modes it finds, which `restore` puts back at the
+        // end, and the shell must get a terminal that shows what is typed.
+        cook_modes(0, cooked_modes().as_ref());
         enable_raw_mode().map_err(|e| anyhow::anyhow!("entering raw mode: {e}"))?;
         execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
             .map_err(|e| anyhow::anyhow!("entering the screen again: {e}"))?;
@@ -797,11 +850,7 @@ impl Lending for Screen {
     fn hold(&mut self, line: &str, stop: &mut dyn FnMut() -> bool) {
         // An ssh that was ended from outside leaves the terminal raw: the cooked modes make Enter a line and
         // show what is typed.
-        if let Some(saved) = cooked_modes() {
-            // SAFETY: `tcsetattr` of standard input with modes that were read from it.
-            unsafe { libc::tcsetattr(0, libc::TCSANOW, &saved) };
-        }
-        hold_for_enter(0, &mut stdout(), line, stop);
+        hold_on(0, cooked_modes().as_ref(), &mut stdout(), line, stop);
         // What was typed on the way to Enter is read and gone; the screen is taken back right after.
     }
 }
@@ -820,6 +869,9 @@ impl Drop for Screen {
             // whatever the program that had the terminal wrote since.
             None => {
                 let _ = disable_raw_mode();
+                // Lent and not taken back (the app ends while a program has the terminal): a tmux client put
+                // back the modes it found, which show nothing typed, and the shell is to get ones that do.
+                cook_modes(0, cooked_modes().as_ref());
             }
         }
     }
@@ -858,6 +910,9 @@ fn install_panic_hook() {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             restore();
+            if LENT.load(Ordering::SeqCst) {
+                cook_modes(0, cooked_modes().as_ref());
+            }
             previous(info);
         }));
     });
@@ -865,6 +920,99 @@ fn install_panic_hook() {
 
 #[cfg(test)]
 mod tests {
+    /// A pty pair of the test's own, closed when the value drops (a failed assert too).
+    struct Pty {
+        master: libc::c_int,
+        slave: libc::c_int,
+    }
+
+    impl Pty {
+        fn open() -> Pty {
+            let (mut master, mut slave) = (-1, -1);
+            // SAFETY: `openpty` writes the two descriptors; the nulls are its defaults.
+            let opened = unsafe {
+                libc::openpty(
+                    &mut master,
+                    &mut slave,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(opened, 0, "no pseudo terminal");
+            Pty { master, slave }
+        }
+
+        fn lflag(&self) -> libc::tcflag_t {
+            super::read_modes(self.slave)
+                .expect("no modes to read")
+                .c_lflag
+        }
+    }
+
+    impl Drop for Pty {
+        fn drop(&mut self) {
+            for fd in [self.master, self.slave] {
+                // SAFETY: a descriptor `openpty` made for this test, closed once.
+                unsafe { libc::close(fd) };
+            }
+        }
+    }
+
+    /// A program lent the terminal finds the cooked modes with ECHO and ECHONL off (tmux and ssh put back what they
+    /// found, so the terminal returns to the app without echo too), and the cooked modes with echo are what
+    /// [`super::cook_modes`] sets again.
+    #[test]
+    fn a_program_lent_the_terminal_finds_no_echo_and_the_cooked_modes_bring_it_back() {
+        let pty = Pty::open();
+        let cooked = super::read_modes(pty.slave).unwrap();
+        let both = libc::ECHO | libc::ECHONL;
+        assert_eq!(
+            pty.lflag() & (libc::ICANON | libc::ECHO),
+            libc::ICANON | libc::ECHO,
+            "a fresh pty is cooked with echo (the positive half)"
+        );
+        let saved = super::lend_modes(pty.slave).expect("the modes were not read");
+        assert_eq!(
+            saved.c_lflag, cooked.c_lflag,
+            "the saved modes are the cooked ones"
+        );
+        assert_eq!(pty.lflag() & both, 0, "a lent terminal shows what is typed");
+        assert_eq!(
+            pty.lflag() & libc::ICANON,
+            libc::ICANON,
+            "and is still line by line"
+        );
+        super::cook_modes(pty.slave, Some(&saved));
+        assert_eq!(
+            pty.lflag() & libc::ECHO,
+            libc::ECHO,
+            "the cooked modes show it again"
+        );
+    }
+
+    /// The wait for Enter after an ssh failure shows what is typed, though the terminal was lent without echo.
+    #[test]
+    fn the_wait_for_enter_shows_what_is_typed() {
+        let pty = Pty::open();
+        let saved = super::lend_modes(pty.slave).unwrap();
+        assert_eq!(
+            pty.lflag() & libc::ECHO,
+            0,
+            "lent without echo (the positive half)"
+        );
+        let mut out = Vec::new();
+        super::hold_on(pty.slave, Some(&saved), &mut out, "ssh failed", &mut || {
+            true
+        });
+        assert_eq!(
+            pty.lflag() & libc::ECHO,
+            libc::ECHO,
+            "the wait shows what is typed"
+        );
+        assert!(String::from_utf8_lossy(&out).contains("ssh failed"));
+    }
+
     fn script(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
         let path = dir.join("zoxide");
         std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();

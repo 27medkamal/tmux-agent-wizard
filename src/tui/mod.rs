@@ -1089,6 +1089,31 @@ mod tests {
         super::SET_CALLS.with(|calls| calls.get())
     }
 
+    /// Held by every test that sets or reads [`super::RAW`], a static the whole test process shares: the tests run
+    /// on threads, so without it one test's raw mode shows in another's asserts, whatever their order. The note is
+    /// off when the lock is taken and off again when it is let go (a failed assert too), so that no test leaves it
+    /// on for the next.
+    static RAW_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct RawHeld(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+    impl RawHeld {
+        fn take() -> RawHeld {
+            // A test that failed while it held the lock has not broken the note: it is set off here.
+            let held = RAW_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            super::RAW.store(false, std::sync::atomic::Ordering::SeqCst);
+            RawHeld(held)
+        }
+    }
+
+    impl Drop for RawHeld {
+        fn drop(&mut self) {
+            super::RAW.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
     /// The flags of `modes`, for a comparison that says what differs. `PENDIN` is the kernel's own note that input
     /// is to be retyped after a change of modes, not one the program sets, so it is left out.
     fn flags(
@@ -1113,6 +1138,7 @@ mod tests {
     /// `tcsetattr`.
     #[test]
     fn the_terminal_goes_from_raw_to_the_lent_modes_and_back_in_one_call_each() {
+        let _raw = RawHeld::take();
         let pty = Pty::open();
         let found = super::read_modes(pty.slave).unwrap();
         let steps = super::Steps { fd: pty.slave };
@@ -1183,6 +1209,7 @@ mod tests {
     /// by, so a note that is out of step puts the found modes on a lent terminal, or leaves a raw one.
     #[test]
     fn a_change_of_modes_and_the_note_of_raw_mode_are_one_unit() {
+        let _raw = RawHeld::take();
         let pty = Pty::open();
         let found = super::read_modes(pty.slave).unwrap();
         let raw_is = || super::RAW.load(std::sync::atomic::Ordering::SeqCst);
@@ -1209,7 +1236,6 @@ mod tests {
         super::back_modes(pty.slave, Some(&found)).unwrap();
         assert!(raw_is(), "raw mode was not noted after the second back");
         assert_eq!(pty.lflag() & (libc::ICANON | libc::ECHO), 0, "not raw");
-        super::RAW.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// The found modes are the ones put back however often the terminal's modes were changed meanwhile, and a lent

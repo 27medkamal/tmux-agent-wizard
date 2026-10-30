@@ -211,7 +211,8 @@ impl StandIn {
 dir={dir}
 n=1
 tty=
-while ! mkdir "$dir/calls/$n.d" 2>/dev/null; do n=$((n + 1)); done
+# Ends on a failure that is not "that number is taken" (the folder is gone, or mkdir cannot run).
+while ! mkdir "$dir/calls/$n.d" 2>/dev/null; do [ -e "$dir/calls/$n.d" ] || exit 255; n=$((n + 1)); done
 printf '%s\0' "$@" > "$dir/calls/$n"
 # Its own pid, for a test that looks whether whatever ran it ended it.
 echo $$ > "$dir/calls/$n.pid"

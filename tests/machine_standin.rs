@@ -494,3 +494,69 @@ fn a_hanging_stand_in_that_cannot_sleep_ends() {
         "the stand-in spins on, with no sleep to run"
     );
 }
+
+/// Runs the stand-in for studio on `path` (the calling process's own when `None`) and waits up to 10 s for it to end.
+/// `None` when it is still running by then (it is killed by pid either way).
+fn ends_within_a_bounded_wait(stand_in: &StandIn, path: Option<&std::path::Path>) -> Option<i32> {
+    let mut command = stand_in.command();
+    command
+        .args(["studio", "taw machine feed"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let mut child = command.spawn().unwrap();
+    let mut guard = KillPids(vec![child.id()]);
+    let mut status = None;
+    let ended = common::wait_for(
+        || match child.try_wait() {
+            Ok(Some(found)) => {
+                status = found.code();
+                true
+            }
+            _ => false,
+        },
+        std::time::Duration::from_secs(10),
+    );
+    if ended {
+        // Reaped: the pid is no longer this run's to signal.
+        guard.0.clear();
+        status
+    } else {
+        None
+    }
+}
+
+/// A stand-in whose call folder has gone (its test's folder was removed under it, as a keeper's reconnect `ssh` meets
+/// at the end of a test) ends at once. Its call-number loop used to see `mkdir` fail for ever, and forked a child a
+/// turn until nothing was left of its machine: the orphans of 30 October at 14 to 18 percent of a core.
+#[test]
+fn a_stand_in_whose_call_folder_is_gone_ends_and_does_not_spin() {
+    let studio = FarSide::new("studio");
+    let stand_in = StandIn::new(&[&studio]);
+    // Positive half: with its folder it makes its call and ends (a plain verb, no failure set).
+    let (code, _, stderr) = run(&stand_in, &["studio", "true"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(stand_in.calls().len(), 1, "the call was not recorded");
+    std::fs::remove_dir_all(&stand_in.log).unwrap();
+    assert_eq!(
+        ends_within_a_bounded_wait(&stand_in, None),
+        Some(255),
+        "the stand-in spins on with its call folder gone"
+    );
+}
+
+/// The same loop, with `mkdir` not on the PATH at all: it ends, and does not fork for a command it cannot run.
+#[test]
+fn a_stand_in_that_cannot_run_mkdir_ends_and_does_not_spin() {
+    let studio = FarSide::new("studio");
+    let stand_in = StandIn::new(&[&studio]);
+    let empty = tempfile::tempdir().unwrap();
+    assert_eq!(
+        ends_within_a_bounded_wait(&stand_in, Some(empty.path())),
+        Some(255),
+        "the stand-in spins on with no mkdir to run"
+    );
+}

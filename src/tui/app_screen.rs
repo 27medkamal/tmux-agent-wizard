@@ -453,6 +453,17 @@ fn open_app<'c, S: Lending>(
     // The screen first, saying `loading`: nothing is known yet, and the first read takes as long as tmux takes.
     // An error before this gives the shell its terminal back (the early raw mode); none comes after it.
     let mut screen = enter()?;
+    // With `[theme] auto_switch` and a pane of its own, the client's light or dark mode is asked first (one call), so
+    // that the frame is drawn in the theme the list will have: no dark and light flash at start. With no pane of its
+    // own nothing is asked, and the frame is in `name`'s theme as the list is until its first read says more.
+    let theme = match feed.own_pane.as_deref() {
+        Some(pane) if cfg.theme.auto_switch => {
+            let appearance = data::read_pane_theme(feed.tmux, pane).unwrap_or_default();
+            let want = theme::chosen_name(&cfg.theme, theme::Appearance::parse(&appearance));
+            theme::resolve(want, &cfg.theme.custom).theme
+        }
+        _ => theme,
+    };
     screen.loading(&theme, view::LOADING);
     feed.read_local();
     let last = feed
@@ -3420,6 +3431,60 @@ mod tests {
             "the first thing is the frame, before any call: {events:?}"
         );
         assert!(!calls(&log).is_empty(), "tmux was asked after the frame");
+    }
+
+    /// With `[theme] auto_switch` and a pane of its own, the app asks which theme its client wants before the start's
+    /// loading frame and draws the frame in it; with no pane of its own it asks nothing, and the frame is `name`'s.
+    #[test]
+    fn the_start_frame_is_in_the_theme_the_client_asks_for() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let cfg: Config = toml::from_str(
+            "[theme]\nname = \"nord\"\nauto_switch = true\ndark_name = \"dracula\"\nlight_name = \"solarized\"\n",
+        )
+        .unwrap();
+        let name_theme = theme::resolve("nord", &cfg.theme.custom).theme;
+        let dark_theme = theme::resolve("dracula", &cfg.theme.custom).theme;
+        let frames = |own_pane: Option<&str>| {
+            let mut feed = feed_over(&tmux, &cfg, &paths);
+            feed.own_pane = own_pane.map(str::to_string);
+            let screen = Seen::new(&log);
+            let (events, themes) = (screen.events.clone(), screen.themes.clone());
+            let before = calls(&log).len();
+            let _opened = open_app(
+                &mut feed,
+                &cfg,
+                name_theme,
+                String::new(),
+                None,
+                move || Ok(screen),
+            )
+            .unwrap();
+            let events = events.borrow().clone();
+            let themes = themes.borrow().clone();
+            (events, themes, before)
+        };
+
+        let (events, themes, before) = frames(Some("%5"));
+        assert_eq!(themes, [dark_theme], "{events:?}");
+        let (frame_calls, _) = counts_of(&events[0]);
+        assert!(
+            frame_calls > before
+                && calls(&log)[before..frame_calls]
+                    .iter()
+                    .all(|call| call[0] == "display-message"),
+            "one question about the client's theme came before the frame: {events:?}"
+        );
+
+        let (events, themes, before) = frames(None);
+        assert_eq!(themes, [name_theme], "{events:?}");
+        assert_eq!(
+            counts_of(&events[0]).0,
+            before,
+            "no call before the frame: {events:?}"
+        );
     }
 
     /// The line this Mac's key back wrote is found by the one look, and its pane is where the cursor goes.

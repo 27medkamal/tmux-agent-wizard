@@ -3361,6 +3361,43 @@ mod tests {
         );
     }
 
+    /// A landing that makes a session (a project opened) says `loading` before its first call to tmux, the
+    /// `new-session` among them.
+    #[test]
+    fn a_landing_that_makes_a_session_says_loading_before_its_first_tmux_call() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let paths = paths_in(dir.path());
+        let mut cfg = Config::default();
+        cfg.sessions.zoxide = false;
+        let project = dir.path().join("fresh-project");
+        std::fs::create_dir(&project).unwrap();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+
+        feed.perform(
+            Path::new("/nonexistent/taw"),
+            &mut app,
+            &mut screen,
+            &actions::Action::OpenProject {
+                path: project.display().to_string(),
+            },
+        )
+        .unwrap();
+
+        let events = screen.events();
+        assert!(
+            events[0].starts_with("loading (") && events[0].ends_with("calls=0 reads=0"),
+            "the first thing is the frame, before any call: {events:?}"
+        );
+        assert!(
+            calls(&log).iter().any(|call| call[0] == "new-session"),
+            "the session was made, after the frame"
+        );
+    }
+
     /// The line this Mac's key back wrote is found by the one look, and its pane is where the cursor goes.
     #[test]
     fn the_line_already_in_the_file_is_found_without_a_wait() {

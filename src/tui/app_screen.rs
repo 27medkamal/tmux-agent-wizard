@@ -3726,7 +3726,7 @@ mod tests {
     }
 
     /// A hop of a walk that is refused after an attach (the stop went meanwhile): the events of [`Seen`], and how
-    /// many reads of this Mac the whole hop made. `session_gone` is the stand-in's `has-session` failing, and
+    /// many reads of this Mac the whole hop made. `session_gone` is the stand-in's read of the session's id failing, and
     /// `pane_gone` its `display-message` of the pane's session failing.
     fn a_refused_hop_seen(go: &str, session_gone: bool, pane_gone: bool) -> (Vec<String>, usize) {
         use crate::cli::test_support::{Stub, calls, stub_tmux};

@@ -965,7 +965,8 @@ pub struct Listing {
     pub sessions: Vec<SessionInfo>,
     /// `show-options -g`, as tmux printed it: [`Listing::option`] reads one value of it.
     pub options: String,
-    /// What the client asked for said, `None` when none was asked or it could not answer.
+    /// What the client asked for said: `None` when none was asked, empty when it was asked and gave nothing (a client
+    /// that went, or a call that stopped at its question).
     pub client: Option<String>,
 }
 
@@ -1795,6 +1796,43 @@ mod tests {
         );
         assert!(has_mark(&stopped, LIST_MARKS[3]));
         assert!(!has_mark(&base, LIST_MARKS[3]));
+    }
+
+    /// The client's question is the last of the call. When the client is gone and its question fails, the call
+    /// ends nonzero after the fourth marker and the list read before it is kept; when it is the list that fails
+    /// (no server), the call has no fourth marker and the error is tmux's, which says there is no server.
+    #[test]
+    fn a_client_that_went_keeps_the_list_and_no_server_is_still_said() {
+        use crate::cli::test_support::{Stub, stub_tmux};
+        let ask = Some(("/dev/ttys001", "#{client_last_session}"));
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(
+            dir.path(),
+            &Stub {
+                gone_client: true,
+                ..Stub::default()
+            },
+        );
+        let listing = tmux.read_listing(ask).unwrap();
+        assert_eq!(
+            listing.sessions.len(),
+            1,
+            "the list read before the question"
+        );
+        assert_eq!(listing.client.as_deref(), Some(""));
+        assert_eq!(listing.option("status").as_deref(), Some("on"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(
+            dir.path(),
+            &Stub {
+                gone_client: true,
+                no_server: true,
+                ..Stub::default()
+            },
+        );
+        let err = tmux.read_listing(ask).unwrap_err();
+        assert!(no_server(&err), "{err:#}");
     }
 
     /// A reply cut short is an error and no half of a listing.

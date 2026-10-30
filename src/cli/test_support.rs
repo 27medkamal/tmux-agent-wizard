@@ -50,6 +50,11 @@ pub(crate) struct Stub {
     pub version: &'static str,
     /// `list-panes` lists one pane, `%5` of session `$3` with a `claude` agent on it, instead of none.
     pub pane: bool,
+    /// A `display-message -c <client>` fails `can't find client: <client>` and exits 1, as tmux does of a client
+    /// that went (the real one most often prints nothing and succeeds).
+    pub gone_client: bool,
+    /// `list-panes` fails `no server running on <socket>` and exits 1, as tmux does with no server.
+    pub no_server: bool,
 }
 
 impl Default for Stub {
@@ -68,6 +73,8 @@ impl Default for Stub {
             client_tty: None,
             version: "tmux 3.6b",
             pane: false,
+            gone_client: false,
+            no_server: false,
         }
     }
 }
@@ -179,6 +186,16 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
     } else {
         "echo '$3'"
     };
+    let gone_client = if stub.gone_client {
+        r#"prev=; for a; do [ "$prev" = -c ] && { echo "can't find client: $a" >&2; exit 1; }; prev=$a; done"#
+    } else {
+        ":"
+    };
+    let no_server = if stub.no_server {
+        r#"echo "no server running on /tmp/tmux-501/default" >&2; exit 1"#
+    } else {
+        ":"
+    };
     let body = format!(
         r#"#!/bin/sh
 [ "$1" = -u ] && shift
@@ -190,10 +207,14 @@ case "$1" in
   -V) echo '{version}' ;;
   list-clients) {client} ;;
   display-message)
+    {gone_client}
     for last; do :; done
     case "$last" in
       *client_width*) echo '{dims}' ;;
-      *client_name*client_pid*) printf '%s\t{client_pid}\t%%5\t{tty}\n' "$({name})" ;;
+      *client_name*client_pid*)
+        # With no client every client word is empty, whatever the pane is.
+        n=$({name})
+        if [ -n "$n" ]; then printf '%s\t{client_pid}\t%%5\t{tty}\n' "$n"; else printf '\t\t%%5\t\n'; fi ;;
       *client_pid*) echo '{client_pid} %5' ;;
       '#{{client_name}}') {name} ;;
       '#{{client_last_session}}') echo main ;;
@@ -217,8 +238,8 @@ case "$1" in
       -t) {refuse}; {keep} ;;
       -u) [ "$3" = -t ] && {drop} ;;
     esac ;;
-  has-session) exit {has_session} ;;
-  list-panes) {list_panes} ;;
+  has-session) [ {has_session} -eq 0 ] || {{ echo "can't find session: $3" >&2; exit {has_session}; }} ;;
+  list-panes) {no_server}; {list_panes} ;;
   list-sessions) {sessions} ;;
   list-windows) {windows} ;;
   display-popup) {at_popup}; [ {exit} -eq 0 ] || {{ echo '{says}' >&2; exit {exit}; }} ;;
@@ -382,4 +403,100 @@ pub(crate) fn take_the_socket_away(t: &Tmux, path: &Path) {
         }
     }
     let _ = std::fs::remove_file(path);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_stub(tmux: &Tmux, args: &[&str]) -> std::process::Output {
+        std::process::Command::new(&tmux.bin)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// A `has-session` that finds the session ends no sequence, and one that does not says so on stderr, as tmux does.
+    #[test]
+    fn has_session_of_the_stand_in_ends_a_sequence_only_when_it_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(dir.path(), &Stub::default());
+        let out = run_stub(
+            &tmux,
+            &[
+                "has-session",
+                "-t",
+                "main",
+                ";",
+                "display-message",
+                "-p",
+                "after",
+            ],
+        );
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "after\n");
+        assert!(out.status.success());
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(
+            dir.path(),
+            &Stub {
+                session_gone: true,
+                ..Stub::default()
+            },
+        );
+        let out = run_stub(
+            &tmux,
+            &[
+                "has-session",
+                "-t",
+                "main",
+                ";",
+                "display-message",
+                "-p",
+                "after",
+            ],
+        );
+        assert!(!out.status.success());
+        assert_eq!(out.stdout, b"");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr),
+            "can't find session: main\n"
+        );
+    }
+
+    /// With no client every `client_*` word of the combined question is empty, as real tmux prints it; with one
+    /// the stand-in gives its name, pid, pane and tty.
+    #[test]
+    fn the_stand_in_answers_the_combined_client_question_empty_with_no_client() {
+        let ask = [
+            "display-message",
+            "-p",
+            "#{client_name}\t#{client_pid}\t#{pane_id}\t#{client_tty}",
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(
+            dir.path(),
+            &Stub {
+                clients: false,
+                client_pid: 77,
+                ..Stub::default()
+            },
+        );
+        let out = run_stub(&tmux, &ask);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "\t\t%5\t\n");
+
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, _) = stub_tmux(
+            dir.path(),
+            &Stub {
+                client_pid: 77,
+                ..Stub::default()
+            },
+        );
+        let out = run_stub(&tmux, &ask);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "/dev/ttys001\t77\t%5\t/dev/ttys001\n"
+        );
+    }
 }

@@ -4009,6 +4009,66 @@ fn a_supervisor_told_to_end_while_a_client_has_the_terminal_gives_the_shell_back
     );
 }
 
+/// `taw ui` typed in a pane with its standard input not a terminal (`</dev/null`, or the end of a pipe) takes raw
+/// mode on the controlling terminal as crossterm's did, and puts the modes found there back as it ends, so the
+/// shell shows what is typed. Where crossterm's event reader can poll `/dev/tty` (Linux) the popup lists the
+/// sessions and `q` ends it; where it cannot (macOS: kqueue, "Failed to initialize input reader") it ends at its first
+/// read of a key, and the terminal is put back all the same. What it never says is that raw mode could not be
+/// entered.
+#[test]
+fn taw_ui_with_standard_input_that_is_not_a_terminal_takes_raw_mode_and_puts_the_found_modes_back()
+{
+    let _own = Owned::new();
+    let mac = Server::start();
+    two_sessions(&mac);
+    let term = terminal(120);
+    let dir = mac.work_dir().join("ui-null");
+    std::fs::create_dir_all(&dir).unwrap();
+    let modes = dir.join("modes");
+    let said = dir.join("said");
+    type_app_env(
+        &term,
+        &mac,
+        &[],
+        &format!(
+            "ui </dev/null >'{1}' 2>&1; stty -a >'{0}'; echo {STTY_DONE} >>'{0}'",
+            modes.display(),
+            said.display()
+        ),
+        &mac.work_dir().join("err"),
+        &mac.work_dir().join("status"),
+    );
+    let mut asked_to_end = false;
+    let done = wait_for(
+        || {
+            let screen = terminal_screen(&term);
+            // The list is up (Linux): raw mode, so one key ends it, with no Enter after it.
+            if !asked_to_end && screen.contains("beta") && !screen.contains("/dev/null") {
+                asked_to_end = true;
+                press(&term, &["q"]);
+            }
+            std::fs::read_to_string(&modes).is_ok_and(|text| text.contains(STTY_DONE))
+        },
+        Duration::from_secs(20),
+    );
+    let said = std::fs::read_to_string(&said).unwrap_or_default();
+    assert!(
+        done,
+        "the shell never finished stty (taw said: {said:?}):\n{}",
+        terminal_screen(&term)
+    );
+    assert!(
+        !said.contains("entering raw mode"),
+        "taw ui could not take raw mode: {said:?}"
+    );
+    let words = std::fs::read_to_string(&modes).unwrap();
+    let words: Vec<&str> = words.split([' ', ';', '\n']).collect();
+    assert!(
+        words.contains(&"echo") && words.contains(&"icanon") && !words.contains(&"-echo"),
+        "the shell did not get the modes the popup found (taw said: {said:?}): {words:?}"
+    );
+}
+
 /// Raw mode is taken before the app's first call to tmux, so a key typed while the app starts is not echoed: every
 /// call the app makes finds the terminal not line by line.
 #[test]

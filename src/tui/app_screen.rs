@@ -650,15 +650,36 @@ impl Feed<'_> {
         self.refresh(tmux, app);
     }
 
+    /// [`Feed::show`] with the cursor put on `pane` (a filter that was typed is closed either way) before the
+    /// preview is taken: the preview is the one of the row the cursor ends on, in the one capture, never the one of
+    /// the row it was on before.
+    fn show_at(&mut self, app: &mut App, pane: Option<String>) {
+        self.read_local();
+        self.refresh_data(app);
+        app.enter_app_mode(pane, None);
+        self.refresh_preview(self.tmux, app);
+    }
+
     /// Shows what was read last (this Mac's from [`Feed::read_local`], the machines' as they are now), with
     /// the preview of the row the cursor is on. Reads nothing of this Mac.
     fn refresh(&mut self, tmux: &Tmux, app: &mut App) {
+        self.refresh_data(app);
+        self.refresh_preview(tmux, app);
+    }
+
+    /// The rows of [`Feed::refresh`], without the preview: for a caller that moves the cursor before the preview is
+    /// taken ([`Feed::show_at`]).
+    fn refresh_data(&mut self, app: &mut App) {
         let (snap, worktrees) = self.combined();
         self.say_walk(&snap, Instant::now());
         for words in self.toasts.no_session_news(&snap) {
             app.toast(words);
         }
         app.set_data(Some(snap), Some(worktrees));
+    }
+
+    /// The preview of the row the cursor is on, as [`Feed::refresh`] takes it after the rows.
+    fn refresh_preview(&mut self, tmux: &Tmux, app: &mut App) {
         if app.preview_remote_pane().is_some() {
             self.step_remote_preview(app);
             return;
@@ -1197,9 +1218,8 @@ impl Feed<'_> {
         if let Some(words) = back_words(note, failure) {
             app.toast(words);
         }
-        self.show(self.tmux, app);
+        self.show_at(app, pane);
         self.hub.wake();
-        app.enter_app_mode(pane, None);
         // Keys typed while the screen said `loading` were aimed at nothing: they are dropped now that the read is
         // in, right before the list shows (the drains before it left what was typed during the read).
         screen.drain();
@@ -3320,8 +3340,10 @@ mod tests {
             self.themes.borrow_mut().push(*theme);
             self.note(&format!("loading ({words})"));
         }
-        fn list(&mut self, _app: &mut App) {
-            self.note("list");
+        fn list(&mut self, app: &mut App) {
+            // Whether the preview on screen is the one of the row the cursor is on.
+            let agrees = app.preview_shows() == app.preview_pane().as_deref();
+            self.note(&format!("list preview_agrees={agrees}"));
         }
     }
 
@@ -3564,6 +3586,93 @@ mod tests {
             total_reads,
             "no read of tmux after the drain: {events:?}"
         );
+    }
+
+    /// A stand-in tmux that lists two agent panes of one session (`%1` and `%2`), and a come-back to `back_to`
+    /// with the cursor on `cursor_on` when the person went in: the events of [`Seen`] and the `capture-pane` calls
+    /// the come-back made.
+    fn a_come_back_between_panes(cursor_on: &str, back_to: &str) -> (Vec<String>, usize) {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        two_panes_in(dir.path());
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.read_local();
+        let (snap, worktrees) = feed.combined();
+        let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
+        let mut app = App::new(&cfg, theme, String::new(), snap);
+        app.set_worktrees(worktrees);
+        assert!(app.cursor_to_pane(cursor_on), "the pane is a row");
+        feed.follow_preview(&tmux, &mut app);
+        assert_eq!(app.preview_shows(), Some(cursor_on));
+        let captured = || {
+            calls(&log)
+                .iter()
+                .filter(|call| call[0] == "capture-pane")
+                .count()
+        };
+        let before = captured();
+        let mut screen = Seen::new(&log);
+        feed.go_in(
+            &mut app,
+            &mut screen,
+            actions::Landing {
+                target: "$0".into(),
+                pane: Some(back_to.into()),
+                note: None,
+            },
+        )
+        .unwrap();
+        (screen.events(), captured() - before)
+    }
+
+    /// Makes the stand-in tmux in `dir` list the session `one` (`$0`) with the agent panes `%1` and `%2`.
+    fn two_panes_in(dir: &Path) {
+        let script = dir.join("tmux");
+        let text = std::fs::read_to_string(&script).unwrap();
+        let panes = ["%1", "%2"]
+            .map(|pane| crate::tmux::listing_line(pane, "title", "claude"))
+            .join("\n");
+        let text = text.replace(
+            "  list-sessions)",
+            &format!(
+                "  list-panes) printf '%s\\n' '{panes}' ;;\n  list-sessions) printf '$0\\t\
+                 one\\t/repo\\t1\\t1\\t1700000000\\t\\n' ;;\n  list-windows) printf '@0\\t$0\\t0\\twin\\t1\\t1\\t\
+                 layout\\n' ;;\n  list-unused)"
+            ),
+        );
+        std::fs::write(&script, text).unwrap();
+    }
+
+    /// Coming back to a pane that is not the row the cursor was on, the list's first frame shows the preview of the
+    /// row the cursor is on now, not the one it was on before going in; and that costs one `capture-pane`, the one
+    /// the come-back's own show makes.
+    #[test]
+    fn the_list_coming_back_to_another_pane_shows_its_preview_at_once() {
+        let (events, captures) = a_come_back_between_panes("%1", "%2");
+        let list = events
+            .iter()
+            .position(|e| e.starts_with("list"))
+            .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+        assert!(
+            events[list].contains("preview_agrees=true"),
+            "the first frame's preview is another pane's: {events:?}"
+        );
+        assert_eq!(captures, 1, "one capture for the come-back: {events:?}");
+    }
+
+    /// Coming back to the pane the cursor was on: the same one capture, no extra call to follow the cursor.
+    #[test]
+    fn the_list_coming_back_to_the_same_pane_asks_tmux_for_one_capture() {
+        let (events, captures) = a_come_back_between_panes("%2", "%2");
+        let list = events
+            .iter()
+            .position(|e| e.starts_with("list"))
+            .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+        assert!(events[list].contains("preview_agrees=true"), "{events:?}");
+        assert_eq!(captures, 1, "{events:?}");
     }
 
     /// A landing that makes a session (a project opened) says `loading` before its first call to tmux, the

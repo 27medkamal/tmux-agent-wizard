@@ -3014,7 +3014,7 @@ mod tests {
 
         let asked = calls(&log);
         assert!(
-            asked.iter().any(|call| call[0] == "list-panes"),
+            asked.iter().any(|call| is_list_read(call)),
             "the tick read the list: {asked:?}"
         );
         let verbs: Vec<&str> = asked.iter().map(|call| call[0].as_str()).collect();
@@ -3085,7 +3085,7 @@ mod tests {
         // What a gone target shows is the list read again, which is no part of going in.
         let before: Vec<Vec<String>> = all[..at]
             .iter()
-            .filter(|call| call[0] != "list-panes")
+            .filter(|call| !is_list_read(call))
             .cloned()
             .collect();
         (before, attach, toast, feed.last_attached.clone())
@@ -3185,12 +3185,7 @@ mod tests {
         let theme = theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
         let mut app = App::new(&cfg, theme, String::new(), Snapshot::default());
         let mut feed = feed_over(&tmux, &cfg, &paths);
-        let reads = || {
-            calls(&log)
-                .iter()
-                .filter(|call| call[0] == "list-panes")
-                .count()
-        };
+        let reads = || calls(&log).iter().filter(|call| is_list_read(call)).count();
 
         let jump = actions::Action::SwitchWorkspace {
             session: "$3".into(),
@@ -3325,8 +3320,14 @@ mod tests {
         );
     }
 
-    /// A screen that notes what it is done, in order, with the number of calls and of reads (`list-sessions`) the
-    /// stand-in tmux had logged at that moment, and the words of each loading frame.
+    /// A call of the stand-in tmux that is a read of the list: the one-call read ([`Tmux::read_listing`]) starts
+    /// with `list-panes`. Every count of reads in these tests counts by this.
+    fn is_list_read(call: &[String]) -> bool {
+        call[0] == "list-panes"
+    }
+
+    /// A screen that notes what it is done, in order, with the number of calls and of reads (see [`is_list_read`])
+    /// the stand-in tmux had logged at that moment, and the words of each loading frame.
     struct Seen {
         events: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
         /// The theme of each loading frame, in order.
@@ -3343,7 +3344,7 @@ mod tests {
         }
         fn note(&self, what: &str) {
             let calls = crate::cli::test_support::calls(&self.tmux_log);
-            let reads = calls.iter().filter(|c| c[0] == "list-sessions").count();
+            let reads = calls.iter().filter(|c| is_list_read(c)).count();
             self.events
                 .borrow_mut()
                 .push(format!("{what} calls={} reads={reads}", calls.len()));
@@ -3512,7 +3513,7 @@ mod tests {
         );
         let reads_after = crate::cli::test_support::calls(&log)
             .iter()
-            .filter(|c| c[0] == "list-sessions")
+            .filter(|c| is_list_read(c))
             .count();
         assert!(
             reads_after > counts_of(&events[loading]).1,
@@ -3535,10 +3536,11 @@ mod tests {
         // What one read of this Mac costs.
         let mut reference = feed_over(&tmux, &cfg, &paths);
         reference.read_local();
-        let one_read = calls(&log)
-            .iter()
-            .filter(|call| call[0] == "list-sessions")
-            .count();
+        let one_read = calls(&log).iter().filter(|call| is_list_read(call)).count();
+        assert_eq!(
+            one_read, 1,
+            "one read of this Mac is one call: a count of 0 would pass every check below"
+        );
         let mut app = app_with_session(&cfg, "$3", "api");
         let mut feed = feed_over(&tmux, &cfg, &paths);
         let mut screen = Seen::new(&log);
@@ -3552,10 +3554,7 @@ mod tests {
             },
         )
         .unwrap();
-        let total_reads = calls(&log)
-            .iter()
-            .filter(|call| call[0] == "list-sessions")
-            .count();
+        let total_reads = calls(&log).iter().filter(|call| is_list_read(call)).count();
         (screen.events(), one_read, total_reads)
     }
 
@@ -3665,14 +3664,20 @@ mod tests {
         let panes = ["%1", "%2"]
             .map(|pane| crate::tmux::listing_line(pane, "title", "claude"))
             .join("\n");
-        let text = text.replace(
-            "  list-sessions)",
-            &format!(
-                "  list-panes) printf '%s\\n' '{panes}' ;;\n  list-sessions) printf '$0\\t\
-                 one\\t/repo\\t1\\t1\\t1700000000\\t\\n' ;;\n  list-windows) printf '@0\\t$0\\t0\\twin\\t1\\t1\\t\
-                 layout\\n' ;;\n  list-unused)"
-            ),
-        );
+        // The stand-in answers the first case that fits, so each listing's case goes in front of its own.
+        let text = text
+            .replace(
+                "  list-panes)",
+                &format!("  list-panes) printf '%s\\n' '{panes}' ;;\n  list-unused-panes)"),
+            )
+            .replace(
+                "  list-sessions)",
+                "  list-sessions) printf '$0\\tone\\t/repo\\t1\\t1\\t1700000000\\t\\n' ;;\n  list-unused-sessions)",
+            )
+            .replace(
+                "  list-windows)",
+                "  list-windows) printf '@0\\t$0\\t0\\twin\\t1\\t1\\tlayout\\n' ;;\n  list-unused-windows)",
+            );
         std::fs::write(&script, text).unwrap();
     }
 
@@ -3742,10 +3747,7 @@ mod tests {
             },
         )
         .unwrap();
-        let reads = calls(&log)
-            .iter()
-            .filter(|call| call[0] == "list-sessions")
-            .count();
+        let reads = calls(&log).iter().filter(|call| is_list_read(call)).count();
         (screen.events(), reads)
     }
 

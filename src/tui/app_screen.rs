@@ -3825,6 +3825,60 @@ mod tests {
         }
     }
 
+    /// A `taw app --go` that is refused (an id that is no id, a pane that is gone, a target the go cannot take) draws
+    /// the list from the read that opening the app made: one read of this Mac in all, not a second under the
+    /// loading frame.
+    #[test]
+    fn a_refused_go_at_the_start_reads_the_list_once() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let targets = [
+            GoTarget::Machine {
+                machine: "studio".into(),
+                id: "nonsense".into(),
+            },
+            GoTarget::Pane("%99999".into()),
+            GoTarget::Last,
+        ];
+        for go in targets {
+            let dir = tempfile::tempdir().unwrap();
+            let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+            if matches!(go, GoTarget::Pane(_)) {
+                // The pane's session is not answered: the pane is gone.
+                let script = dir.path().join("tmux");
+                let text = std::fs::read_to_string(&script).unwrap();
+                let gone = text.replace(
+                    "'#{session_id} #{window_id}') echo '$3 @1' ;;",
+                    "'#{session_id} #{window_id}') exit 1 ;;",
+                );
+                assert_ne!(gone, text, "the stand-in answers that call");
+                std::fs::write(&script, gone).unwrap();
+            }
+            let paths = paths_in(dir.path());
+            let cfg = Config::default();
+            let mut feed = feed_over(&tmux, &cfg, &paths);
+            let screen = Seen::new(&log);
+            open_going(
+                &mut feed,
+                &cfg,
+                theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme,
+                String::new(),
+                None,
+                false,
+                Some((&go, Duration::from_secs(1))),
+                || Ok(screen),
+            )
+            .unwrap();
+            let all = calls(&log);
+            let verbs: Vec<&str> = all.iter().map(|call| call[0].as_str()).collect();
+            let reads = all.iter().filter(|call| is_list_read(call)).count();
+            assert_eq!(reads, 1, "{go:?}: {verbs:?}");
+            assert!(
+                all.iter().all(|call| call[0] != "attach-session"),
+                "{go:?} was refused: {verbs:?}"
+            );
+        }
+    }
+
     /// A landing that makes a session (a project opened) says `loading` before its first call to tmux, the
     /// `new-session` among them.
     #[test]

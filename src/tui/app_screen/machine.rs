@@ -181,6 +181,14 @@ impl Feed<'_> {
         Went::Refused
     }
 
+    /// [`Feed::refused`] for `taw app --go`, which has just read this Mac to open the app: the list is drawn from
+    /// that read, not from a second one under the same loading frame.
+    fn refused_from_read(&mut self, app: &mut App, words: String) -> Went {
+        app.toast(words);
+        self.refresh(self.tmux, app);
+        Went::Refused
+    }
+
     /// The machine called `name` and its place in `[machines]`, when it is one and is live now: judged by
     /// the connections as they are this moment (`self.hub.views()`), not by the list of the last tick. `Err` is
     /// the words that say why not.
@@ -463,7 +471,7 @@ impl Feed<'_> {
             return self.go_here(app, screen, target);
         };
         if !valid_go_id(raw) {
-            return Ok(self.refused(app, words::NOTHING_TO_GO_IN_TO.to_string()));
+            return Ok(self.refused_from_read(app, words::NOTHING_TO_GO_IN_TO.to_string()));
         }
         let until = Instant::now() + wait;
         let listed = self.machines.iter().any(|m| &m.name == name);
@@ -486,7 +494,7 @@ impl Feed<'_> {
         // of that id, has none: said as a gone target is, with nothing attached. With no state yet, or the id
         // in it, the attach goes on, and the far side's refusal (its own words) is for a state that lags.
         if self.state_lacks(name, raw) {
-            return Ok(self.refused(app, words::gone(&format!("{name}:{raw}"))));
+            return Ok(self.refused_from_read(app, words::gone(&format!("{name}:{raw}"))));
         }
         self.go_by_route(
             app,
@@ -534,7 +542,7 @@ impl Feed<'_> {
                     pane: None,
                     ..landing
                 },
-                None => return Ok(self.refused(app, words::gone(pane))),
+                None => return Ok(self.refused_from_read(app, words::gone(pane))),
             },
             GoTarget::Session(session) => actions::Landing {
                 target: session.clone(),
@@ -543,7 +551,7 @@ impl Feed<'_> {
             },
             // A machine's is `go_first`'s, and `last` is turned into a session before the first frame.
             GoTarget::Machine { .. } | GoTarget::Last => {
-                return Ok(self.refused(app, words::GO_USAGE.to_string()));
+                return Ok(self.refused_from_read(app, words::GO_USAGE.to_string()));
             }
         };
         self.go_in(app, screen, landing)?;

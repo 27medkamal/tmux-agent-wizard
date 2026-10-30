@@ -380,7 +380,7 @@ fn a_machine_that_never_stops_talking_is_read_to_a_cap_and_still_answers() {
     let rig = Rig::new();
     let long = "x".repeat(1000);
     rig.pi_runs(&format!(
-        "echo '{{\"type\":\"hello\",\"taw\":\"3.1.4\",\"protocol\":1}}'\nwhile :; do echo {long}; done\n"
+        "echo '{{\"type\":\"hello\",\"taw\":\"3.1.4\",\"protocol\":1}}'\nwhile :; do echo {long} || exit 0; done\n"
     ));
     let started = Instant::now();
     let (code, stdout) = rig.check(&["pi", "--deadline-ms", "8000"]);

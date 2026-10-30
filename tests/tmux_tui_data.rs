@@ -831,3 +831,163 @@ fn the_tests_that_make_a_repository_leave_the_one_gits_variables_point_at_as_it_
         "leave_the_one_gits_variables_point_at",
     );
 }
+
+// ------------------------------------------ the list is read from tmux in one call
+
+/// The listing as JSON, to compare what two reads gave.
+fn json<T: serde::Serialize>(rows: &[T]) -> String {
+    serde_json::to_string(rows).unwrap()
+}
+
+/// One read of the list gives what the separate `list-panes`, `list-windows`, `list-sessions` and global option
+/// reads give on the same server: several sessions, windows and panes, agent options, names that hold a tab and a
+/// line break, a pane title that says a marker's words, and the Agents view option set and unset.
+#[test]
+fn one_read_gives_what_the_separate_reads_give() {
+    let (s, _cfg) = two_workspaces();
+    let t = &s.0;
+    t.run_ok(&["new-window", "-t", "docs", "-n", "second"])
+        .unwrap();
+    t.run_ok(&["split-window", "-d", "-t", "docs:second", "/bin/sh"])
+        .unwrap();
+    // Names that hold a tab and a line break, folded by tmux into one line each.
+    t.run_ok(&["rename-window", "-t", "api:0", "--", "tab\there\nnext"])
+        .unwrap();
+    t.run_ok(&["rename-session", "-t", "docs", "--", "do\tcs\nx"])
+        .unwrap();
+    let panes = t.list_panes().unwrap();
+    let a_pane = panes[0].pane_id.clone();
+    t.run_ok(&[
+        "select-pane",
+        "-t",
+        &a_pane,
+        "-T",
+        "taw: end of the window listing",
+    ])
+    .unwrap();
+    t.set_pane_option(&a_pane, "@agent_display", "taw: end of the session listing")
+        .unwrap();
+
+    let compare = |view: Option<&str>| {
+        match view {
+            Some(value) => t
+                .set_global_option(taw::tui::agent_view::OPTION, value)
+                .unwrap(),
+            None => {
+                let _ = t.unset_global_option(taw::tui::agent_view::OPTION);
+            }
+        }
+        let listing = t.read_listing(None).unwrap();
+        assert_eq!(json(&listing.panes), json(&t.list_panes().unwrap()));
+        assert_eq!(json(&listing.windows), json(&t.list_windows().unwrap()));
+        assert_eq!(json(&listing.sessions), json(&t.list_sessions().unwrap()));
+        for name in [
+            taw::tui::agent_view::OPTION,
+            "status",
+            "default-shell",
+            "@nothing",
+        ] {
+            assert_eq!(
+                listing.option(name),
+                t.get_global_option(name).unwrap(),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            listing.option(taw::tui::agent_view::OPTION).as_deref(),
+            view
+        );
+        listing
+    };
+    let set = compare(Some("{\"rows\": \"a b\"}"));
+    assert_eq!(set.sessions.len(), 2);
+    assert!(set.panes.len() >= 4, "{:?}", set.panes.len());
+    assert!(
+        set.panes
+            .iter()
+            .any(|p| p.pane_title == "taw: end of the window listing")
+    );
+    assert!(set.windows.len() >= 4, "{}", set.windows.len());
+    compare(None);
+}
+
+/// A tmux that logs each process it is started as and then is the real one, over the same server.
+fn counting(t: &Tmux, dir: &std::path::Path) -> (Tmux, std::path::PathBuf) {
+    let log = dir.join("calls");
+    let script = dir.join("tmux-counting");
+    common::write_script(
+        &script,
+        &format!(
+            "echo \"$1 $2\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            t.bin.display()
+        ),
+    );
+    (
+        Tmux {
+            bin: script,
+            socket: t.socket.clone(),
+        },
+        log,
+    )
+}
+
+/// The popup's build and the app's build each start tmux once, the popup's with its client asked in the same
+/// call, and a client that is gone takes nothing of the list down. Five processes before.
+#[test]
+fn a_read_of_the_list_starts_tmux_once() {
+    let (s, cfg) = two_workspaces();
+    let dir = tempfile::tempdir().unwrap();
+    let (t, log) = counting(&s.0, dir.path());
+    let git = GitWorker::new(Duration::from_secs(2));
+    let started = || {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+
+    let app = data::build_without_client(&t, &cfg, &git).unwrap().0;
+    assert_eq!(started(), 1, "the app's read");
+    let plain = data::build(&s.0, &cfg, &git, None, None).unwrap();
+    let names = |snap: &data::Snapshot| {
+        snap.spaces
+            .iter()
+            .map(|space| space.session_name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(&app),
+        names(&plain),
+        "the same list as the popup draws"
+    );
+
+    let before = started();
+    let gone = data::build(&t, &cfg, &git, None, Some("/dev/ttys-gone")).unwrap();
+    assert_eq!(
+        started() - before,
+        1,
+        "the popup's read, its client asked in it"
+    );
+    assert_eq!(
+        names(&gone),
+        names(&plain),
+        "a gone client takes none of the list down"
+    );
+    assert_eq!(
+        gone.previous_session.is_some(),
+        plain.previous_session.is_some()
+    );
+}
+
+/// No server is the error `list-panes` gave, which the callers tell from the rest.
+#[test]
+fn a_read_of_the_list_with_no_server_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = Tmux {
+        bin: Tmux::with_socket_name("unused").bin,
+        socket: Some(taw::tmux::Socket::Path(dir.path().join("none.sock"))),
+    };
+    let err = t.read_listing(None).unwrap_err();
+    assert!(taw::tmux::no_server(&err), "{err:#}");
+}

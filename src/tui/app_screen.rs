@@ -465,12 +465,9 @@ fn open_app<'c, S: Lending>(
         _ => theme,
     };
     screen.loading(&theme, view::LOADING);
+    // The sessions come from the same read as the rows: one tmux call, not a second listing.
     feed.read_local();
-    let last = feed
-        .tmux
-        .list_sessions()
-        .ok()
-        .and_then(|sessions| last_session_pane(&sessions, &feed.local.snap));
+    let last = last_session_pane(&feed.local.sessions, &feed.local.snap);
     let (snap, worktrees) = feed.combined();
     let mut app = App::new(cfg, theme, settings, snap);
     app.set_worktrees(worktrees);
@@ -505,6 +502,8 @@ fn open_going<'c, S: Lending>(
 #[derive(Default)]
 struct Local {
     snap: Snapshot,
+    /// The sessions of the read that made `snap`, with the times they were last attached.
+    sessions: Vec<SessionInfo>,
     worktrees: Vec<WorktreeRecord>,
 }
 
@@ -610,8 +609,9 @@ impl Feed<'_> {
     /// the snapshot has no current or previous session: the app has no client whose they would be.
     fn read_local(&mut self) {
         match data::build_without_client(self.tmux, self.cfg, &self.git) {
-            Ok(snap) => {
+            Ok((snap, sessions)) => {
                 self.local.snap = for_app(snap);
+                self.local.sessions = sessions;
                 // The theme of the client that shows this pane, only when the theme follows the terminal.
                 if self.cfg.theme.auto_switch {
                     self.local.snap.client_theme = self
@@ -625,6 +625,7 @@ impl Feed<'_> {
                     log::debug!("the app's refresh failed, keeping the last snapshot: {err:#}");
                 } else {
                     self.local.snap = Snapshot::default();
+                    self.local.sessions = Vec::new();
                     // The word it had is of a server that is gone: the next one is read when it is up, and
                     // the connections start again with it ([`Feed::follow_the_server`]).
                     self.server.clear();
@@ -2508,6 +2509,7 @@ mod tests {
     fn a_tick_merges_the_rows_and_the_worktrees_of_every_machine() {
         let local = Local {
             snap: snapshot(),
+            sessions: Vec::new(),
             worktrees: worktrees(),
         };
         let mut moved = worktrees().remove(0);
@@ -2967,8 +2969,8 @@ mod tests {
 
         let asked = calls(&log);
         assert!(
-            asked.iter().any(|call| call[0] == "list-sessions"),
-            "the tick read the sessions: {asked:?}"
+            asked.iter().any(|call| call[0] == "list-panes"),
+            "the tick read the list: {asked:?}"
         );
         let verbs: Vec<&str> = asked.iter().map(|call| call[0].as_str()).collect();
         assert!(
@@ -3010,7 +3012,7 @@ mod tests {
         let reads = || {
             calls(&log)
                 .iter()
-                .filter(|call| call[0] == "list-sessions")
+                .filter(|call| call[0] == "list-panes")
                 .count()
         };
 
@@ -3046,44 +3048,105 @@ mod tests {
         assert_eq!(reads(), before + 1);
     }
 
-    /// The first frame is drawn from the read the opening already made: the app reads this Mac's sessions
-    /// once for its rows and once for the session attached most lately, and showing the first frame reads
-    /// nothing more.
+    /// The first frame is drawn from the read the opening already made: opening the app reads this Mac once, in
+    /// one tmux call, and takes the session attached most lately from that same read; showing the first frame
+    /// reads nothing more.
     #[test]
-    fn the_first_frame_is_drawn_from_the_read_already_made() {
+    fn opening_the_app_starts_tmux_once() {
         use crate::cli::test_support::{Stub, calls, stub_tmux};
         let dir = tempfile::tempdir().unwrap();
         let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
         let paths = paths_in(dir.path());
         let cfg = Config::default();
         let theme = || theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
-        let reads = || {
-            calls(&log)
-                .iter()
-                .filter(|call| call[0] == "list-sessions")
-                .count()
-        };
 
-        // What one read of this Mac costs.
-        let mut feed = feed_over(&tmux, &cfg, &paths);
-        feed.read_local();
-        let one_read = reads();
-        assert!(one_read >= 1, "a read lists the sessions");
-
-        let before = reads();
         let mut feed = feed_over(&tmux, &cfg, &paths);
         let entered = std::cell::Cell::new(false);
-        open_app(&mut feed, &cfg, theme(), String::new(), None, || {
+        let (app, Unlent) = open_app(&mut feed, &cfg, theme(), String::new(), None, || {
             entered.set(true);
             Ok(Unlent)
         })
         .unwrap();
         assert!(entered.get(), "the screen was entered");
 
-        // One read for the rows, plus the one list of sessions that names the last attached; none for the
-        // first frame.
-        let verbs: Vec<String> = calls(&log).iter().map(|call| call[0].clone()).collect();
-        assert_eq!(reads() - before, one_read + 1, "the calls were {verbs:?}");
+        let calls = calls(&log);
+        let verbs: Vec<&str> = calls.iter().map(|call| call[0].as_str()).collect();
+        assert_eq!(
+            verbs,
+            ["list-panes"],
+            "one process, and it lists everything"
+        );
+        // The one call carries the sessions, so the cursor still goes to the session attached most lately.
+        let list = &calls[0];
+        for verb in ["list-windows", "list-sessions", "show-options"] {
+            assert!(list.iter().any(|word| word == verb), "{verb}: {list:?}");
+        }
+        drop(app);
+    }
+
+    /// What each action of the app and the popup starts of tmux, counted from a stand-in's log (one line per
+    /// process): one read of the list, the opening of the app, one tick with the preview of the pane under the
+    /// cursor (the read and the capture), coming back from a session (the same two), and the popup's build with its
+    /// client named (the read, the client's last session and theme in it).
+    #[test]
+    fn the_processes_each_action_starts() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                pane: true,
+                ..Stub::default()
+            },
+        );
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let theme = || theme::resolve(&cfg.theme.name, &cfg.theme.custom).theme;
+        let started = |log: &Path| calls(log).len();
+        let reset = |log: &Path| std::fs::write(log, "").unwrap();
+
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        feed.read_local();
+        let one_read = started(&log);
+
+        reset(&log);
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let (mut app, Unlent) =
+            open_app(&mut feed, &cfg, theme(), String::new(), None, || Ok(Unlent)).unwrap();
+        // The opening shows the first frame with the preview of the row the cursor is on.
+        let opening = started(&log);
+        let captures = |log: &Path| {
+            calls(log)
+                .iter()
+                .filter(|call| call[0] == "capture-pane")
+                .count()
+        };
+        assert_eq!(
+            captures(&log),
+            1,
+            "the preview was captured: {:?}",
+            calls(&log)
+        );
+
+        reset(&log);
+        feed.show(&tmux, &mut app);
+        let a_tick = started(&log);
+        assert_eq!(captures(&log), 1, "{:?}", calls(&log));
+
+        reset(&log);
+        feed.came_back(&mut app, &mut Unlent, None, None, None);
+        let coming_back = started(&log);
+
+        reset(&log);
+        let git = data::GitWorker::new(GIT_TTL);
+        data::build(&tmux, &cfg, &git, Some("%5"), Some("/dev/ttys001")).unwrap();
+        let the_popup = started(&log);
+
+        assert_eq!(
+            [one_read, opening, a_tick, coming_back, the_popup],
+            [1, 2, 2, 2, 1],
+            "processes per action: a read, the opening, a tick, coming back, the popup"
+        );
     }
 
     /// A screen that notes what it is done, in order, with the number of calls and of reads (`list-sessions`) the

@@ -1571,26 +1571,10 @@ mod tests {
     use super::*;
     use crate::tui::data::Snapshot;
 
-    /// A stand-in `tmux` for [`refresh_bar`]: logs every argv it is run with to
-    /// `argv.log`, one line per call, each argument `\x1f`-separated — `cli::ui_open`'s
-    /// `stub_tmux` minus the emulated reads, since `set_session_option` is the only call
-    /// the gate can make.
+    /// A stand-in `tmux` for [`refresh_bar`] and the popup's refresh: `cli::test_support`'s, which logs every
+    /// call it is run with and answers a sequence of commands as tmux does.
     fn stub_tmux(dir: &Path) -> (Tmux, PathBuf) {
-        let log = dir.join("argv.log");
-        let script = dir.join("tmux");
-        let body = format!(
-            "#!/bin/sh\n[ \"$1\" = -u ] && shift\n{{ for a in \"$@\"; do printf '%s\\037' \"$a\"; done; printf '\\n'; }} >> '{}'\nexit 0\n",
-            log.display()
-        );
-        std::fs::write(&script, body).unwrap();
-        crate::test_exec::make_executable(&script);
-        (
-            Tmux {
-                bin: script,
-                socket: None,
-            },
-            log,
-        )
+        crate::cli::test_support::stub_tmux(dir, &crate::cli::test_support::Stub::default())
     }
 
     /// Whether the log holds a `set-option` call — [`stub_tmux`]'s script never fails one,

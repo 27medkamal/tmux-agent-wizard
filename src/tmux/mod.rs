@@ -92,11 +92,29 @@ impl Tmux {
     /// [`Tmux::run`] that gives up at `deadline`: a tmux that has not ended by then is killed and
     /// reaped (it is this call's own child), and the answer is an error saying so.
     pub fn run_by(&self, args: &[&str], deadline: Option<Instant>) -> anyhow::Result<String> {
+        let output = self.output_of(args, deadline)?;
+        if !output.status.success() {
+            return Err(failed(&self.bin, args, &output).into());
+        }
+        let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        if stdout.ends_with('\n') {
+            stdout.pop();
+        }
+        Ok(stdout)
+    }
+
+    /// Runs `tmux -u <args>` and returns everything it ended with, whether it succeeded or not: an
+    /// error only when it could not be run, or did not end by `deadline` (killed and reaped).
+    fn output_of(
+        &self,
+        args: &[&str],
+        deadline: Option<Instant>,
+    ) -> anyhow::Result<std::process::Output> {
         let mut cmd = self.command();
         cmd.arg("-u");
         cmd.args(args);
         let ran = || format!("failed to run `{} {}`", self.bin.display(), args.join(" "));
-        let output = match deadline {
+        Ok(match deadline {
             None => cmd.output().with_context(ran)?,
             Some(deadline) => output_by(&mut cmd, deadline)
                 .with_context(ran)?
@@ -105,20 +123,7 @@ impl Tmux {
                         command: format!("{} {}", self.bin.display(), args.join(" ")),
                     })
                 })?,
-        };
-        if !output.status.success() {
-            return Err(CommandFailed {
-                command: format!("{} {}", self.bin.display(), args.join(" ")),
-                status: output.status,
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            }
-            .into());
-        }
-        let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        if stdout.ends_with('\n') {
-            stdout.pop();
-        }
-        Ok(stdout)
+        })
     }
 
     /// Like `run`, discarding stdout — for commands run only for their side effect.
@@ -200,59 +205,11 @@ impl Tmux {
     /// [`Tmux::list_sessions`] whose tmux calls are all given up at `deadline`.
     pub fn list_sessions_by(&self, deadline: Option<Instant>) -> anyhow::Result<Vec<SessionInfo>> {
         let windows = self.list_windows_by(deadline)?;
-        let mut active_window: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for w in &windows {
-            if w.window_active {
-                active_window.insert(w.session_id.clone(), w.window_id.clone());
-            }
-        }
-        // Folded like `list_panes`: `session_name` is whatever `rename-session` was given
-        // and `session_path` is a path, so both can hold a tab or a newline — and this
-        // reply is split on lines and then on tabs. See [`fold_controls`].
-        let format = [
-            "#{session_id}",
-            "#{session_name}",
-            "#{session_path}",
-            "#{session_attached}",
-            "#{session_windows}",
-            "#{session_last_attached}",
-            "#{session_group_size}",
-        ]
-        .map(fold_controls)
-        .join("\t");
-        let out = self.run_by(&["list-sessions", "-F", &format], deadline)?;
-        out.lines()
-            .map(|line| {
-                let f: Vec<&str> = line.split('\t').collect();
-                anyhow::ensure!(
-                    f.len() == 7,
-                    "list-sessions: expected 7 tab-separated fields, got {}: {:?}",
-                    f.len(),
-                    line
-                );
-                let session_id = f[0].to_string();
-                let active_window_id = active_window.get(&session_id).cloned().unwrap_or_default();
-                Ok(SessionInfo {
-                    session_id,
-                    session_name: f[1].to_string(),
-                    session_path: f[2].to_string(),
-                    session_attached: f[3].parse().with_context(|| {
-                        format!("list-sessions: invalid session_attached '{}'", f[3])
-                    })?,
-                    session_windows: f[4].parse().with_context(|| {
-                        format!("list-sessions: invalid session_windows '{}'", f[4])
-                    })?,
-                    // Empty for a session in no group, which is the 0 it is read as; a value that
-                    // does not parse is no group either, and costs nothing else.
-                    session_group_size: f[6].parse().unwrap_or(0),
-                    active_window_id,
-                    // Lenient on purpose: an unparsable time must not take the whole
-                    // listing down, unlike the two fields above.
-                    session_last_attached: f[5].parse().unwrap_or(0),
-                })
-            })
-            .collect()
+        let out = self.run_by(
+            &["list-sessions", "-F", &session_listing_format()],
+            deadline,
+        )?;
+        parse_session_lines(&out, &windows)
     }
 
     /// Lists every window on the server (`list-windows -a`).
@@ -262,44 +219,81 @@ impl Tmux {
 
     /// [`Tmux::list_windows`] given up at `deadline`.
     pub fn list_windows_by(&self, deadline: Option<Instant>) -> anyhow::Result<Vec<WindowInfo>> {
-        // `window_name` is free text (`rename-window`, and tmux's own automatic rename
-        // from the running command). Folded for the same reason as `list_panes`.
-        let format = [
-            "#{window_id}",
-            "#{session_id}",
-            "#{window_index}",
-            "#{window_name}",
-            "#{window_active}",
-            "#{window_panes}",
-            "#{window_layout}",
-        ]
-        .map(fold_controls)
-        .join("\t");
-        let out = self.run_by(&["list-windows", "-a", "-F", &format], deadline)?;
-        out.lines()
-            .map(|line| {
-                let f: Vec<&str> = line.split('\t').collect();
-                anyhow::ensure!(
-                    f.len() == 7,
-                    "list-windows: expected 7 tab-separated fields, got {}: {:?}",
-                    f.len(),
-                    line
-                );
-                Ok(WindowInfo {
-                    window_id: f[0].to_string(),
-                    session_id: f[1].to_string(),
-                    window_index: f[2].parse().with_context(|| {
-                        format!("list-windows: invalid window_index '{}'", f[2])
-                    })?,
-                    window_name: f[3].to_string(),
-                    window_active: f[4] == "1",
-                    window_panes: f[5].parse().with_context(|| {
-                        format!("list-windows: invalid window_panes '{}'", f[5])
-                    })?,
-                    window_layout: f[6].to_string(),
-                })
-            })
-            .collect()
+        let out = self.run_by(
+            &["list-windows", "-a", "-F", &window_listing_format()],
+            deadline,
+        )?;
+        parse_window_lines(&out)
+    }
+
+    /// What the popup and the app draw, read in ONE tmux call: the panes, the windows, the sessions (each one's
+    /// active window is taken from the windows of the same call), and the global options, as one invocation of
+    /// `list-panes ; list-windows ; list-sessions ; show-options -g` with a marker line between the answers
+    /// ([`LIST_MARKS`]). A tmux call costs 45 ms at the median on a busy Mac and the app reads every half second,
+    /// so five calls one after another were most of the time a key waited.
+    ///
+    /// tmux stops an invocation at the first command that fails, so only commands that do not fail while a server
+    /// is up are in it. With no server, the first one fails and this is the error `list_panes` gives: the caller
+    /// tells `no server running` from the rest ([`no_server`]) as it did.
+    ///
+    /// `client` is `Some((name, format))` to read `format` for that client at the end of the same call (the
+    /// popup's last session and theme). A client that is gone expands to nothing in tmux 3.6, and a tmux that
+    /// failed on it instead costs only that answer: the markers before it are all there, and the listing is read
+    /// from them.
+    pub fn read_listing(&self, client: Option<(&str, &str)>) -> anyhow::Result<Listing> {
+        let pane_format = pane_listing_format();
+        let window_format = window_listing_format();
+        let session_format = session_listing_format();
+        let mut args: Vec<&str> = vec![
+            "list-panes",
+            "-a",
+            "-F",
+            &pane_format,
+            ";",
+            "display-message",
+            "-p",
+            LIST_MARKS[0],
+            ";",
+            "list-windows",
+            "-a",
+            "-F",
+            &window_format,
+            ";",
+            "display-message",
+            "-p",
+            LIST_MARKS[1],
+            ";",
+            "list-sessions",
+            "-F",
+            &session_format,
+            ";",
+            "display-message",
+            "-p",
+            LIST_MARKS[2],
+            ";",
+            "show-options",
+            "-g",
+        ];
+        if let Some((name, format)) = client {
+            args.extend_from_slice(&[
+                ";",
+                "display-message",
+                "-p",
+                LIST_MARKS[3],
+                ";",
+                "display-message",
+                "-p",
+                "-c",
+                name,
+                format,
+            ]);
+        }
+        let output = self.output_of(&args, None)?;
+        let out = String::from_utf8_lossy(&output.stdout);
+        if !(output.status.success() || (client.is_some() && has_mark(&out, LIST_MARKS[3]))) {
+            return Err(failed(&self.bin, &args, &output).into());
+        }
+        parse_listing(&out, client.is_some())
     }
 
     /// Lists attached clients (empty when none are attached).
@@ -447,6 +441,15 @@ pub struct CommandFailed {
     pub status: std::process::ExitStatus,
     /// What tmux wrote to its stderr, trimmed: empty when it said nothing.
     pub stderr: String,
+}
+
+/// The error of a tmux command that ended with a failure status: what [`Tmux::run`] answers.
+fn failed(bin: &std::path::Path, args: &[&str], output: &std::process::Output) -> CommandFailed {
+    CommandFailed {
+        command: format!("{} {}", bin.display(), args.join(" ")),
+        status: output.status,
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    }
 }
 
 /// A bounded tmux call ([`Tmux::run_by`]) that had not ended by its deadline: killed and reaped. It is its
@@ -849,6 +852,178 @@ fn as_tmux_reads_it(text: &str) -> String {
     crate::store::word(&text.replace('#', "##"))
 }
 
+/// The `-F` format of every window listing. `window_name` is free text (`rename-window`, and tmux's own
+/// automatic rename from the running command), folded for the same reason as the panes' columns.
+fn window_listing_format() -> String {
+    [
+        "#{window_id}",
+        "#{session_id}",
+        "#{window_index}",
+        "#{window_name}",
+        "#{window_active}",
+        "#{window_panes}",
+        "#{window_layout}",
+    ]
+    .map(fold_controls)
+    .join("\t")
+}
+
+fn parse_window_lines(out: &str) -> anyhow::Result<Vec<WindowInfo>> {
+    out.lines()
+        .map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            anyhow::ensure!(
+                f.len() == 7,
+                "list-windows: expected 7 tab-separated fields, got {}: {:?}",
+                f.len(),
+                line
+            );
+            Ok(WindowInfo {
+                window_id: f[0].to_string(),
+                session_id: f[1].to_string(),
+                window_index: f[2]
+                    .parse()
+                    .with_context(|| format!("list-windows: invalid window_index '{}'", f[2]))?,
+                window_name: f[3].to_string(),
+                window_active: f[4] == "1",
+                window_panes: f[5]
+                    .parse()
+                    .with_context(|| format!("list-windows: invalid window_panes '{}'", f[5]))?,
+                window_layout: f[6].to_string(),
+            })
+        })
+        .collect()
+}
+
+/// The `-F` format of every session listing. Folded like the panes': `session_name` is whatever `rename-session`
+/// was given and `session_path` is a path, so both can hold a tab or a newline, and this reply is split on lines
+/// and then on tabs. See [`fold_controls`].
+fn session_listing_format() -> String {
+    [
+        "#{session_id}",
+        "#{session_name}",
+        "#{session_path}",
+        "#{session_attached}",
+        "#{session_windows}",
+        "#{session_last_attached}",
+        "#{session_group_size}",
+    ]
+    .map(fold_controls)
+    .join("\t")
+}
+
+/// The sessions of a `list-sessions` reply, each with its active window from `windows`: tmux has no
+/// `#{active_window_id}` format variable.
+fn parse_session_lines(out: &str, windows: &[WindowInfo]) -> anyhow::Result<Vec<SessionInfo>> {
+    let mut active_window: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for w in windows {
+        if w.window_active {
+            active_window.insert(w.session_id.as_str(), w.window_id.as_str());
+        }
+    }
+    out.lines()
+        .map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            anyhow::ensure!(
+                f.len() == 7,
+                "list-sessions: expected 7 tab-separated fields, got {}: {:?}",
+                f.len(),
+                line
+            );
+            let session_id = f[0].to_string();
+            let active_window_id = active_window
+                .get(session_id.as_str())
+                .map(|id| id.to_string())
+                .unwrap_or_default();
+            Ok(SessionInfo {
+                session_id,
+                session_name: f[1].to_string(),
+                session_path: f[2].to_string(),
+                session_attached: f[3].parse().with_context(|| {
+                    format!("list-sessions: invalid session_attached '{}'", f[3])
+                })?,
+                session_windows: f[4].parse().with_context(|| {
+                    format!("list-sessions: invalid session_windows '{}'", f[4])
+                })?,
+                // Empty for a session in no group, which is the 0 it is read as; a value that
+                // does not parse is no group either, and costs nothing else.
+                session_group_size: f[6].parse().unwrap_or(0),
+                active_window_id,
+                // Lenient on purpose: an unparsable time must not take the whole
+                // listing down, unlike the two fields above.
+                session_last_attached: f[5].parse().unwrap_or(0),
+            })
+        })
+        .collect()
+}
+
+/// What [`Tmux::read_listing`] read.
+#[derive(Debug)]
+pub struct Listing {
+    pub panes: Vec<PaneInfo>,
+    pub windows: Vec<WindowInfo>,
+    pub sessions: Vec<SessionInfo>,
+    /// `show-options -g`, as tmux printed it: [`Listing::option`] reads one value of it.
+    pub options: String,
+    /// What the client asked for said, `None` when none was asked or it could not answer.
+    pub client: Option<String>,
+}
+
+impl Listing {
+    /// One global option, `None` when unset: what [`Tmux::get_global_option`] reads, from the same call.
+    pub fn option(&self, name: &str) -> Option<String> {
+        parse_option_lines(&self.options)
+            .into_iter()
+            .find(|(n, _)| n.as_str() == name)
+            .map(|(_, v)| v)
+    }
+}
+
+/// The lines [`Tmux::read_listing`] prints between its answers, in order: after the panes, the windows, the
+/// sessions, and the global options. Each is a line of its own that no row can be (a row has a column for each of
+/// its fields, folded so that none holds a line break) and that no option line is (`name value`).
+const LIST_MARKS: [&str; 4] = [
+    PANES_END,
+    "taw: end of the window listing",
+    "taw: end of the session listing",
+    "taw: end of the global options",
+];
+
+fn has_mark(out: &str, mark: &str) -> bool {
+    out.lines().any(|line| line == mark)
+}
+
+/// [`Tmux::read_listing`]'s reply, split at the marks and parsed. `asked_client`: the last answer was asked for.
+fn parse_listing(out: &str, asked_client: bool) -> anyhow::Result<Listing> {
+    let mut rest = out;
+    let mut sections = Vec::new();
+    let wanted = if asked_client { 4 } else { 3 };
+    for mark in &LIST_MARKS[..wanted] {
+        anyhow::ensure!(
+            has_mark(rest, mark),
+            "the tmux listing lacks its marker {mark:?}"
+        );
+        let (before, after) = split_at_mark(rest, mark);
+        sections.push(before);
+        rest = after;
+    }
+    // After the last mark come the global options, when no client was asked, and the client's answer when it was.
+    let (options, client) = if asked_client {
+        (sections[3], Some(rest))
+    } else {
+        (rest, None)
+    };
+    let windows = parse_window_lines(sections[1])?;
+    let sessions = parse_session_lines(sections[2], &windows)?;
+    Ok(Listing {
+        panes: parse_pane_lines(sections[0], default_pane_title().as_deref()).0,
+        windows,
+        sessions,
+        options: options.to_string(),
+        client: client.map(|said| said.strip_suffix('\n').unwrap_or(said).to_string()),
+    })
+}
+
 /// The line [`Tmux::list_panes_then`] prints between the panes and what follows them.
 const PANES_END: &str = "taw: end of the pane listing";
 
@@ -856,9 +1031,15 @@ const PANES_END: &str = "taw: end of the pane listing";
 /// after it. The mark is a line of its own that no pane's row can be (a row has a column for each of
 /// its fields), whatever a title or a path says; with none, all of it is the listing.
 fn split_at_panes_end(out: &str) -> (&str, &str) {
+    split_at_mark(out, PANES_END)
+}
+
+/// `out` split at the first line that is `mark`: what is before it, and what is after; with none, all of it
+/// is before.
+fn split_at_mark<'a>(out: &'a str, mark: &str) -> (&'a str, &'a str) {
     let mut at = 0;
     for line in out.split_inclusive('\n') {
-        if line.trim_end_matches('\n') == PANES_END {
+        if line.trim_end_matches('\n') == mark {
             return (&out[..at], &out[at + line.len()..]);
         }
         at += line.len();
@@ -1490,5 +1671,136 @@ mod tests {
         let (panes, _) = parse_pane_lines(listing, None);
         assert_eq!(panes.len(), 1);
         assert_eq!(panes[0].agent.display.as_deref(), Some(PANES_END));
+    }
+
+    // ------------------------------------------ the one-call read of the list
+
+    fn window_row(window: &str, session: &str, name: &str, active: &str) -> String {
+        [window, session, "0", name, active, "1", "layout"].join("\t")
+    }
+
+    fn session_row(session: &str, name: &str, path: &str) -> String {
+        [session, name, path, "1", "1", "1700000000", ""].join("\t")
+    }
+
+    /// The reply of `read_listing`, as tmux prints it: the answers with a marker line after each.
+    fn reply(panes: &[String], windows: &[String], sessions: &[String], options: &str) -> String {
+        let mut out = String::new();
+        for (rows, mark) in [
+            (panes, LIST_MARKS[0]),
+            (windows, LIST_MARKS[1]),
+            (sessions, LIST_MARKS[2]),
+        ] {
+            for row in rows {
+                out.push_str(row);
+                out.push('\n');
+            }
+            out.push_str(mark);
+            out.push('\n');
+        }
+        out.push_str(options);
+        out
+    }
+
+    /// Every answer is split at its own marker, and the active window of each session is the active window of
+    /// the same call.
+    #[test]
+    fn the_reply_of_one_call_is_split_into_panes_windows_sessions_and_options() {
+        let out = reply(
+            &[pane_line("%1", "100", ""), pane_line("%2", "101", "")],
+            &[
+                window_row("@1", "$0", "edit", "0"),
+                window_row("@2", "$0", "run", "1"),
+                window_row("@3", "$1", "other", "1"),
+            ],
+            &[
+                session_row("$0", "one", "/a"),
+                session_row("$1", "two", "/b"),
+            ],
+            "status on\n@agent_wizard_view \"{}\"\n",
+        );
+        let listing = parse_listing(&out, false).unwrap();
+        let ids = |panes: &[PaneInfo]| panes.iter().map(|p| p.pane_id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&listing.panes), ["%1", "%2"]);
+        assert_eq!(listing.windows.len(), 3);
+        let active: Vec<&str> = listing
+            .sessions
+            .iter()
+            .map(|s| s.active_window_id.as_str())
+            .collect();
+        assert_eq!(active, ["@2", "@3"]);
+        assert_eq!(listing.option("status").as_deref(), Some("on"));
+        assert_eq!(listing.option("@agent_wizard_view").as_deref(), Some("{}"));
+        assert_eq!(listing.option("@unset"), None);
+        assert_eq!(listing.client, None);
+    }
+
+    /// A title, a window name, a session name and an option value that say a marker's words, hold a tab or came
+    /// with a line break (tmux folds those to spaces, so the row is one line) split no answer in two, and each
+    /// comes back as the value it was.
+    #[test]
+    fn a_value_that_says_a_marker_splits_nothing() {
+        let said = |mark: &str| format!("{mark} x y");
+        let mut pane = pane_line("%1", "100", LIST_MARKS[2]);
+        pane = pane.replace("\ttitle\t", &format!("\t{}\t", LIST_MARKS[1]));
+        let out = reply(
+            &[pane],
+            &[window_row("@1", "$0", LIST_MARKS[0], "1")],
+            &[session_row("$0", LIST_MARKS[3], &said(LIST_MARKS[0]))],
+            &format!("@note \"{}\"\nstatus on\n", LIST_MARKS[1]),
+        );
+        let listing = parse_listing(&out, false).unwrap();
+        assert_eq!(listing.panes.len(), 1);
+        assert_eq!(listing.panes[0].pane_title, LIST_MARKS[1]);
+        assert_eq!(
+            listing.panes[0].agent.display.as_deref(),
+            Some(LIST_MARKS[2])
+        );
+        assert_eq!(listing.windows[0].window_name, LIST_MARKS[0]);
+        assert_eq!(listing.sessions[0].session_name, LIST_MARKS[3]);
+        assert_eq!(listing.option("@note").as_deref(), Some(LIST_MARKS[1]));
+        assert_eq!(listing.option("status").as_deref(), Some("on"));
+    }
+
+    /// A server with no window to list (a session whose windows are gone) is empty sections, not an error.
+    #[test]
+    fn empty_sections_are_an_empty_listing() {
+        let listing = parse_listing(&reply(&[], &[], &[], ""), false).unwrap();
+        assert!(listing.panes.is_empty() && listing.windows.is_empty());
+        assert!(listing.sessions.is_empty());
+        assert_eq!(listing.option("status"), None);
+        // A session with no window listed has no active window.
+        let listing = parse_listing(
+            &reply(&[], &[], &[session_row("$0", "one", "/a")], "status on\n"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(listing.sessions[0].active_window_id, "");
+    }
+
+    /// The client's answer follows the fourth marker, whatever it holds, with the one line break tmux ends it
+    /// with taken off; a call that stopped at the client's question has every marker before it and still gives
+    /// the list, with nothing from the client.
+    #[test]
+    fn the_clients_answer_is_what_follows_the_last_marker() {
+        let base = reply(&[], &[], &[session_row("$0", "one", "/a")], "status on\n");
+        let asked = format!("{base}{}\ndark work space\n", LIST_MARKS[3]);
+        let listing = parse_listing(&asked, true).unwrap();
+        assert_eq!(listing.client.as_deref(), Some("dark work space"));
+        assert_eq!(listing.option("status").as_deref(), Some("on"));
+        let stopped = format!("{base}{}\n", LIST_MARKS[3]);
+        assert_eq!(
+            parse_listing(&stopped, true).unwrap().client.as_deref(),
+            Some("")
+        );
+        assert!(has_mark(&stopped, LIST_MARKS[3]));
+        assert!(!has_mark(&base, LIST_MARKS[3]));
+    }
+
+    /// A reply cut short is an error and no half of a listing.
+    #[test]
+    fn a_reply_that_lacks_a_marker_is_an_error() {
+        let out = format!("{}\n{}\n", pane_line("%1", "100", ""), LIST_MARKS[0]);
+        assert!(parse_listing(&out, false).is_err());
     }
 }

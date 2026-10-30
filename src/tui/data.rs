@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::config::{Config, RowsConfig, StatusIndicators};
 use crate::git;
 use crate::store::AgentState;
-use crate::tmux::{PaneInfo, SessionInfo, Tmux, WindowInfo, ids};
+use crate::tmux::{Listing, PaneInfo, SessionInfo, Tmux, WindowInfo, ids};
 use crate::tui::agent_view;
 
 /// One agent-occupied pane, as the Agents panel needs it.
@@ -544,8 +544,9 @@ pub fn rows_use_custom_tokens(rows: &RowsConfig) -> bool {
         .any(|t| t.token.starts_with('$'))
 }
 
-/// Reads tmux once and builds a snapshot: one `list-panes -a`, one `list-windows -a`,
-/// one `list-sessions`, and the global options that hold the Agents view.
+/// Reads tmux once and builds a snapshot: the panes, the windows, the sessions and the global options that hold
+/// the Agents view, in one tmux call ([`Tmux::read_listing`]), with the popup's client's last session and theme
+/// at the end of the same call.
 /// `@agent_token_*` options are read per agent pane only when the config's rows or the
 /// active view reference a `$token`.
 ///
@@ -566,12 +567,17 @@ pub fn build(
     origin: Option<&str>,
     client: Option<&str>,
 ) -> anyhow::Result<Snapshot> {
-    build_with(t, cfg, git, origin, Some(client))
+    build_with(t, cfg, git, origin, Some(client)).map(|(snapshot, _)| snapshot)
 }
 
 /// [`build`] for a screen that has no client at all (`taw app`): no client is looked for, and none is
-/// asked for its last session, which costs two tmux calls on every tick and which nobody would use.
-pub fn build_without_client(t: &Tmux, cfg: &Config, git: &GitWorker) -> anyhow::Result<Snapshot> {
+/// asked for its last session, which costs two tmux calls on every tick and which nobody would use. The
+/// sessions of the same read come with it, for whoever needs them (the app's first cursor).
+pub fn build_without_client(
+    t: &Tmux,
+    cfg: &Config,
+    git: &GitWorker,
+) -> anyhow::Result<(Snapshot, Vec<SessionInfo>)> {
     build_with(t, cfg, git, None, None)
 }
 
@@ -583,11 +589,23 @@ fn build_with(
     git: &GitWorker,
     origin: Option<&str>,
     client: Option<Option<&str>>,
-) -> anyhow::Result<Snapshot> {
-    let mut panes = t.list_panes()?;
-    let windows = t.list_windows()?;
-    let sessions = t.list_sessions()?;
-    let (view, view_error) = read_view(t);
+) -> anyhow::Result<(Snapshot, Vec<SessionInfo>)> {
+    // The client to ask is found first (a `taw ui` typed in a pane picks one of those attached), and asked in
+    // the call that reads the list.
+    let asked = client.and_then(|named| ask_client(t, named, cfg.theme.auto_switch));
+    let listing = t.read_listing(
+        asked
+            .as_ref()
+            .map(|(name, format)| (name.as_str(), *format)),
+    )?;
+    let (view, view_error) = read_view(listing.option(agent_view::OPTION));
+    let Listing {
+        mut panes,
+        windows,
+        sessions,
+        client: said,
+        ..
+    } = listing;
 
     if rows_use_custom_tokens(&cfg.ui.sidebar.agents)
         || view
@@ -613,12 +631,11 @@ fn build_with(
     snapshot.view_error = view_error;
     // The client's own idea of "last session" beats the timestamps when it can be read:
     // it is per client, so two screens each go back to their own place.
-    if let Some(client) = client {
-        let read = read_client(
-            t,
+    if let Some(said) = said {
+        let read = parse_client_read(
+            &said,
             &sessions,
             snapshot.current_session.as_deref(),
-            client,
             cfg.theme.auto_switch,
         );
         if let Some(previous) = read.previous_session {
@@ -626,7 +643,7 @@ fn build_with(
         }
         snapshot.client_theme = read.theme;
     }
-    Ok(snapshot)
+    Ok((snapshot, sessions))
 }
 
 /// What one question to the popup's client answers: its last session and, when asked, its theme.
@@ -641,42 +658,26 @@ struct ClientRead {
     theme: Option<String>,
 }
 
-/// Reads `#{client_last_session}`, and `#{client_theme}` when `with_theme`, of the popup's client
-/// in one `display-message`, so a popup that follows the terminal's light or dark mode makes no
-/// further process each tick.
+/// The question to the popup's client for `#{client_last_session}`, and `#{client_theme}` when `with_theme`: its
+/// name and the format, asked in the call that reads the list, so a popup that follows the terminal's light or
+/// dark mode makes no further process each tick.
 ///
 /// The popup's client is `client`, the one its launcher named, and read by name; with none
 /// (a `taw ui` typed in a pane) it is picked from those attached, by hand. Both are per client,
 /// so with two screens on one session it is the popup's own screen that counts, and the first
 /// client the server lists is the wrong one half the time. Without `with_theme` the question is
-/// the one it always was, `#{client_last_session}` alone.
-fn read_client(
-    t: &Tmux,
-    sessions: &[SessionInfo],
-    current: Option<&str>,
-    client: Option<&str>,
-    with_theme: bool,
-) -> ClientRead {
-    let nothing = ClientRead {
-        previous_session: None,
-        theme: None,
-    };
+/// the one it always was, `#{client_last_session}` alone. `None` when no client can be found.
+fn ask_client(t: &Tmux, client: Option<&str>, with_theme: bool) -> Option<(String, &'static str)> {
     let client = match client {
         Some(named) => named.to_string(),
-        None => match crate::cli::common::resolve_client(t) {
-            Ok(client) => client,
-            Err(_) => return nothing,
-        },
+        None => crate::cli::common::resolve_client(t).ok()?,
     };
     let format = if with_theme {
         "#{client_theme} #{client_last_session}"
     } else {
         "#{client_last_session}"
     };
-    let Ok(said) = t.run(&["display-message", "-p", "-c", &client, format]) else {
-        return nothing;
-    };
-    parse_client_read(&said, sessions, current, with_theme)
+    Some((client, format))
 }
 
 /// `#{client_theme}` of the client tmux finds for the caller, for `taw app`, which has no client of its own. `-t
@@ -693,7 +694,7 @@ pub fn read_pane_theme(t: &Tmux, pane: &str) -> Option<String> {
     Some(said.trim().to_string()).filter(|theme| !theme.is_empty())
 }
 
-/// [`read_client`]'s answer, as tmux printed it: the theme first (one word, empty on a tmux that
+/// [`ask_client`]'s answer, as tmux printed it: the theme first (one word, empty on a tmux that
 /// has none) when it was asked for, then the last session's name, which may hold spaces.
 fn parse_client_read(
     said: &str,
@@ -737,14 +738,7 @@ fn parse_client_read(
 /// `debug!`, not `warn!`, for both: this runs on every tick of a full-screen TUI whose
 /// stderr is the pane it is drawing in, and `warn` is on by default. The popup reports
 /// the failure on its own bottom line instead — see `App::report_view_error`.
-fn read_view(t: &Tmux) -> (Option<agent_view::AgentView>, Option<String>) {
-    let raw = match t.get_global_option(agent_view::OPTION) {
-        Ok(raw) => raw,
-        Err(e) => {
-            log::debug!("reading {} failed: {e:#}", agent_view::OPTION);
-            return (None, None);
-        }
-    };
+fn read_view(raw: Option<String>) -> (Option<agent_view::AgentView>, Option<String>) {
     match agent_view::parse(raw.as_deref()) {
         Ok(view) => (view, None),
         Err(e) => {
@@ -914,41 +908,27 @@ mod tests {
         )
     }
 
-    /// The popup's client is asked once, by name, for its theme and its last session together; the question is the
-    /// old one, `#{client_last_session}` alone, when `auto_switch` is off.
+    /// The popup's client is asked by name, for its theme and its last session together; the question is the
+    /// old one, `#{client_last_session}` alone, when `auto_switch` is off. Asking starts no process when the
+    /// client is named: the question joins the call that reads the list.
     #[test]
     fn the_client_is_asked_for_its_theme_and_its_last_session_in_one_question() {
         let dir = tempfile::tempdir().unwrap();
         let (t, log) = stand_in(dir.path(), "light work space");
-        let sessions = two_sessions();
-        let read = read_client(&t, &sessions, None, Some("/dev/ttys009"), true);
-        assert_eq!(read.theme.as_deref(), Some("light"));
         assert_eq!(
-            read.previous_session.as_deref(),
-            Some(sessions[1].session_id.as_str())
+            ask_client(&t, Some("/dev/ttys009"), true),
+            Some((
+                "/dev/ttys009".to_string(),
+                "#{client_theme} #{client_last_session}"
+            ))
         );
-        let asked = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(asked.lines().count(), 1, "one process: {asked:?}");
-        assert!(
-            asked.contains("display-message\x1f-p\x1f-c\x1f/dev/ttys009\x1f#{client_theme} #{client_last_session}\x1f"),
-            "{asked:?}"
-        );
-
-        let again = tempfile::tempdir().unwrap();
-        let (t, log) = stand_in(again.path(), "work space");
-        let read = read_client(&t, &sessions, None, Some("/dev/ttys009"), false);
-        assert_eq!(read.theme, None);
         assert_eq!(
-            read.previous_session.as_deref(),
-            Some(sessions[1].session_id.as_str())
+            ask_client(&t, Some("/dev/ttys009"), false),
+            Some(("/dev/ttys009".to_string(), "#{client_last_session}"))
         );
-        let asked = std::fs::read_to_string(&log).unwrap();
-        assert!(!asked.contains("client_theme"), "{asked:?}");
-        assert!(
-            asked.contains("\x1f#{client_last_session}\x1f"),
-            "{asked:?}"
-        );
+        assert!(!log.exists(), "a process was started to ask");
     }
+
     use crate::store::AgentRecord;
 
     fn pane(session: &str, window: u32, pane_index: u32, state: Option<AgentState>) -> PaneInfo {
@@ -1148,10 +1128,6 @@ mod tests {
 
     use crate::cli::test_support::{Stub, calls, stub_tmux};
 
-    fn argv(words: &[&str]) -> Vec<String> {
-        words.iter().map(|word| (*word).to_string()).collect()
-    }
-
     /// The popup was told which client it is on, so its last session is asked of that client,
     /// by name, and no client is picked from a listing: with two on a session that would be
     /// the first the server lists, whichever the popup is on. A last session that is the
@@ -1162,27 +1138,21 @@ mod tests {
         let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
         let sessions = [session("main", 0), session("other-one", 1)];
 
-        let got =
-            read_client(&tmux, &sessions, Some("$9"), Some("/dev/ttys021"), false).previous_session;
+        let asked = ask_client(&tmux, Some("/dev/ttys021"), false);
 
-        assert_eq!(got.as_deref(), Some("$4"), "main, by its name");
-        let calls = calls(&log);
-        assert!(
-            calls.contains(&argv(&[
-                "display-message",
-                "-p",
-                "-c",
-                "/dev/ttys021",
-                "#{client_last_session}"
-            ])),
-            "{calls:?}"
-        );
-        assert!(
-            calls.iter().all(|call| call[0] != "list-clients"),
-            "a client was picked from a listing: {calls:?}"
-        );
         assert_eq!(
-            read_client(&tmux, &sessions, Some("$4"), Some("/dev/ttys021"), false).previous_session,
+            asked,
+            Some(("/dev/ttys021".to_string(), "#{client_last_session}"))
+        );
+        assert!(
+            calls(&log).is_empty(),
+            "a client was picked from a listing: {:?}",
+            calls(&log)
+        );
+        let got = parse_client_read("main", &sessions, Some("$9"), false).previous_session;
+        assert_eq!(got.as_deref(), Some("$4"), "main, by its name");
+        assert_eq!(
+            parse_client_read("main", &sessions, Some("$4"), false).previous_session,
             None
         );
     }
@@ -1193,24 +1163,16 @@ mod tests {
     fn with_no_client_named_the_last_session_is_read_for_the_one_picked_by_hand() {
         let dir = tempfile::tempdir().unwrap();
         let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
-        let sessions = [session("main", 0), session("other-one", 1)];
 
-        let got = read_client(&tmux, &sessions, Some("$9"), None, false).previous_session;
+        let asked = ask_client(&tmux, None, false);
 
-        assert_eq!(got.as_deref(), Some("$4"));
+        assert_eq!(
+            asked,
+            Some(("/dev/ttys001".to_string(), "#{client_last_session}"))
+        );
         let calls = calls(&log);
         assert!(
             calls.iter().any(|call| call[0] == "list-clients"),
-            "{calls:?}"
-        );
-        assert!(
-            calls.contains(&argv(&[
-                "display-message",
-                "-p",
-                "-c",
-                "/dev/ttys001",
-                "#{client_last_session}"
-            ])),
             "{calls:?}"
         );
     }

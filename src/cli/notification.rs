@@ -487,8 +487,8 @@ mod tests {
         let text = std::fs::read_to_string(&script).unwrap();
         let listing = crate::tmux::listing_line("%5", "title", "");
         let text = text.replace(
-            "  list-sessions)",
-            &format!("  list-panes) printf '%s\\n' '{listing}' ;;\n  list-sessions)"),
+            "  list-panes) : ;;",
+            &format!("  list-panes) printf '%s\\n' '{listing}' ;;"),
         );
         std::fs::write(&script, text).unwrap();
 

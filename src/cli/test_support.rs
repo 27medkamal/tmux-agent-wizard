@@ -48,6 +48,8 @@ pub(crate) struct Stub {
     pub client_tty: Option<PathBuf>,
     /// What `tmux -V` prints.
     pub version: &'static str,
+    /// `list-panes` lists one pane, `%5` of session `$3` with a `claude` agent on it, instead of none.
+    pub pane: bool,
 }
 
 impl Default for Stub {
@@ -65,12 +67,13 @@ impl Default for Stub {
             session_gone: false,
             client_tty: None,
             version: "tmux 3.6b",
+            pane: false,
         }
     }
 }
 
-/// The stand-in `tmux` in `dir`, and the log its calls are appended to: one line per call,
-/// each argument followed by `\x1f`. `Tmux::run` puts `-u` ahead of its arguments, and the
+/// The stand-in `tmux` in `dir`, and the log its calls are appended to: one record per call,
+/// each argument followed by `\x1f` and the record by `\x1e` and a line break. `Tmux::run` puts `-u` ahead of its arguments, and the
 /// stand-in drops it before it looks or logs, so a call reads as its verb and what follows.
 pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
     let log = dir.join("argv.log");
@@ -130,10 +133,25 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
         }
         None => ":".to_string(),
     };
+    let panes = dir.join("panes");
+    let list_panes = if stub.pane {
+        let row = crate::tmux::listing_line("%5", "", "claude").replacen(
+            "\t$0\tone\t",
+            "\t$3\tmain\t",
+            1,
+        );
+        std::fs::write(&panes, format!("{row}\n")).unwrap();
+        format!("cat '{}'", panes.display())
+    } else {
+        ":".to_string()
+    };
     let body = format!(
         r#"#!/bin/sh
 [ "$1" = -u ] && shift
-{{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; }} >> '{log}'
+{{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\036\n'; }} >> '{log}'
+# One command of the line. A command that fails ends the stand-in with its status, as it ends a
+# sequence of real tmux: what the commands before it printed stays printed and nothing after it runs.
+one() {{
 case "$1" in
   -V) echo '{version}' ;;
   list-clients) {client} ;;
@@ -149,6 +167,8 @@ case "$1" in
       '#{{session_id}}') echo '$3' ;;
       '#{{session_id}} #{{window_id}}') echo '$3 @1' ;;
       '#{{session_attached}}') echo '{attached}' ;;
+      *'#{{'*) ;;
+      *) for a; do [ "$a" = -p ] && echo "$last"; done ;;
     esac ;;
   show-options)
     case "$2" in
@@ -162,10 +182,32 @@ case "$1" in
       -u) [ "$3" = -t ] && {drop} ;;
     esac ;;
   has-session) exit {has_session} ;;
+  list-panes) {list_panes} ;;
   list-sessions) {sessions} ;;
   list-windows) {windows} ;;
   display-popup) {at_popup}; [ {exit} -eq 0 ] || {{ echo '{says}' >&2; exit {exit}; }} ;;
 esac
+return 0
+}}
+# The line is a sequence when it has words that are only `;`: each command is run in order, with the
+# words up to the next `;` as its own.
+run_first() {{
+  _c=$1
+  shift
+  _m=$#
+  _k=0
+  while [ $_k -lt $_c ]; do set -- "$@" "$1"; shift; _k=$((_k + 1)); done
+  shift $((_m - _c))
+  one "$@"
+}}
+while [ $# -gt 0 ]; do
+  c=0
+  for a in "$@"; do [ "$a" = ';' ] && break; c=$((c + 1)); done
+  [ $c -gt 0 ] && run_first "$c" "$@"
+  n=$((c + 1))
+  [ $n -gt $# ] && n=$#
+  shift $n
+done
 exit 0
 "#,
         log = log.display(),
@@ -200,7 +242,7 @@ pub(crate) fn sessions_tmux(dir: &Path, sessions: &[(&str, &str)]) -> (Tmux, Pat
     let body = format!(
         r#"#!/bin/sh
 [ "$1" = -u ] && shift
-{{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\n'; }} >> '{log}'
+{{ for a in "$@"; do printf '%s\037' "$a"; done; printf '\036\n'; }} >> '{log}'
 case "$1" in
   has-session)
     case "$3" in
@@ -248,12 +290,15 @@ pub(crate) fn stub_ctx(tmux: Tmux) -> Ctx {
 
 /// Every call the stand-in was run with, in order, as its arguments.
 pub(crate) fn calls(log: &Path) -> Vec<Vec<String>> {
+    // A call ends with a record separator, since an argument can hold a line break (a format that folds them).
     std::fs::read_to_string(log)
         .unwrap_or_default()
-        .lines()
-        .map(|line| {
-            let line = line.strip_suffix('\u{1f}').unwrap_or(line);
-            line.split('\u{1f}').map(str::to_string).collect()
+        .split('\u{1e}')
+        .map(|record| record.trim_start_matches('\n'))
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            let record = record.strip_suffix('\u{1f}').unwrap_or(record);
+            record.split('\u{1f}').map(str::to_string).collect()
         })
         .collect()
 }

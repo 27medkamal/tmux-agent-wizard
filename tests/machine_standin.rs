@@ -443,6 +443,8 @@ until [ -s "$1" ]; do sleep 0.05; done"#,
         common::wait_for(|| !alive(pid), std::time::Duration::from_secs(20)),
         "the stand-in {pid} is still running, its parent gone"
     );
+    // Seen gone: nothing is left to signal, and the guard must not touch a pid this run no longer owns.
+    guard.0.clear();
     // The parent ended and was not reaped, and its pid still answers: the stand-in did not end for want of it.
     assert!(alive(parent_pid), "the parent's pid does not answer");
     let state = std::process::Command::new("ps")
@@ -478,7 +480,7 @@ fn a_hanging_stand_in_that_cannot_sleep_ends() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let _guard = KillPids(vec![child.id()]);
+    let mut guard = KillPids(vec![child.id()]);
     assert!(
         common::wait_for(
             || stand_in.pids().len() == 1,
@@ -493,6 +495,8 @@ fn a_hanging_stand_in_that_cannot_sleep_ends() {
         ),
         "the stand-in spins on, with no sleep to run"
     );
+    // Seen gone (and reaped by `try_wait`): the guard acts only on a red run.
+    guard.0.clear();
 }
 
 /// Runs the stand-in for studio on `path` (the calling process's own when `None`) and waits up to 10 s for it to end.

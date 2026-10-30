@@ -1076,6 +1076,8 @@ fn a_pinging_feed_ends_when_both_its_pipes_are_let_go_with_no_signal() {
     loop {
         let script_ended = child.try_wait().unwrap().is_some();
         if script_ended && !alive(pids[1]) {
+            // Seen gone (the script reaped by `try_wait`): the guard acts only on a red run.
+            guard.0.clear();
             break;
         }
         assert!(

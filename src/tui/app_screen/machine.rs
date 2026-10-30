@@ -1339,6 +1339,9 @@ mod tests {
         fn loading(&mut self, _theme: &crate::tui::theme::Theme, words: &str) {
             self.note(&format!("loading ({words})"));
         }
+        fn list(&mut self, _app: &mut App) {
+            self.note("list");
+        }
     }
 
     /// Whatever was typed while the open waited is dropped before anything else is done with the screen, on the
@@ -1433,6 +1436,12 @@ mod tests {
             crate::tui::app_screen::LEFT_SLEEPS.with(|n| n.get()) > 0,
             "a machine's client keeps its wait for the line"
         );
+        // The keys typed meanwhile are dropped right before the list's first draw.
+        let tail: Vec<&str> = seen[seen.len() - 2..]
+            .iter()
+            .map(|w| w.split(' ').next().unwrap())
+            .collect();
+        assert_eq!(tail, ["drain", "list"], "{seen:?}");
     }
 
     /// An app that must end (its supervisor is gone) starts no ssh, draws nothing and lends nothing, on the way

@@ -1188,6 +1188,9 @@ impl Feed<'_> {
         self.show(self.tmux, app);
         self.hub.wake();
         app.enter_app_mode(pane, None);
+        // Keys typed while the screen said `loading` were aimed at nothing: they are dropped now that the read is
+        // in, right before the list shows (the drains before it left what was typed during the read).
+        screen.drain();
         screen.list(app);
     }
 
@@ -3243,8 +3246,8 @@ mod tests {
                 .position(|e| e.starts_with(prefix))
                 .unwrap_or_else(|| panic!("no {prefix} in {events:?}"))
         };
-        let (back, loading, drain) = (at("back"), at("loading (loading) "), at("drain"));
-        assert!(back < loading && loading < drain, "{events:?}");
+        let (back, loading) = (at("back"), at("loading (loading) "));
+        assert!(back < loading, "{events:?}");
         assert_eq!(
             counts_of(&events[loading]),
             counts_of(&events[back]),
@@ -3255,8 +3258,8 @@ mod tests {
             .filter(|c| c[0] == "list-sessions")
             .count();
         assert!(
-            reads_after > counts_of(&events[drain]).1,
-            "the list is read after the frame (and after the drain): {events:?}"
+            reads_after > counts_of(&events[loading]).1,
+            "the list is read after the frame: {events:?}"
         );
         assert_eq!(
             LEFT_SLEEPS.with(|n| n.get()),
@@ -3322,6 +3325,39 @@ mod tests {
             counts_of(&events[list]).1,
             total_reads,
             "no read of tmux after the list: {events:?}"
+        );
+    }
+
+    /// Keys typed while the screen says `loading` are dropped after the come-back's last read, right before the
+    /// list's first draw.
+    #[test]
+    fn what_was_typed_at_the_loading_frame_is_dropped_after_the_read_before_the_list() {
+        let (events, _, total_reads) = a_come_back_seen();
+        let list = events
+            .iter()
+            .position(|e| e.starts_with("list"))
+            .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+        let drain = events
+            .iter()
+            .rposition(|e| e.starts_with("drain"))
+            .unwrap_or_else(|| panic!("no drain in {events:?}"));
+        assert_eq!(
+            drain + 1,
+            list,
+            "the drain is right before the list: {events:?}"
+        );
+        let loading = events
+            .iter()
+            .rposition(|e| e.starts_with("loading (loading) "))
+            .unwrap();
+        assert!(
+            counts_of(&events[drain]).1 > counts_of(&events[loading]).1,
+            "{events:?}"
+        );
+        assert_eq!(
+            counts_of(&events[drain]).1,
+            total_reads,
+            "no read of tmux after the drain: {events:?}"
         );
     }
 

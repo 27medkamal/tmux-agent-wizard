@@ -137,9 +137,9 @@ impl Feed<'_> {
                     .machine_to_enter(&machine)
                     .map_err(Stop::Said)
                     .and_then(|(_, found)| {
-                        // The wait is a few seconds on a cold ssh: the screen says `loading` first, and nothing of
-                        // the list stays on it.
-                        screen.loading(&app.theme, crate::tui::view::LOADING);
+                        // The wait is a few seconds on a cold ssh: the screen says `opening worktree on <machine>`
+                        // first (the words the `w` path toasts too), and nothing of the list stays on it.
+                        screen.loading(&app.theme, &words::opening_worktree(&machine));
                         self.open_worktree_on(&found, &workspace, OPEN_BOUND)
                     });
                 // The wait read nothing, so what was typed or scrolled meanwhile is still queued: dropped before
@@ -1384,7 +1384,7 @@ mod tests {
             // and the drain came right after it, before the attach started.
             assert_eq!(
                 seen[0],
-                format!("loading ({}) 0", crate::tui::view::LOADING)
+                format!("loading ({}) 0", words::opening_worktree("studio"))
             );
             assert_eq!(seen[1], "drain 1", "{seen:?}");
             if attached {

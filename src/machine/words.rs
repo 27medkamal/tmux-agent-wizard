@@ -296,7 +296,8 @@ pub fn worktree_removed(machine: &str, branch: Option<&str>) -> String {
     }
 }
 
-/// What the list says while `name` opens a closed worktree, before the session it makes is attached.
+/// What the screen says while `name` opens a closed worktree, before the session it makes is attached: the top
+/// line of the loading frame when Enter opens a closed worktree, and the toast of the new-worktree key.
 pub fn opening_worktree(name: &str) -> String {
     format!("opening worktree on {name}")
 }

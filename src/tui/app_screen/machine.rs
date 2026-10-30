@@ -2045,6 +2045,45 @@ mod tests {
         }
     }
 
+    /// A hop to a machine that is not listed, after an attach, is refused with the list drawn at once: the drain and
+    /// the list are the screen's only events, and the list was read once, by the refusal.
+    #[test]
+    fn a_hop_refused_after_an_attach_draws_the_list_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(dir.path(), &Stub::default());
+        let cfg = Config::default();
+        let paths = paths_in(dir.path());
+        let (ssh, ssh_log) = stand_in_ssh(dir.path(), &paths, "", 0);
+        let (mut feed, _keeper) = studio_feed(&tmux, &cfg, &paths, &ssh, true, true);
+        let mut app = app_over(&cfg);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut screen = Recording {
+            log: seen.clone(),
+            ssh_log,
+        };
+        let before = list_reads(&log);
+        feed.follow_go(
+            &mut app,
+            &mut screen,
+            Step::Go {
+                go: "pi:%3".into(),
+                pane: Some("studio:%7".into()),
+            },
+        )
+        .unwrap();
+        let events: Vec<String> = seen
+            .borrow()
+            .iter()
+            .map(|e| e.split_whitespace().next().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(events, ["drain", "list"], "{:?}", seen.borrow());
+        assert_eq!(list_reads(&log) - before, 1, "one read, the refusal's");
+        assert_eq!(
+            toast_of(&app).as_deref(),
+            Some(words::no_such_machine("pi").as_str())
+        );
+    }
+
     /// A hop of this Mac's looks at whether the app must end before it does anything: with the app made to end at
     /// that look no tmux call is made (no read of the session's id, no `select-pane`) and the screen is not lent; the positive
     /// half is the same hop with the app not ending, which does both.

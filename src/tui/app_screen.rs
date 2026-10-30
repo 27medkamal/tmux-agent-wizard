@@ -976,18 +976,23 @@ impl Feed<'_> {
         screen: &mut impl Lending,
         landing: actions::Landing,
     ) -> anyhow::Result<()> {
-        let step = self.go_in_once(app, screen, landing)?;
+        let step = self.go_in_once(app, screen, landing, None)?;
         self.follow_go(app, screen, step)
     }
 
     /// One attach of this Mac's tmux, as [`Feed::go_in`] describes it, without what its end sends on: a `left`
     /// line that carries `go` (the key in the client walked on to a stop of another machine) is not acted on
     /// here, and the list is not drawn for it: it comes back as [`Step::Go`].
+    ///
+    /// `hop` is the pane the cursor goes to when the attach is a hop (the next stop of a walk, after an attach that
+    /// ended): a session that is gone then shows the list at once ([`Feed::list_after_hop`]), since the screen says
+    /// `loading` only because of that attach. `None` for the first attach, from the list, where the loop draws.
     fn go_in_once(
         &mut self,
         app: &mut App,
         screen: &mut impl Lending,
         landing: actions::Landing,
+        hop: Option<Option<String>>,
     ) -> anyhow::Result<Step> {
         // The screen says `loading <session>` before anything is asked of tmux: nothing of the list stays on it
         // while the app makes its calls and hands the terminal over.
@@ -1004,7 +1009,13 @@ impl Feed<'_> {
             if landing.pane.is_some() && app.came_from() == landing.pane.as_deref() {
                 app.forget_came_from();
             }
-            self.show(self.tmux, app);
+            match hop {
+                Some(pane) => {
+                    self.show_at(app, pane);
+                    self.list_after_hop(app, screen);
+                }
+                None => self.show(self.tmux, app),
+            }
             return Ok(Step::Done);
         }
         // What was written before this is not news: the key back writes its line after the attach starts.
@@ -1149,7 +1160,11 @@ impl Feed<'_> {
                 let (went, step) =
                     self.go_into_machine_once(app, screen, machine, raw, Some(raw), None)?;
                 if went == machine::Went::Refused {
+                    // The refusal showed the list's rows with the toast; the cursor moves to the pane now, and the
+                    // preview follows it.
                     app.enter_app_mode(pane, None);
+                    self.follow_preview(self.tmux, app);
+                    self.list_after_hop(app, screen);
                 }
                 Ok(step)
             }
@@ -1158,20 +1173,28 @@ impl Feed<'_> {
                     .then(|| actions::land_on_pane(self.tmux, raw))
                     .flatten();
                 match landing {
-                    Some(landing) => self.go_in_once(app, screen, landing),
+                    Some(landing) => self.go_in_once(app, screen, landing, Some(pane)),
                     None => {
                         app.toast(if crate::machine::valid_tmux_id(raw) {
                             "that pane is gone"
                         } else {
                             crate::machine::words::NOTHING_TO_GO_IN_TO
                         });
-                        self.show(self.tmux, app);
-                        app.enter_app_mode(pane, None);
+                        self.show_at(app, pane);
+                        self.list_after_hop(app, screen);
                         Ok(Step::Done)
                     }
                 }
             }
         }
+    }
+
+    /// A hop that was refused after an attach has the list drawn at once, as [`Feed::came_back`] draws it: the
+    /// screen says `loading` from the attach, no read comes before the draw (the loop's tick, due after a long
+    /// attach, would read first), and keys typed meanwhile were aimed at nothing.
+    fn list_after_hop(&mut self, app: &mut App, screen: &mut impl Lending) {
+        screen.drain();
+        screen.list(app);
     }
 
     /// Back is going in again, at `pane`, the one you came out of: a machine's pane (`studio:%16`) is gone into on
@@ -3673,6 +3696,87 @@ mod tests {
             .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
         assert!(events[list].contains("preview_agrees=true"), "{events:?}");
         assert_eq!(captures, 1, "{events:?}");
+    }
+
+    /// A hop of a walk that is refused after an attach (the stop went meanwhile): the events of [`Seen`], and how
+    /// many reads of this Mac the whole hop made. `session_gone` is the stand-in's `has-session` failing, and
+    /// `pane_gone` its `display-message` of the pane's session failing.
+    fn a_refused_hop_seen(go: &str, session_gone: bool, pane_gone: bool) -> (Vec<String>, usize) {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                session_gone,
+                ..Stub::default()
+            },
+        );
+        if pane_gone {
+            let script = dir.path().join("tmux");
+            let text = std::fs::read_to_string(&script).unwrap();
+            let gone = text.replace(
+                "'#{session_id} #{window_id}') echo '$3 @1' ;;",
+                "'#{session_id} #{window_id}') exit 1 ;;",
+            );
+            assert_ne!(gone, text, "the stand-in answers that call");
+            std::fs::write(&script, gone).unwrap();
+        }
+        let paths = paths_in(dir.path());
+        let cfg = Config::default();
+        let mut app = app_with_session(&cfg, "$3", "api");
+        let mut feed = feed_over(&tmux, &cfg, &paths);
+        let mut screen = Seen::new(&log);
+        feed.follow_go(
+            &mut app,
+            &mut screen,
+            Step::Go {
+                go: go.into(),
+                pane: Some("%1".into()),
+            },
+        )
+        .unwrap();
+        let reads = calls(&log)
+            .iter()
+            .filter(|call| call[0] == "list-sessions")
+            .count();
+        (screen.events(), reads)
+    }
+
+    /// After the refusal of a hop the list is drawn at once: the drain right before it, and no read of tmux after
+    /// the draw (the loop's tick would otherwise read a second time first).
+    fn assert_the_list_is_drawn_at_once(events: &[String], reads: usize) {
+        let list = events
+            .iter()
+            .position(|e| e.starts_with("list"))
+            .unwrap_or_else(|| panic!("no list drawn in {events:?}"));
+        assert!(
+            events[list - 1].starts_with("drain"),
+            "the drain is right before the list: {events:?}"
+        );
+        assert_eq!(
+            counts_of(&events[list]).1,
+            reads,
+            "no read of tmux after the list: {events:?}"
+        );
+        assert!(counts_of(&events[list]).1 >= 1, "read first: {events:?}");
+    }
+
+    /// A hop to a pane that is gone draws the list at once, after the toast's read.
+    #[test]
+    fn a_hop_to_a_pane_that_is_gone_draws_the_list_at_once() {
+        let (events, reads) = a_refused_hop_seen("%99999", false, true);
+        assert_the_list_is_drawn_at_once(&events, reads);
+    }
+
+    /// A hop to a session that went between the pane's landing and the attach draws the list at once.
+    #[test]
+    fn a_hop_to_a_session_that_is_gone_draws_the_list_at_once() {
+        let (events, reads) = a_refused_hop_seen("%5", true, false);
+        assert!(
+            events.iter().any(|e| e.starts_with("loading (loading ")),
+            "the hop got as far as the session: {events:?}"
+        );
+        assert_the_list_is_drawn_at_once(&events, reads);
     }
 
     /// A landing that makes a session (a project opened) says `loading` before its first call to tmux, the

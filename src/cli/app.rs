@@ -161,6 +161,8 @@ const GIVE_UP_AFTER: u32 = 3;
 const LOG_LIMIT: u64 = 256 * 1024;
 /// How often the supervisor looks at its child and at the client it waits for.
 const LOOK: Duration = Duration::from_millis(100);
+/// How long the supervisor waits, once it has passed its signal to a dead child's client, for the client to end.
+const CLIENT_END_WAIT: Duration = Duration::from_secs(2);
 
 /// The terminal's program outside tmux: starts the app child on this terminal and waits, and starts it
 /// again when it ends any way but cleanly. Never draws and never reads the keyboard.
@@ -287,7 +289,8 @@ fn supervise_children(
         // Whatever the child's client is, the terminal is its until it ends.
         let client = files::read_app_record(&ctx.paths, pid).map_or(0, |record| record.client_pid);
         let kept = *KEPT.lock().unwrap_or_else(|e| e.into_inner());
-        if let ClientWait::Signalled(signal) = wait_for_client(client, LOOK, kept.as_ref(), pending)
+        if let ClientWait::Signalled(signal) =
+            wait_for_client(client, LOOK, CLIENT_END_WAIT, kept.as_ref(), pending)
         {
             files::remove_app_record(&ctx.paths, pid);
             return 128 + signal;
@@ -301,7 +304,8 @@ fn supervise_children(
 enum ClientWait {
     /// The client is gone (or there was none), and the modes the supervisor found are back.
     Ended,
-    /// A `SIGHUP` or `SIGTERM` came for the supervisor while the client still ran.
+    /// A `SIGHUP` or `SIGTERM` came for the supervisor while the client still ran: it was passed to the client,
+    /// which was then waited for (at most [`CLIENT_END_WAIT`]).
     Signalled(i32),
 }
 
@@ -309,14 +313,30 @@ enum ClientWait {
 /// ends. When it has ended the modes the supervisor found (`kept`) are set again before the next child starts: a
 /// tmux client puts back the modes it found as it ends, which were the lent ones with no echo, and a child that
 /// started on those would take them for the shell's.
+///
+/// A signal for the supervisor (`pending`) is passed on to the client, which is waited for for at most `end_wait`
+/// before the answer, so that the supervisor puts the modes back after the client has gone and not under it (a
+/// tmux client puts back the lent modes as it ends). The pid is the one the dead child's record named, read as the
+/// child ended, while it still ran the client.
 fn wait_for_client(
     client: u32,
     look: Duration,
+    end_wait: Duration,
     kept: Option<&KeptModes>,
     pending: impl Fn() -> Option<i32>,
 ) -> ClientWait {
     while files::app_alive(client) {
         if let Some(signal) = pending() {
+            // SAFETY: `kill` of the process the record named as the client, seen alive just now; `SIGCONT` sets
+            // a stopped client going, since a signal waits for it.
+            unsafe {
+                libc::kill(client as libc::pid_t, signal);
+                libc::kill(client as libc::pid_t, libc::SIGCONT);
+            }
+            let until = Instant::now() + end_wait;
+            while files::app_alive(client) && Instant::now() < until {
+                std::thread::sleep(look.min(Duration::from_millis(20)));
+            }
             return ClientWait::Signalled(signal);
         }
         std::thread::sleep(look);
@@ -649,10 +669,84 @@ mod tests {
         pty.leave_without_echo();
         let (client, reaper) = stand_in_client("sleep 0.3");
         assert!(!pty.echo(), "the client has the terminal without echo");
-        let waited = wait_for_client(client, Duration::from_millis(20), Some(&kept), || None);
+        let waited = wait_for_client(
+            client,
+            Duration::from_millis(20),
+            CLIENT_END_WAIT,
+            Some(&kept),
+            || None,
+        );
         reaper.join().unwrap();
         assert_eq!(waited, ClientWait::Ended);
         assert!(pty.echo(), "the supervisor left the terminal without echo");
+    }
+
+    /// A signal for the supervisor while a dead child's client still has the terminal is passed to the client, and the
+    /// answer comes after it has ended (so that the modes are put back after it, not under it).
+    #[test]
+    fn a_signal_for_the_supervisor_is_passed_to_the_dead_childs_client_and_it_is_waited_for() {
+        let (client, reaper) = stand_in_client("exec sleep 30");
+        // The positive half: the client runs.
+        assert!(files::app_alive(client));
+        let started = Instant::now();
+        let waited = wait_for_client(
+            client,
+            Duration::from_millis(20),
+            Duration::from_secs(20),
+            None,
+            || Some(libc::SIGTERM),
+        );
+        let took = started.elapsed();
+        let alive = files::app_alive(client);
+        // The client was reaped by its end, if the signal reached it; if it was not, end it by its pid.
+        if alive {
+            // SAFETY: `kill` of the stand-in this test started.
+            unsafe { libc::kill(client as libc::pid_t, libc::SIGKILL) };
+        }
+        reaper.join().unwrap();
+        assert_eq!(waited, ClientWait::Signalled(libc::SIGTERM));
+        assert!(!alive, "the client was still there when the answer came");
+        assert!(
+            took < Duration::from_secs(10),
+            "the client was waited for long ({took:?})"
+        );
+    }
+
+    /// A client that does not end on the signal is waited for only as long as the bound, and left running.
+    #[test]
+    fn a_client_that_ignores_the_signal_is_waited_for_only_up_to_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let (client, reaper) = stand_in_client(&format!(
+            "trap '' TERM; touch '{}'; while :; do sleep 1; done",
+            ready.display()
+        ));
+        // The shell must have set its trap before the signal: wait until it says so (the positive half).
+        let until = Instant::now() + Duration::from_secs(20);
+        while !ready.exists() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(ready.exists(), "the stand-in client never set its trap");
+        assert!(files::app_alive(client));
+        let started = Instant::now();
+        let waited = wait_for_client(
+            client,
+            Duration::from_millis(20),
+            Duration::from_millis(400),
+            None,
+            || Some(libc::SIGTERM),
+        );
+        let took = started.elapsed();
+        let alive = files::app_alive(client);
+        // SAFETY: `kill` of the stand-in this test started.
+        unsafe { libc::kill(client as libc::pid_t, libc::SIGKILL) };
+        reaper.join().unwrap();
+        assert_eq!(waited, ClientWait::Signalled(libc::SIGTERM));
+        assert!(alive, "the client ended on a signal it ignores");
+        assert!(
+            took >= Duration::from_millis(400) && took < Duration::from_secs(10),
+            "the wait was not the bound ({took:?})"
+        );
     }
 
     /// Three children in a row that end before [`QUICK`] are given up on, no fewer; one that lived longer

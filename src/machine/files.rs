@@ -870,9 +870,28 @@ pub fn current_client_and_app(
             .context("finding the client the popup opens on")?;
         return Ok((name.trim().to_string(), None));
     };
+    // Only machine attaches are recorded: the name is asked first, as always, so that with no client nothing else is
+    // asked, and the records are looked at (checked against `list-clients`, dead ones removed) only for a client
+    // that is there; when none of them is left, nothing more is asked.
+    if known.records.is_empty() {
+        let name = tmux
+            .run(&["display-message", "-p", "#{client_name}"])
+            .context("finding the client the popup opens on")?;
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return Ok((name, None));
+        }
+        let known = known.settled(paths, tmux);
+        if known.attached.is_empty() {
+            return Ok((name, None));
+        }
+        let (_, said) =
+            ask_client(tmux, Some(&name)).context("finding the client the popup opens on")?;
+        return Ok((name, said.and_then(|said| app_client_in(known, said))));
+    }
+    // An app runs: the name and the rest come in one call. With no client tmux says no pid, so there is nothing to
+    // look up and the attach records are neither checked nor removed.
     let (name, said) = ask_client(tmux, None).context("finding the client the popup opens on")?;
-    // With no client tmux says no pid, so there is nothing to look up: the attach records are checked against
-    // `list-clients` (and dead ones removed) only for a client that is there.
     let app = said.and_then(|said| app_client_in(known.settled(paths, tmux), said));
     Ok((name, app))
 }
@@ -2539,6 +2558,41 @@ mod tests {
         );
         let (name, _) = current_client_and_app(&paths, &tmux, true).unwrap();
         assert_eq!(name, "/dev/ttys001");
+        assert_eq!(verbs(&log), ["display-message", "list-clients"]);
+        assert!(read_attached(&paths, "/dev/ttys042").is_none());
+    }
+
+    /// The same with machine attaches recorded and no app: with no client the name is the one call and the records
+    /// are left alone; with a client, `list-clients` checks them (a dead one goes) and, as none is left, nothing
+    /// more is asked.
+    #[test]
+    fn with_only_attaches_and_no_client_the_name_is_the_one_call() {
+        use crate::cli::test_support::{Stub, calls, stub_tmux};
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths_in(dir.path());
+        write_attached(&paths, &attached_record("/dev/ttys042", "holder", 0)).unwrap();
+        let verbs = |log: &std::path::Path| -> Vec<String> {
+            calls(log).iter().map(|call| call[0].clone()).collect()
+        };
+        let (tmux, log) = stub_tmux(
+            dir.path(),
+            &Stub {
+                clients: false,
+                ..Stub::default()
+            },
+        );
+        let (name, app) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!((name.as_str(), app), ("", None));
+        assert_eq!(verbs(&log), ["display-message"]);
+        assert!(
+            read_attached(&paths, "/dev/ttys042").is_some(),
+            "judged and removed"
+        );
+
+        let again = tempfile::tempdir().unwrap();
+        let (tmux, log) = stub_tmux(again.path(), &Stub::default());
+        let (name, app) = current_client_and_app(&paths, &tmux, true).unwrap();
+        assert_eq!((name.as_str(), app), ("/dev/ttys001", None));
         assert_eq!(verbs(&log), ["display-message", "list-clients"]);
         assert!(read_attached(&paths, "/dev/ttys042").is_none());
     }

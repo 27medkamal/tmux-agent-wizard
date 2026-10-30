@@ -169,7 +169,9 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
         None => ":".to_string(),
     };
     let panes = dir.join("panes");
-    let list_panes = if stub.pane {
+    let list_panes = if stub.no_server {
+        r#"echo "no server running on /tmp/tmux-501/default" >&2; exit 1"#.to_string()
+    } else if stub.pane {
         let row = crate::tmux::listing_line("%5", "", "claude").replacen(
             "\t$0\tone\t",
             "\t$3\tmain\t",
@@ -188,11 +190,6 @@ pub(crate) fn stub_tmux(dir: &Path, stub: &Stub) -> (Tmux, PathBuf) {
     };
     let gone_client = if stub.gone_client {
         r#"prev=; for a; do [ "$prev" = -c ] && { echo "can't find client: $a" >&2; exit 1; }; prev=$a; done"#
-    } else {
-        ":"
-    };
-    let no_server = if stub.no_server {
-        r#"echo "no server running on /tmp/tmux-501/default" >&2; exit 1"#
     } else {
         ":"
     };
@@ -239,7 +236,7 @@ case "$1" in
       -u) [ "$3" = -t ] && {drop} ;;
     esac ;;
   has-session) [ {has_session} -eq 0 ] || {{ echo "can't find session: $3" >&2; exit {has_session}; }} ;;
-  list-panes) {no_server}; {list_panes} ;;
+  list-panes) {list_panes} ;;
   list-sessions) {sessions} ;;
   list-windows) {windows} ;;
   display-popup) {at_popup}; [ {exit} -eq 0 ] || {{ echo '{says}' >&2; exit {exit}; }} ;;

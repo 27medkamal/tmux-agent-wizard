@@ -833,9 +833,10 @@ fn a_watcher_that_took_the_hint_for_an_agent_lets_go_of_it_when_the_start_fails(
     std::fs::write(
         &rc,
         format!(
-            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ]; do :; done\n  echo 'claude: cannot start'\n  return 1\n}}\n",
+            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ] && [ -d '{}' ] && [ \"${{SECONDS:-0}}\" -lt 300 ]; do :; done\n  echo 'claude: cannot start'\n  return 1\n}}\n",
             began.display(),
-            go.display()
+            go.display(),
+            tmp.path().display()
         ),
     )
     .unwrap();
@@ -957,10 +958,11 @@ fn a_shell_function_that_works_a_while_before_it_runs_the_agent_is_not_a_start_t
     std::fs::write(
         &rc,
         format!(
-            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ]; do :; done\n  '{}' -L \
+            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ] && [ -d '{}' ] && [ \"${{SECONDS:-0}}\" -lt 300 ]; do :; done\n  '{}' -L \
              \"$TAW_TMUX_SOCKET_NAME\" wait-for taw-slow-claude-never\n}}\n",
             began.display(),
             go.display(),
+            tmp.path().display(),
             agent.display()
         ),
     )
@@ -1715,9 +1717,10 @@ fn a_start_takes_the_last_agents_pid_off_the_pane_before_it_types() {
     std::fs::write(
         &rc,
         format!(
-            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ]; do :; done\n}}\n",
+            "claude() {{\n  : > '{}'\n  while [ ! -e '{}' ] && [ -d '{}' ] && [ \"${{SECONDS:-0}}\" -lt 300 ]; do :; done\n}}\n",
             began.display(),
-            go.display()
+            go.display(),
+            tmp.path().display()
         ),
     )
     .unwrap();
